@@ -1,0 +1,5 @@
+{
+  "jira": {"url": "https://ade-jira.hmckmc.co.kr", "token_env": "JIRA_TOKEN", "projects": [], "page_size": 100, "xray_run_field": null},
+  "codebeamer": {"url": "", "token_env": "CB_TOKEN", "swagger_url": "", "operations": {}},
+  "migration": {"state_dir": ".migration", "project_mapping": {}, "tracker_mapping": {}, "field_mapping": {}, "user_mapping": {}, "status_mapping": {}, "value_mapping": {}, "xray_run_tracker": null, "history_replay": false}
+}

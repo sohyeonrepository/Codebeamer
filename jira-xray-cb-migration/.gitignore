@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.migration/
+config.local.json

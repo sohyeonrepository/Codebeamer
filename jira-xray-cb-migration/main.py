@@ -1,0 +1,75 @@
+import argparse
+import json
+from pathlib import Path
+from clients.http import Http, ApiError
+from clients.jira_client import JiraClient
+from clients.xray_client import XrayClient
+from clients.codebeamer_client import CodebeamerClient
+from migration.state import State
+from migration.engine import Engine
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
+    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history'])
+    parser.add_argument('--config', default='config.json')
+    parser.add_argument('--apply', action='store_true', help='Permit target writes')
+    parser.add_argument('--item-id', type=int)
+    parser.add_argument('--probe-payload', help='Validated update request JSON file')
+    args = parser.parse_args()
+    config = json.loads(Path(args.config).read_text(encoding='utf-8'))
+    state = State(config['migration'].get('state_dir', '.migration'))
+    log = state.root / 'requests.jsonl'
+    jira = JiraClient(Http(config['jira']['url'], config['jira'].get('token_env'), log), config['jira'], state.save)
+    cb = CodebeamerClient(Http(config['codebeamer']['url'], config['codebeamer'].get('token_env'), log), config['codebeamer'], args.apply)
+    try:
+        identity = {'jira': config['jira']['url'], 'codebeamer': config['codebeamer']['url']}
+        prior = state.get('environment-binding')
+        if prior and prior[1] != identity:
+            raise ApiError('State belongs to different source/target URLs; use a separate state_dir')
+        state.mark('environment-binding', 'done', identity)
+        if args.command == 'discover':
+            fields, projects, operations = jira.fields(), jira.projects(), cb.discover()
+            for name, data in [('jira-fields', fields), ('jira-projects', projects), ('cb-openapi', cb.spec), ('cb-operations', operations)]:
+                state.save('discovery', name, data)
+            for tracker in config['migration'].get('tracker_mapping', {}).values():
+                if isinstance(tracker, int):
+                    state.save('discovery', f'tracker:{tracker}:configuration', cb.configuration(tracker))
+                    state.save('discovery', f'tracker:{tracker}:fields', cb.fields(tracker))
+            print(json.dumps({'fields': len(fields), 'projects': len(projects), 'operations': len(operations), 'writes': 0}))
+            return 0
+        if args.command == 'diagnose-history':
+            from validation.compare_history import revision_ids
+            if not args.item_id:
+                parser.error('--item-id required')
+            cb.discover()
+            before = cb.call('history', {'itemId': args.item_id})
+            result = {'before': before, 'native_author_time_restoration': 'unverified', 'writes': 0}
+            if args.apply:
+                if not args.probe_payload:
+                    parser.error('--probe-payload required with --apply')
+                body = json.loads(Path(args.probe_payload).read_text(encoding='utf-8'))
+                cb.call('item_update', {'itemId': args.item_id}, body)
+                after = cb.call('history', {'itemId': args.item_id})
+                added = revision_ids(after) - revision_ids(before)
+                result.update(after=after, new_revisions=sorted(added), writes=1)
+                state.save('diagnostics', 'history-probe', result)
+                if len(added) != 1:
+                    raise ApiError('Expected exactly one new revision')
+            state.save('diagnostics', 'history-probe', result)
+            print(json.dumps({'writes': result['writes'], 'native_author_time_restoration': 'unverified'}))
+            return 0
+        report = Engine(jira, XrayClient(jira.http), cb, state, config['migration'], args.apply).migrate()
+        print(json.dumps({'mode': report['mode'], 'complete': report['complete'], 'issues': len(report['issues']),
+                          'errors': len(report['errors']), 'limitations': len(report['limitations']),
+                          'report': str(state.root / 'report.json')}, ensure_ascii=False))
+        return 0 if report['complete'] else 2
+    except (ApiError, KeyError, ValueError, OSError) as exc:
+        print(json.dumps({'complete': False, 'error': str(exc) if isinstance(exc, ApiError) else type(exc).__name__}))
+        return 2
+    finally:
+        state.db.close()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
