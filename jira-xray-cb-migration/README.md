@@ -11,14 +11,13 @@ PowerShell에서 이 디렉터리로 이동한 뒤:
 
 ```powershell
 Copy-Item config.json config.local.json
-$env:JIRA_TOKEN = Read-Host 'Jira PAT'
-$env:CB_TOKEN = Read-Host 'Codebeamer PAT'
-python main.py discover --config config.local.json
+python main.py diagnose-connection --config config.local.json --tracker-id 4862420 --prompt-auth
+python main.py discover --config config.local.json --prompt-auth
 python main.py migrate --config config.local.json
 python -m unittest discover -s tests -v
 ```
 
-토큰은 환경변수로만 읽으며 Bearer 인증을 사용합니다. 환경에 다른 인증 방식이 필요하면 클라이언트 어댑터를 수정해야 합니다. HTTPS 및 OS/Python CA 검증을 유지합니다. 사내 CA는 신뢰 저장소 또는 지원되는 `SSL_CERT_FILE`로 제공하세요. 인증정보를 설정 JSON에 넣지 마세요.
+Jira는 기본 Bearer 인증, Codebeamer는 기본 Basic(아이디·비밀번호) 인증입니다. `--prompt-auth`는 누락된 인증정보를 실행 중 입력받으며 토큰과 비밀번호를 화면에 표시하거나 파일에 저장하지 않습니다. 자동 실행 시 Jira는 `JIRA_TOKEN`, Codebeamer는 `CB_USERNAME`/`CB_PASSWORD` 환경변수를 사용하세요. Codebeamer 토큰 인증은 `auth: "bearer"`, `token_env: "CB_TOKEN"`으로 변경할 수 있습니다. HTTPS 및 OS/Python CA 검증을 유지합니다. 신뢰하는 사내 HTTP 서버는 해당 서버 설정의 `allow_http: true`로 명시적으로 허용할 수 있습니다. HTTP Basic 인증은 네트워크 구간에서 암호화되지 않으므로 가능하면 HTTPS를 사용하세요. 다른 서버로의 리디렉션 및 인증정보 전달은 거부합니다. 사내 CA는 신뢰 저장소 또는 지원되는 `SSL_CERT_FILE`로 제공하세요. 인증정보를 설정 JSON에 넣지 마세요.
 
 `discover`: Jira 프로젝트·필드, Codebeamer Swagger 및 매핑된 트래커 설정/필드를 저장하는 읽기 전용 명령입니다. `codebeamer.url`과 실제 JSON Swagger URL인 `swagger_url`을 설정해야 합니다. 이미 받은 Swagger 파일은 `file:C:/path/openapi.json`도 지원합니다. OpenAPI에 나열되어 있다는 사실만으로 요청 스키마나 쓰기 권한이 검증되지는 않습니다.
 
@@ -153,3 +152,30 @@ Jira expanded changelog가 전체 total을 포함하지 않으면 이관을 중�
 - issue 건수, 필드값, 각 child readback, History Revision, 파일 크기/해시를 검증합니다. 누락/실패/미지원 항목은 정상 완료가 아닙니다.
 
 기본 설정은 쓰기 경로나 고객사 ID를 하드코딩하지 않으므로 실제 연결 없이 `migrate`하면 사전조건 오류로 종료되는 것이 정상입니다. 먼저 discovery 산출물에서 민감정보를 제거한 Swagger 및 대표 응답 구조로 어댑터를 완성하세요.
+
+
+## 아이디·비밀번호 인증으로 첫 연결 확인
+
+`config.json`을 `config.local.json`으로 복사한 뒤 `codebeamer`를 다음과 같이 설정합니다. URL에는 Markdown 링크 문법을 넣지 않습니다.
+
+```json
+{
+  "url": "http://사내서버주소:8081/cb",
+  "auth": "basic",
+  "username_env": "CB_USERNAME",
+  "password_env": "CB_PASSWORD",
+  "allow_http": true,
+  "swagger_url": "",
+  "operations": {}
+}
+```
+
+Jira의 `projects`는 `["STGVSTAR"]`처럼 문자열 배열로 지정하세요. `token_env`에는 실제 토큰이 아닌 `JIRA_TOKEN`이라는 환경변수 이름을 입력합니다.
+
+```powershell
+python main.py diagnose-connection --config config.local.json --tracker-id 4862420 --prompt-auth
+```
+
+이 Tracker ID는 지시서의 검증용 예시입니다. 실제 접근 가능한 ID로 바꾸세요. 명령은 Jira 토큰과 Codebeamer 아이디·비밀번호를 입력받고 Jira 필드, 대상 Tracker 설정·필드를 GET으로 조회합니다. **Swagger 주소 없이 실행할 수 있으며 대상 쓰기는 하지 않습니다.** `jira: ok`, `codebeamer: ok`이면 이 조회 범위의 인증/연결 확인에 성공한 것입니다. 전체 이관이나 쓰기 권한 검증을 뜻하지 않습니다.
+
+HTTP 401은 인증 방식·아이디·비밀번호, 403은 권한, 404는 주소/컨텍스트 경로/Tracker ID를 우선 확인하세요. 저장되는 diagnostics 원본에는 업무 데이터가 포함될 수 있으므로 그대로 공유하지 마세요. 실패 시 인증정보를 제외한 콘솔 결과를 제공하면 다음 설정을 진단할 수 있습니다.

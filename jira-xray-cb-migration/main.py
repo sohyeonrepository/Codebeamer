@@ -11,8 +11,10 @@ from migration.engine import Engine
 
 def main():
     parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
-    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history'])
+    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection'])
     parser.add_argument('--config', default='config.json')
+    parser.add_argument('--prompt-auth', action='store_true', help='Prompt for missing credentials; never save them')
+    parser.add_argument('--tracker-id', type=int, help='Tracker to inspect with diagnose-connection')
     parser.add_argument('--apply', action='store_true', help='Permit target writes')
     parser.add_argument('--item-id', type=int)
     parser.add_argument('--probe-payload', help='Validated update request JSON file')
@@ -20,14 +22,31 @@ def main():
     config = json.loads(Path(args.config).read_text(encoding='utf-8'))
     state = State(config['migration'].get('state_dir', '.migration'))
     log = state.root / 'requests.jsonl'
-    jira = JiraClient(Http(config['jira']['url'], config['jira'].get('token_env'), log), config['jira'], state.save)
-    cb = CodebeamerClient(Http(config['codebeamer']['url'], config['codebeamer'].get('token_env'), log), config['codebeamer'], args.apply)
     try:
+        def http(settings):
+            return Http(settings['url'], settings.get('token_env'), log,
+                        auth=settings.get('auth', 'bearer'), username_env=settings.get('username_env'),
+                        password_env=settings.get('password_env'), allow_http=settings.get('allow_http', False),
+                        prompt_auth=args.prompt_auth)
+        jira = JiraClient(http(config['jira']), config['jira'], state.save)
+        cb = CodebeamerClient(http(config['codebeamer']), config['codebeamer'], args.apply)
         identity = {'jira': config['jira']['url'], 'codebeamer': config['codebeamer']['url']}
         prior = state.get('environment-binding')
         if prior and prior[1] != identity:
             raise ApiError('State belongs to different source/target URLs; use a separate state_dir')
         state.mark('environment-binding', 'done', identity)
+        if args.command == 'diagnose-connection':
+            if not args.tracker_id:
+                parser.error('--tracker-id required for diagnose-connection')
+            fields = jira.fields()
+            state.save('diagnostics', 'jira-fields', fields)
+            configuration = cb.configuration(args.tracker_id)
+            target_fields = cb.fields(args.tracker_id)
+            state.save('diagnostics', 'tracker-configuration', configuration)
+            state.save('diagnostics', 'tracker-fields', target_fields)
+            print(json.dumps({'jira': 'ok', 'codebeamer': 'ok', 'tracker_id': args.tracker_id,
+                              'jira_field_count': len(fields), 'writes': 0}))
+            return 0
         if args.command == 'discover':
             fields, projects, operations = jira.fields(), jira.projects(), cb.discover()
             for name, data in [('jira-fields', fields), ('jira-projects', projects), ('cb-openapi', cb.spec), ('cb-operations', operations)]:

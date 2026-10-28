@@ -32,6 +32,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(Handler.binary)
+        elif self.path == '/basic':
+            import base64
+            expected = 'Basic ' + base64.b64encode(b'testuser:test-password').decode('ascii')
+            if self.headers.get('Authorization') == expected:
+                self.respond({'authenticated': True})
+            else:
+                self.send_response(401)
+                self.end_headers()
         elif self.path == '/bad':
             self.send_response(401)
             self.end_headers()
@@ -219,3 +227,37 @@ class EngineTests(unittest.TestCase):
             with self.assertRaises(ApiError):
                 mapped_record(CB(), state, {}, 'comment', '101:1', {'body': 'expected'}, {'itemId': 1},
                               {'body': {'type': 'text', 'target': 'body'}})
+
+
+class AuthenticationTests(unittest.TestCase):
+    setUpClass = classmethod(MigrationTests.setUpClass.__func__)
+    tearDownClass = classmethod(MigrationTests.tearDownClass.__func__)
+    setUp = MigrationTests.setUp
+    def test_basic_auth_and_audit_redaction(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'TEST_CB_USER': 'testuser', 'TEST_CB_PASS': 'test-password'}):
+            client = Http(self.url, auth='basic', username_env='TEST_CB_USER', password_env='TEST_CB_PASS',
+                          log=Path(self.tmp.name) / 'basic-audit.jsonl')
+        self.assertEqual(client.request('GET', '/basic'), {'authenticated': True})
+        log = (Path(self.tmp.name) / 'basic-audit.jsonl').read_text()
+        self.assertNotIn('test-password', log)
+        self.assertNotIn('Authorization', log)
+
+    def test_missing_basic_credentials_rejected(self):
+        with self.assertRaises(ApiError):
+            Http(self.url, auth='basic')
+
+    def test_http_requires_opt_in_and_keeps_origin_boundary(self):
+        client = Http('http://10.11.118.180:8081/cb', auth='none')
+        with self.assertRaises(ApiError):
+            client.url('/v3/projects')
+        allowed = Http('http://10.11.118.180:8081/cb', auth='none', allow_http=True)
+        self.assertEqual(allowed.url('/v3/projects'), 'http://10.11.118.180:8081/cb/v3/projects')
+        with self.assertRaises(ApiError):
+            allowed.url('http://other.example/data')
+
+    def test_interactive_password_not_persisted(self):
+        from unittest.mock import patch
+        with patch('builtins.input', return_value='testuser'), patch('getpass.getpass', return_value='test-password'):
+            client = Http(self.url, auth='basic', prompt_auth=True)
+        self.assertEqual(client.request('GET', '/basic'), {'authenticated': True})
