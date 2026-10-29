@@ -54,8 +54,13 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
     if not adapter:
         raise ApiError('Missing run_adapter: Test Run schemas must be verified from actual APIs')
     tracker_id = run_tracker_id(settings)
+    for category, records in [('comment', issue.get('_comments', [])), ('worklog', issue.get('_worklogs', []))]:
+        if records and not settings.get(category + '_adapter', {}).get('fields'):
+            raise ApiError('Execution ' + category + ' records were collected; configure target adapter before creating a Run')
     data = run['data']
     source = dict(data)
+    if run.get('events_scope') == 'execution-context':
+        source['_executionHistoryState'] = run['execution_history_state']
     if adapter.get('reference_mode') == 'field-values':
         from migration.run_references import resolve_references
         source['_sourceReferences'] = resolve_references(cb, data, issue, run.get('field_definitions', []), adapter)
@@ -94,7 +99,7 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
     documents = [data]
     if settings.get('history_replay'):
         from migration.run_history import snapshots
-        documents = [values for _, values, _ in snapshots(data, run['events'], run['created'])]
+        documents = [values for _, values, _ in snapshots(dict(data, _executionHistoryState=run['execution_history_state']) if run.get('events_scope') == 'execution-context' else data, run['events'], run['created'])]
     explicit = adapter.get('evidence_lists', []) + adapter.get('attachment_lists', [])
     seen_files = {}
     for document in documents:
@@ -119,7 +124,16 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
         raise ApiError('Explicit attachment paths require a verified complete inventory')
     if not run.get('events_complete') and not adapter.get('activity_inventory_verified', False):
         raise ApiError('Xray Activity completeness has not been verified; do not infer it from Jira history')
-    return {'id': run_id, 'evidence': evidence_count}
+    execution_attachment_count = 0
+    if adapter.get('include_execution_attachments', True):
+        for attachment in issue['fields'].get('attachment', []):
+            transfer(source_http, cb, state, 'run:' + run['id'] + ':execution:' + str(issue['id']), run_id, attachment)
+            execution_attachment_count += 1
+    for category, records in [('comment', issue.get('_comments', [])), ('worklog', issue.get('_worklogs', []))]:
+        for record in records:
+            mapped_record(cb, state, settings, category, 'run:' + run['id'] + ':execution:' + str(issue['id']) + ':' + str(record['id']),
+                          record, {'itemId': run_id}, settings[category + '_adapter']['fields'])
+    return {'id': run_id, 'evidence': evidence_count, 'execution_attachments': execution_attachment_count}
 
 
 def run_tracker_id(settings):

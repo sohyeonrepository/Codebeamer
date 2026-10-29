@@ -11,7 +11,7 @@ from migration.engine import Engine
 
 def main():
     parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
-    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types', 'prepare-run-migration'])
+    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types', 'prepare-run-migration', 'extract-runs'])
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--prompt-auth', action='store_true', help='Prompt for missing credentials; never save them')
     parser.add_argument('--tracker-id', type=int, help='Tracker to inspect with diagnose-connection')
@@ -20,6 +20,11 @@ def main():
     parser.add_argument('--probe-payload', help='Validated update request JSON file')
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding='utf-8'))
+    if args.command == 'extract-runs' or config['migration'].get('mode') == 'test-runs':
+        source_profiles = config['jira'].get('run_events', {})
+        explicit_run_events = any(profile.get('path') for profile in source_profiles.values())
+        config['jira'].setdefault('history_source', 'run-api' if explicit_run_events else 'execution-changelog')
+        config['jira'].setdefault('execution_issue_types', ['Test Execution'])
     state = State(config['migration'].get('state_dir', '.migration'))
     log = state.root / 'requests.jsonl'
     try:
@@ -29,6 +34,21 @@ def main():
                         password_env=settings.get('password_env'), allow_http=settings.get('allow_http', False),
                         prompt_auth=args.prompt_auth)
         jira = JiraClient(http(config['jira']), config['jira'], state.save)
+        if args.command == 'extract-runs':
+            from migration.source_runs import collect_sources
+            fields, runs, errors = collect_sources(jira, XrayClient(jira.http, config['jira'], state.save), state)
+            report = {'mode': 'source-only', 'writes': 0, 'source_complete': bool(runs) and not errors,
+                      'migration_complete': False, 'errors': errors,
+                      'runs': [{'id': run['id'], 'execution': issue['key'], 'history': run.get('history_summary'),
+                                'source_fields': sorted(run['data']), 'comments': len(issue.get('_comments', [])),
+                                'worklogs': len(issue.get('_worklogs', [])),
+                                'execution_attachments': len(issue['fields'].get('attachment', []))}
+                               for issue, run in runs.values()]}
+            dest = state.root / 'source-report.json'
+            dest.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+            print(json.dumps({'writes': 0, 'runs': len(runs), 'errors': len(errors), 'source_complete': report['source_complete'],
+                              'migration_complete': False, 'report': str(dest)}, ensure_ascii=False))
+            return 0 if report['source_complete'] else 2
         if args.command == 'list-issue-types':
             from migration.configuration import mapping_catalog
             catalog = mapping_catalog(jira, config['migration'])

@@ -13,7 +13,13 @@
       "activity": {}
     },
     "run_created_at_path": "",
-    "run_creator_path": ""
+    "run_creator_path": "",
+    "history_source": "execution-changelog",
+    "execution_issue_types": [
+      "Test Execution"
+    ],
+    "include_comments": true,
+    "include_worklogs": true
   },
   "codebeamer": {
     "url": "",
@@ -68,7 +74,8 @@
       "activity_inventory_verified": false,
       "reference_mode": "field-values",
       "reference_fields": {},
-      "attachment_lists": []
+      "attachment_lists": [],
+      "include_execution_attachments": true
     },
     "field_sync": {
       "enabled": true,

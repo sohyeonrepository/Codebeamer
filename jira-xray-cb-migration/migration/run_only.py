@@ -16,24 +16,9 @@ def migrate_runs(engine):
             raise ApiError('State is bound to another Test Run tracker; reconcile or use a separate state_dir')
         engine.state.mark('run-target-tracker', 'done', tracker)
         engine.cb.discover()
-        fields = engine.jira.fields()
-        engine.state.save('source', 'field-definitions', fields)
-        field = XrayClient.identify_field(fields, engine.jira.config.get('xray_run_field'))
-        runs = {}
-        for project in engine.jira.projects():
-            for summary in engine.jira.issues(project['key']):
-                key = summary['key']
-                try:
-                    issue = engine.jira.run_source(key)
-                    engine.state.save('source', key, issue)
-                    for run in engine.xray.runs(issue, field):
-                        run['field_definitions'] = fields
-                        engine.state.save('source-runs', run['id'], run)
-                        if run['id'] in runs and runs[run['id']][0]['id'] != issue['id']:
-                            raise ApiError('Same Run appears under multiple Executions; resolve source association')
-                        runs[run['id']] = (issue, run)
-                except (ApiError, KeyError, ValueError, TypeError) as exc:
-                    engine.error(key, exc)
+        from migration.source_runs import collect_sources
+        fields, runs, errors = collect_sources(engine.jira, engine.xray, engine.state)
+        report['errors'].extend(errors)
         adapter = engine.settings.get('run_adapter', {})
         from migration.run_schema import sync_run_fields
         if engine.settings.get('history_replay'):
@@ -43,10 +28,14 @@ def migrate_runs(engine):
             raise ApiError('Source extraction failed; refusing target writes until complete')
         report['field_plan'] = sync_run_fields(engine.cb, engine.state, tracker, engine.settings, engine.write)
         if engine.settings.get('history_replay'):
+            report['limitations'].append({'reason': 'Original native revision author/timestamp restoration is unverified'})
             report['native_revision_metadata'] = {'author_restored': False, 'timestamp_restored': False,
                                                 'source_metadata_preserved_in': '_sourceEvent'}
         for issue, run in runs.values():
             record = {'source_run_id': run['id'], 'execution_key': issue['key'], 'status': 'planned'}
+            if run.get('history_summary'):
+                record['history'] = run['history_summary']
+                report['limitations'].append({'source_run_id': run['id'], 'reason': 'Execution context History and known Activity only; historical Run status/Step changes and other Activity are not available'})
             report['runs'].append(record)
             try:
                 if not engine.write:
@@ -64,7 +53,8 @@ def migrate_runs(engine):
                     record['target_test_id'] = destination
                     continue
                 result = test_run(engine.cb, engine.state, engine.settings, engine.jira.http, issue, None, run)
-                record.update(status='verified', target_id=result['id'], evidence_count=result['evidence'])
+                record.update(status='verified', target_id=result['id'], evidence_count=result['evidence'],
+                              execution_attachment_count=result.get('execution_attachments', 0))
             except (ApiError, KeyError, ValueError, TypeError) as exc:
                 engine.error('run:' + run['id'], exc)
         if not runs:

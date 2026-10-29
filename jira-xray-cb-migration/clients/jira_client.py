@@ -42,11 +42,32 @@ class JiraClient:
     def issues(self, project):
         # Encode the literal as a JQL string; never interpolate raw project input.
         import json
-        return self.pages('/rest/api/2/search', 'issues', {'jql': 'project = ' + json.dumps(project) + ' ORDER BY key', 'fields': '*all'})
+        jql = 'project = ' + json.dumps(project)
+        types = self.config.get('execution_issue_types')
+        if types:
+            jql += ' AND issuetype in (' + ', '.join(json.dumps(str(t)) for t in types) + ')'
+        return self.pages('/rest/api/2/search', 'issues', {'jql': jql + ' ORDER BY key', 'fields': '*all'})
 
     def run_source(self, key):
         # Run-only migration does not need issue changelog/comments/worklogs.
         return self.http.request('GET', '/rest/api/2/issue/' + segment(key) + '?fields=*all')
+
+    def execution_context(self, issue):
+        key = issue['key']
+        root = '/rest/api/2/issue/' + segment(key)
+        if 'changelog' not in issue:
+            issue = self.http.request('GET', root + '?fields=*all&expand=changelog')
+        if self.archive:
+            self.archive('source-execution-context', key, issue)
+        from migration.execution_events import execution_events
+        execution_events(issue)  # Reject incomplete history before fetching dependent data.
+        if self.config.get('include_comments', True):
+            issue['_comments'] = list(self.pages(root + '/comment', 'comments'))
+        if self.config.get('include_worklogs', True):
+            issue['_worklogs'] = list(self.pages(root + '/worklog', 'worklogs'))
+        if self.archive:
+            self.archive('source-execution-context', key, issue)
+        return issue
 
     def bundle(self, key):
         root = '/rest/api/2/issue/' + segment(key)

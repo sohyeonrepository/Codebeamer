@@ -335,3 +335,34 @@ python inspect_contract.py --capabilities ".migration/run-api-capabilities.json"
 `response_format: "field-values"`를 지정한 조회 작업은 `response_path`로 선택한 FieldValue 배열을 동일한 binding으로 정규화해 값 비교에 사용합니다. 모든 FieldValue의 fieldId/type/value 속성과 중복 fieldId를 확인합니다. 구체적인 FieldValue 스키마는 AbstractFieldValue 요약만으로 확정할 수 없으므로 서버의 원본 Swagger 하위 모델 또는 실제 필드값 조회 응답에서 확인해야 합니다.
 
 이 변경은 request 계약을 구현한 것이며, 실서버 생성/수정 성공이나 Workflow에 따른 Revision 개수를 검증한 것은 아닙니다. Xray Run History/Activity 수집 API 및 실제 원본 before/after 형태가 확인되지 않았다면 전체 이관은 계속 미완료로 처리합니다.
+
+## 검증된 Jira/Xray 분석 자료 반영
+
+현재 기본 소스 프로필은 `jira.history_source: "execution-changelog"`입니다. 실제 확인된 Run detail API와 관계 배열(`testKey`, `testRunId`)을 사용합니다. 특정 Run/Test/Execution ID와 customfield ID를 하드코딩하지 않습니다. Jira 필드 정의로 단일 식별되지 않으면 실제 이슈의 관계 배열 형태로 자동 탐색하며, 여러 필드가 일치하면 중단합니다. 명시한 `xray_run_field`는 여전히 사용할 수 있습니다. `execution_issue_types`로 검색할 Execution 유형 이름/ID를 지정하며 기본은 Test Execution입니다.
+
+- Run detail의 id/testKey/testExecKey가 Execution 연결 배열과 일치하는지 확인합니다.
+- status, executedBy, startedOn/finishedOn 및 Iso, duration(0 포함), version, 빈 steps/evidences/defects 등 원본 모든 값을 보관합니다.
+- Execution 기본 필드의 created/creator를 Created 이벤트로 재구성합니다.
+- expanded changelog의 total과 histories 배열 길이를 비교합니다. 첨부 분석의 JSON 발췌처럼 total=5인데 histories=2이면 전체 이력으로 처리하지 않습니다. 실제 추가 페이지 API가 확인되지 않은 경우 잘린 기록으로 Replay하지 않습니다.
+- 한 History의 여러 items를 그대로 한 이벤트에 보관합니다. Test 3건 추가를 세 개의 원본 History로 부풀리지 않습니다.
+- Created + 모든 Changelog를 한 공통 스트림으로 구성합니다. ID는 `issueKey:CREATED`, `issueKey:historyId`입니다.
+- Activity는 Created, Test 변경, Tests association 변경의 알려진 화면 투영만 표시합니다. 같은 이벤트를 Activity 명목으로 다시 Replay하지 않습니다. 제공된 패턴은 History 6건, 알려진 Activity 3건이 됩니다.
+- 기존에 실패했던 Run Activity URL이나 `expand=activity`를 성공한 수집 API로 사용하지 않습니다.
+
+**중요한 구분:** 위 이력은 **Test Execution의 컨텍스트**입니다. Run 상태/Steps의 과거 값은 제공된 자료에서 확인되지 않았습니다. 이 모드에서는 `_executionHistoryState`(원본 Execution changes 전체)와 `_sourceEvent`를 매핑해 Context 변경마다 실제 대상 Revision을 만들 수 있지만, 과거 Run 상태를 복원했다고 보고하지 않습니다. 현재 Run 상태를 초기 Execution 생성 시점의 Run 상태라고 주장하지도 않습니다. 실행 컨텍스트 Revision과 네이티브 Run 상태 변경 Revision은 서로 다릅니다.
+
+보고서에는 이 범위를 `execution-context`/`known-execution-projection-only`로 표시하고, 과거 Run 상태 및 기타 Activity 미확인, 원본 Revision 작성자/시각 네이티브 복원 미검증을 limitations에 남겨 완전 이관 완료를 막습니다. 원본 전체 Run 타임라인이 별도 확인되면 `history_source: "run-api"` 및 실제 run_events 어댑터를 사용할 수 있습니다.
+
+Execution Comment/Worklog는 공식 페이지 API로 수집합니다(각 include_comments/include_worklogs로 제어). 레코드가 있으면 해당 target adapter가 준비되어야 Run 생성이 허용됩니다. 대상 Run의 네이티브 Comment/대응 Worklog 작업에 쓰고 재조회 검증하며 원본 메타데이터도 매핑해야 합니다. Execution Issue Attachment와 Run Evidence는 별도 namespace로 구분해 둘 다 바이너리를 이관합니다. 다른 종류의 대상 Item은 생성하지 않습니다.
+
+### Codebeamer 쓰기 없이 실제 소스 수집 확인
+
+```powershell
+python main.py extract-runs --config config.json --prompt-auth
+```
+
+이 명령은 **Jira 인증만** 필요하고 Swagger/Codebeamer 로그인/target 쓰기가 필요하지 않습니다. 기존 설정에 history_source가 없고 별도 Run 이벤트 경로도 지정하지 않았다면 위 검증된 Execution 프로필을 기본 적용합니다. 기존 고객 서버 주소나 인증 설정을 덮어쓸 필요가 없습니다.
+
+state_dir에 원본 Execution/Run JSON, 공통 이벤트, Comments/Worklogs를 보관하고 `source-report.json`에 Run 건수, History/알려진 Activity 건수, 오류를 기록합니다. source_complete는 선택한 소스 수집 성공 여부이고 migration_complete는 항상 false입니다. 이 명령은 바이너리 다운로드/업로드나 target Revision 생성을 검증하지 않으며, source_complete가 전체 Run History 복원 완료를 뜻하지 않습니다. 최소 한 Run도 발견하지 못하면 성공으로 처리하지 않습니다.
+
+제공된 실제 샘플은 Steps/Evidence/Defects가 모두 빈 배열이므로, 이 구조만으로 비어 있지 않은 Steps/파일/결함 이관이 실서버 검증됐다고 주장하지 않습니다. 테스트에서는 고객 ID를 변형한 합성 fixture로 응답 형태와 공통 이벤트 처리를 검증합니다.
