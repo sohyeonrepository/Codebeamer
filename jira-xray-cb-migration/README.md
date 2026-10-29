@@ -227,3 +227,66 @@ python main.py migrate --config config.json --prompt-auth --apply
 ```
 
 보고서에는 `scope: "test-runs-only"`, `counts.source_runs`, `counts.verified_runs`가 표시됩니다. Run을 하나도 발견하지 못하거나 미지원/오류가 있으면 정상 완료로 보고하지 않습니다. 기존 전체 이관과 상태 파일을 섞지 말고 전용 `state_dir`을 사용하세요.
+
+## Test Run 필드/권한, 동적 연결, History/Activity 확장
+
+현재 기본 프로필은 `reference_mode: "field-values"`, `history_replay: true`, `field_sync.enabled: true`입니다. **기능 구현과 실서버 프로필 검증은 다릅니다.** 기본 JSON의 빈 API/필드/원본 이벤트 경로는 실제 서버 정의로 채워야 하며, 비어 있으면 이관을 완료했다고 보고하지 않습니다. 모의 테스트가 통과해도 서버 쓰기 API가 검증된 것은 아닙니다.
+
+### Test/Test Set/Test Plan 필드값을 연결 대상으로 사용
+
+`test_mapping`으로 Test Item을 직접 구분할 필요가 없습니다. Run의 Test, Test Set, Test Plan 필드와 Execution의 동일한 필드(사용자 정의 ID는 Jira 필드 이름으로 식별)에서 값을 읽습니다. `reference_fields`로 환경별 필드 이름/ID → `test`, `test_set`, `test_plan` 역할을 추가할 수 있습니다. 예를 들어 원본 필드명이 `Linked Plan`이면 `{"Linked Plan": "test_plan"}`입니다.
+
+`reference_lookup`은 `${sourceValue}` 및 `${referenceRole}`를 받아 **이전에 이관된 원본 ID/키 필드의 정확한 일치**로 대상 Item 배열을 반환하도록 실제 API에 연결합니다. 결과가 없거나 두 개 이상이면 연결하지 않고 실패로 기록합니다. Jira 숫자 ID를 Codebeamer Item ID로 가정하거나 이름이 비슷한 대상을 임의로 고르지 않습니다. 다른 이관 도구가 원본 ID/키를 보존하지 않았다면 그 도구의 대응표 또는 명시적인 참조 어댑터가 필요합니다.
+
+해결된 참조는 `_sourceReferences`에 역할, 원본 값/필드, 대상 ItemReference로 모입니다. `run_adapter.fields`에서 이 필드를 대상 참조 필드 구조에 맞게 변환/매핑해야 합니다. 타겟의 타입이 Test인지 Test Set인지 사용자가 사전에 분류할 필요는 없습니다. Test Plan–요구사항 관계와 다른 종류의 Item 본문은 이 모드에서 수정하지 않습니다.
+
+### 누락 필드 생성 / 기존 필드 갱신 / Unrestricted
+
+`field_sync.unrestricted_permission`의 기본값은 `"Unrestricted"`입니다. 서버에서 permission 객체를 사용하면 조회된 동일 이름의 객체를 재사용합니다. 단순 문자열을 잘못된 객체 자리로 무조건 전송하지 않습니다.
+
+`field_sync.definitions`에 실제 필드 정의(label, typeId, mandatory, 선택지/참조 속성 등)를 주거나 `run_adapter.fields`의 `definition` 및 `field_sync.type_templates`에서 생성할 수 있습니다. 생성하려는 필드와 같은 label이 있으면 업데이트하고, 없으면 생성합니다. 기존 typeId가 다르면 데이터를 파괴할 수 있는 타입 변경을 하지 않고 충돌로 보고합니다. 대상 Test Run Tracker의 **모든 필드** permission을 Unrestricted로 맞춥니다. 다른 Tracker의 권한은 변경하지 않습니다.
+
+쓰기는 Swagger로 확인된 `tracker_configuration_update` 작업만 사용합니다. 호출에는 trackerId와 기존 configuration 전체에서 fields를 병합한 payload가 전달됩니다. 해당 서버가 전체 configuration 갱신 대신 필드별 API를 요구하면 작업 템플릿/어댑터를 서버 스키마에 맞춰야 합니다. 생성/갱신 뒤 전체 configuration을 재조회해 필드와 모든 권한을 비교합니다. 권한을 바꾸지 못한 필드를 성공으로 처리하지 않습니다.
+
+### 실제 Revision을 쌓는 Run History Replay
+
+`jira.collect_run_events: true`이면 `jira.run_events.history`, `.activity`에 지정한 실제 GET API로 전체 이벤트를 수집합니다. **Jira Execution changelog를 Test Run의 History로 대신 쓰지 않습니다.** 서버에서 Run history/activity 조회를 제공하지 않으면 해당 데이터의 완전 복원은 불가능하며 미완료로 남깁니다. 현재 확인되지 않은 엔드포인트를 기본값으로 꾸며 넣지 않습니다.
+
+원본 이벤트 어댑터의 구조(경로와 속성은 설명용):
+
+```json
+{
+  "path": "/ACTUAL_SOURCE_PATH/{runId}",
+  "items_path": "values",
+  "total_path": "total",
+  "pagination": true,
+  "offset_param": "startAt",
+  "limit_param": "maxResults",
+  "fields": {"id": "id", "at": "timestamp", "author": "author", "changes": "changes"},
+  "change_fields": {"field": "field", "before": "oldValue", "after": "newValue"}
+}
+```
+
+페이지 API는 total과 실제 수집 건수를 비교합니다. 단일 전체응답 API를 실서버에서 확인했다면 `complete_single_response: true`로 지정할 수 있습니다. 필드 변경이 없는 Activity는 fields.changes를 생략합니다. 이벤트 timestamp에는 시간대가 있어야 하며, before/after는 최신 Run과 비교 가능한 실제 JSON 값이어야 합니다. Created metadata는 `run_created_at_path`, `run_creator_path`로 가져옵니다.
+
+최신 값에서 이벤트를 역산해 초기 값을 복원하고, 시간순으로 원본 변경을 Run 수정 API에 적용합니다. 매 이벤트에 `_sourceEvent`(원본 ID·변경자·시각·원본 Activity)를 함께 갱신하므로 필드 변경이 없는 Activity도 Revision으로 보존할 수 있습니다. 이 필드는 대상에 생성/매핑해야 하며 `type: "json"`으로 문자열 직렬화할 수 있습니다. `run_create`, `run_update`, `run_get`, `run_lookup`, `run_history`(GET) 작업이 필요합니다. History POST나 DB 변경은 사용하지 않습니다.
+
+매 수정 후 실제 Revision이 **정확히 한 개 증가**하고 해당 필드값이 일치하는지 검증합니다. 마지막 Revision은 최신 원본 값과 비교합니다. SQLite에는 원본 이벤트 ID → CB Revision 매핑을 남겨 중복 Replay를 막습니다. 기존 Run에 Replay 체크포인트가 없으면 과거를 임의로 덮어 Replay하지 않습니다. 원본 이벤트가 바뀌거나 과거 이벤트가 늦게 삽입되면 재조정이 필요합니다.
+
+**Codebeamer의 실제 Revision 수정자와 modifiedAt을 원본 값으로 설정한 것은 아닙니다.** Revision은 이관 계정·실행 시각으로 생성되며 원본 변경자·시각은 `_sourceEvent`와 상태 파일에 보존합니다. 네이티브 과거 시각/작성자 복원은 검증되지 않았습니다. 서버 Workflow가 한 번 수정에 여러 Revision을 만들거나 History 응답 페이지가 잘리면 실패합니다.
+
+### Attachment / Evidence
+
+현재 Run 및 각 과거 스냅샷의 attachment/attachments/evidence/evidences와 Step 내부를 읽습니다. 메타데이터에 id, filename, size, 다운로드 URL이 있으면 자동 수집합니다. 메타데이터 형식이 다르면 `attachment_lists`/`evidence_lists`의 실제 경로를 지정합니다. `steps.*.evidences`처럼 중첩 배열을 지원합니다. 다운로드 URL을 추측하거나 메타데이터만 저장한 뒤 업로드 완료로 처리하지 않습니다.
+
+바이너리는 원본 이름과 ID를 보존해 대상 Run에 업로드하고 재다운로드하여 SHA-256·크기를 비교합니다. 같은 원본 Attachment ID의 중복 업로드를 막습니다. 과거 이벤트에서 제거된 파일도 다운로드할 수 있는 한 포함합니다. 원본 파일이 삭제되어 읽을 수 없거나 바이너리 다운로드 API를 모르면 실패/미처리입니다. 단순 업로드로 과거 Revision의 첨부 등록 시각까지 복원했다고 보고하지 않습니다.
+
+### 실제 API 프로필 확인을 한 번에 준비
+
+Swagger URL을 모르면 읽기 전용 후보 경로를 자동 조회하고, paths를 가진 JSON인 경우에만 API 정의로 채택합니다.
+
+```powershell
+python main.py prepare-run-migration --config config.json --prompt-auth
+```
+
+성공하면 state_dir의 `run-api-capabilities.json`에 실제 Swagger와 Tracker 필드/권한 구조가 저장됩니다. 인증정보는 기록하지 않습니다. 내부 스키마/필드명 등 조직 정보는 포함될 수 있으므로 공유 전에 검토하세요. 자동 조회가 모두 실패하면 정확한 Swagger JSON 또는 `file:` 로컬 정의가 필요합니다. 이 파일의 실제 API 스키마 없이 빈 operations를 임의로 채워 운영 쓰기를 시도해서는 안 됩니다.

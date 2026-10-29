@@ -4,6 +4,9 @@ from clients.http import ApiError
 def convert(value, kind, mapping):
     if value is None:
         return None
+    if kind == 'json':
+        import json
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
     if kind == 'raw':
         return value
     if kind == 'text':

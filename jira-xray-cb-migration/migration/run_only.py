@@ -27,6 +27,7 @@ def migrate_runs(engine):
                     issue = engine.jira.run_source(key)
                     engine.state.save('source', key, issue)
                     for run in engine.xray.runs(issue, field):
+                        run['field_definitions'] = fields
                         engine.state.save('source-runs', run['id'], run)
                         if run['id'] in runs and runs[run['id']][0]['id'] != issue['id']:
                             raise ApiError('Same Run appears under multiple Executions; resolve source association')
@@ -34,11 +35,25 @@ def migrate_runs(engine):
                 except (ApiError, KeyError, ValueError, TypeError) as exc:
                     engine.error(key, exc)
         adapter = engine.settings.get('run_adapter', {})
+        from migration.run_schema import sync_run_fields
+        if engine.settings.get('history_replay'):
+            if any(not run.get('events_complete') for _, run in runs.values()):
+                raise ApiError('Run History/Activity incomplete; refusing all target writes')
+        if report['errors'] and engine.write:
+            raise ApiError('Source extraction failed; refusing target writes until complete')
+        report['field_plan'] = sync_run_fields(engine.cb, engine.state, tracker, engine.settings, engine.write)
+        if engine.settings.get('history_replay'):
+            report['native_revision_metadata'] = {'author_restored': False, 'timestamp_restored': False,
+                                                'source_metadata_preserved_in': '_sourceEvent'}
         for issue, run in runs.values():
             record = {'source_run_id': run['id'], 'execution_key': issue['key'], 'status': 'planned'}
             report['runs'].append(record)
             try:
                 if not engine.write:
+                    if adapter.get('reference_mode') == 'field-values':
+                        from migration.run_references import resolve_references
+                        record['references'] = resolve_references(engine.cb, run['data'], issue, fields, adapter)
+                        continue
                     source_test = str(read_path(run['data'], adapter['test_issue_id_path']))
                     destination = engine.settings.get('test_mapping', {}).get(source_test)
                     if type(destination) is not int or destination <= 0:

@@ -14,9 +14,29 @@ class CodebeamerClient:
 
     def discover(self):
         location = self.config.get('swagger_url')
-        if not location:
-            raise ApiError('Set codebeamer.swagger_url to the actual Swagger/OpenAPI JSON endpoint')
-        self.spec = json.loads(Path(location[5:]).read_text(encoding='utf-8')) if location.startswith('file:') else self.http.request('GET', location)
+        if location:
+            self.spec = json.loads(Path(location[5:]).read_text(encoding='utf-8')) if location.startswith('file:') else self.http.request('GET', location)
+        else:
+            # Read-only probes, never assume a candidate is an actual API definition.
+            base = urllib.parse.urlsplit(self.http.base)
+            parents = [base.path.rstrip('/'), base.path.rstrip('/').rsplit('/', 1)[0]]
+            attempted = []
+            for parent in dict.fromkeys(parents):
+                for suffix in ('/v3/api-docs', '/v2/api-docs', '/swagger.json', '/api-docs'):
+                    candidate = urllib.parse.urlunsplit((base.scheme, base.netloc, parent + suffix, '', ''))
+                    try:
+                        spec = self.http.request('GET', candidate)
+                        if isinstance(spec, dict) and isinstance(spec.get('paths'), dict):
+                            self.spec = spec
+                            self.config['discovered_swagger_url'] = candidate
+                            break
+                    except (ApiError, ValueError):
+                        pass
+                    attempted.append(parent + suffix)
+                if self.spec is not None:
+                    break
+            if self.spec is None:
+                raise ApiError('Swagger JSON discovery failed at ' + ', '.join(attempted) + '; no target write attempted. Supply codebeamer.swagger_url or a file: JSON definition')
         if not isinstance(self.spec.get('paths'), dict):
             raise ApiError('Not an OpenAPI/Swagger document')
         return [{'path': p, 'method': m.upper(), 'operationId': op.get('operationId')}
@@ -27,10 +47,18 @@ class CodebeamerClient:
         op = self.config.get('operations', {}).get(name)
         if not op:
             raise ApiError('Unconfigured API capability: ' + name)
+        if self.spec is None:
+            raise ApiError('Discover Swagger before using API operations')
+        if 'operationId' in op and 'path' not in op:
+            matches = [(p, m) for p, methods in self.spec['paths'].items() for m, definition in methods.items()
+                       if isinstance(definition, dict) and definition.get('operationId') == op['operationId']]
+            if len(matches) != 1:
+                raise ApiError('Ambiguous/missing Swagger operationId: ' + op['operationId'])
+            op = dict(op, path=matches[0][0], method=matches[0][1].upper())
         path, method = op['path'], op['method'].lower()
         if self.spec is None or method not in self.spec['paths'].get(path, {}):
             raise ApiError('Operation not present in discovered Swagger: ' + name)
-        if name == 'history' and method != 'get':
+        if (name == 'history' or name.endswith('_history')) and method != 'get':
             raise ApiError('History is read-only')
         if (name.endswith(('_get', '_lookup')) or name in ('history', 'fields', 'lookup')) and method != 'get':
             raise ApiError('Read operation must use GET: ' + name)

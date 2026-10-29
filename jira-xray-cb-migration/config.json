@@ -6,7 +6,14 @@
       "STGVSTAR"
     ],
     "page_size": 100,
-    "xray_run_field": null
+    "xray_run_field": null,
+    "collect_run_events": true,
+    "run_events": {
+      "history": {},
+      "activity": {}
+    },
+    "run_created_at_path": "",
+    "run_creator_path": ""
   },
   "codebeamer": {
     "url": "",
@@ -28,16 +35,24 @@
     "status_mapping": {},
     "value_mapping": {},
     "xray_run_tracker": 4862420,
-    "history_replay": false,
+    "history_replay": true,
     "mode": "test-runs",
     "test_mapping": {},
     "run_adapter": {
-      "test_issue_id_path": "",
       "execution_mode": "source_metadata",
       "fields": {},
       "evidence_lists": [],
       "evidence_inventory_verified": false,
-      "activity_inventory_verified": false
+      "activity_inventory_verified": false,
+      "reference_mode": "field-values",
+      "reference_fields": {},
+      "attachment_lists": []
+    },
+    "field_sync": {
+      "enabled": true,
+      "unrestricted_permission": "Unrestricted",
+      "definitions": [],
+      "type_templates": {}
     }
   }
 }

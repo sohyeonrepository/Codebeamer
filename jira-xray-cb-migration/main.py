@@ -11,7 +11,7 @@ from migration.engine import Engine
 
 def main():
     parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
-    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types'])
+    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types', 'prepare-run-migration'])
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--prompt-auth', action='store_true', help='Prompt for missing credentials; never save them')
     parser.add_argument('--tracker-id', type=int, help='Tracker to inspect with diagnose-connection')
@@ -45,6 +45,21 @@ def main():
         if prior and prior[1] != identity:
             raise ApiError('State belongs to different source/target URLs; use a separate state_dir')
         state.mark('environment-binding', 'done', identity)
+        if args.command == 'prepare-run-migration':
+            from migration.records import run_tracker_id
+            tracker = run_tracker_id(config['migration'])
+            # Save accessible tracker evidence even if Swagger discovery fails.
+            configuration = cb.configuration(tracker)
+            field_list = cb.fields(tracker)
+            state.save('discovery', 'run-tracker-configuration', configuration)
+            state.save('discovery', 'run-tracker-fields', field_list)
+            operations = cb.discover()
+            (state.root / 'run-api-capabilities.json').write_text(json.dumps({
+                'tracker_id': tracker, 'tracker_configuration': configuration, 'tracker_fields': field_list,
+                'operations': operations, 'openapi': cb.spec}, ensure_ascii=False, indent=2), encoding='utf-8')
+            print(json.dumps({'writes': 0, 'capabilities': str(state.root / 'run-api-capabilities.json'),
+                              'operations': len(operations)}))
+            return 0
         if args.command == 'diagnose-connection':
             if not args.tracker_id:
                 parser.error('--tracker-id required for diagnose-connection')
@@ -88,7 +103,7 @@ def main():
             state.save('diagnostics', 'history-probe', result)
             print(json.dumps({'writes': result['writes'], 'native_author_time_restoration': 'unverified'}))
             return 0
-        report = Engine(jira, XrayClient(jira.http), cb, state, config['migration'], args.apply).migrate()
+        report = Engine(jira, XrayClient(jira.http, config['jira'], state.save), cb, state, config['migration'], args.apply).migrate()
         print(json.dumps({'mode': report['mode'], 'complete': report['complete'], 'issues': len(report['issues']), 'runs': len(report.get('runs', [])),
                           'scope': report.get('scope', 'all'),
                           'errors': len(report['errors']), 'limitations': len(report['limitations']),
