@@ -44,6 +44,10 @@ class JiraClient:
         import json
         return self.pages('/rest/api/2/search', 'issues', {'jql': 'project = ' + json.dumps(project) + ' ORDER BY key', 'fields': '*all'})
 
+    def run_source(self, key):
+        # Run-only migration does not need issue changelog/comments/worklogs.
+        return self.http.request('GET', '/rest/api/2/issue/' + segment(key) + '?fields=*all')
+
     def bundle(self, key):
         root = '/rest/api/2/issue/' + segment(key)
         issue = self.http.request('GET', root + '?fields=*all&expand=changelog')

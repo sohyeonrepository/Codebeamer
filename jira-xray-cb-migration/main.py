@@ -89,7 +89,8 @@ def main():
             print(json.dumps({'writes': result['writes'], 'native_author_time_restoration': 'unverified'}))
             return 0
         report = Engine(jira, XrayClient(jira.http), cb, state, config['migration'], args.apply).migrate()
-        print(json.dumps({'mode': report['mode'], 'complete': report['complete'], 'issues': len(report['issues']),
+        print(json.dumps({'mode': report['mode'], 'complete': report['complete'], 'issues': len(report['issues']), 'runs': len(report.get('runs', [])),
+                          'scope': report.get('scope', 'all'),
                           'errors': len(report['errors']), 'limitations': len(report['limitations']),
                           'report': str(state.root / 'report.json')}, ensure_ascii=False))
         return 0 if report['complete'] else 2

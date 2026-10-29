@@ -1,5 +1,7 @@
 # Jira DC + Xray → Codebeamer Python 마이그레이터
 
+**현재 기본 실행 범위는 Test Run만 이관입니다.** 설정과 제한은 문서 하단의 “현재 사용 범위: Test Run만 이관”을 먼저 확인하세요. 다른 데이터와 Test Plan–요구사항 관계는 별도 도구로 처리합니다.
+
 Python 3.10 이상, Windows/VS Code 지원. 외부 패키지는 필요하지 않습니다.
 기존 저장소에는 README만 있어 API 클라이언트와 마이그레이션 엔진을 새로 작성했습니다.
 
@@ -195,3 +197,33 @@ python main.py list-issue-types --config config.json --prompt-auth
 `.migration/tracker-mapping-template.json`의 `tracker_mapping`에서 null을 대응 Tracker ID로 바꾼 뒤 config의 `migration.tracker_mapping`에 복사합니다. 프로그램이 원본 config를 덮어쓰지 않습니다. 이 명령의 `writes: 0`은 대상 데이터를 쓰지 않는다는 뜻입니다.
 
 `field_mapping`도 이슈 유형 ID 또는 정확한 이름을 키로 사용할 수 있습니다. Tracker 설정만으로 필드 및 API 스키마를 검증한 것이 되지는 않습니다. 실제 이관에는 기존에 설명한 `operations`, 필드/사용자/상태 매핑, 해당 child 어댑터가 여전히 필요합니다. 설정 후 `migrate --config config.json --prompt-auth`의 오류를 해결한 다음 검증계에서 `--apply`를 사용하세요.
+
+## 현재 사용 범위: Test Run만 이관
+
+기본 `migration.mode`는 `test-runs`입니다. 이 모드는 Test/Test Set/Test Plan/요구사항/프로젝트/Tracker를 생성하거나 갱신하지 않습니다. Jira 이슈는 Run 발견을 위해 읽기만 하며, 이슈 History/댓글/Worklog 이관도 실행하지 않습니다. Test Run 생성·갱신과 Run Evidence 업로드만 수행합니다. 전체 이슈 이관 엔진은 `mode: "all"`로 명시한 경우에만 사용하세요.
+
+`migration.xray_run_tracker`에 대상 Test Run Tracker ID를 지정하고, 다른 도구로 이미 옮긴 Test를 `test_mapping`에 매핑합니다. 키는 `run_adapter.test_issue_id_path`에서 읽는 실제 Jira Test ID 또는 키, 값은 Codebeamer의 기존 Test Item ID입니다. Tracker ID와 Item ID를 혼동하지 마세요.
+
+```json
+{
+  "mode": "test-runs",
+  "xray_run_tracker": 4862420,
+  "test_mapping": {
+    "STGVSTAR-EXAMPLE": 123456
+  }
+}
+```
+
+위 Test 키/Item ID는 설명용입니다. 실제 값을 입력하세요. `project_mapping`/`tracker_mapping`/일반 `field_mapping`은 Run-only 경로에서 사용하지 않습니다. Test Plan–요구사항 관계는 다른 이관 도구에서 처리하며 이 모드가 변경하지 않습니다.
+
+별도의 Codebeamer Test Execution Item을 생성하지 않습니다. `run_adapter.execution_mode`를 `source_metadata`로 설정하고 `fields`에 `_executionSource` (원본 Execution id/key), `_executionItem` (null), `_testItem` (기존 Test 참조)을 매핑해야 합니다. 원본 Run의 실행 상태·실행자·날짜·Steps/Results 등도 모두 매핑되어야 합니다. 대상 스키마에서 Execution 참조가 필수이고 null을 허용하지 않으면 별도의 기존 Execution 매핑 어댑터가 필요하며 이 기본 모드로는 지원하지 않습니다.
+
+실제 Run API 요청/응답의 `operations`, `run_adapter.fields`, Xray 원본 Test 식별 경로 및 Evidence/Activity 수집 검증은 여전히 필요합니다. Tracker ID와 연결 성공만으로 실제 쓰기가 준비된 것은 아닙니다.
+
+```powershell
+python main.py migrate --config config.json --prompt-auth
+# 검증계에서 설정을 확인한 후에만 실제 Run 쓰기:
+python main.py migrate --config config.json --prompt-auth --apply
+```
+
+보고서에는 `scope: "test-runs-only"`, `counts.source_runs`, `counts.verified_runs`가 표시됩니다. Run을 하나도 발견하지 못하거나 미지원/오류가 있으면 정상 완료로 보고하지 않습니다. 기존 전체 이관과 상태 파일을 섞지 말고 전용 `state_dir`을 사용하세요.

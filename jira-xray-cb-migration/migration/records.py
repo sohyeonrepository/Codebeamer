@@ -53,16 +53,30 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
     adapter = settings.get('run_adapter', {})
     if not adapter:
         raise ApiError('Missing run_adapter: Test Run schemas must be verified from actual APIs')
+    tracker_id = run_tracker_id(settings)
     data = run['data']
     test_key = str(read_path(data, adapter['test_issue_id_path']))
-    test = state.get('item:' + test_key)
-    if not test or test[0] != 'done':
-        raise ApiError('Test Run test-case reference pending: ' + test_key)
+    if settings.get('mode') == 'test-runs':
+        destination = settings.get('test_mapping', {}).get(test_key)
+        if type(destination) is not int or destination <= 0:
+            raise ApiError('Set test_mapping for source Test ' + test_key)
+        actual_test = cb.call('item_get', {'itemId': destination})
+        if actual_test.get('id') != destination:
+            raise ApiError('Existing Test item verification failed')
+        test = ('done', {'id': destination})
+    else:
+        test = state.get('item:' + test_key)
+        if not test or test[0] != 'done':
+            raise ApiError('Test Run test-case reference pending: ' + test_key)
     source = dict(data)
     source['_testItem'] = {'id': test[1]['id']}
-    source['_executionItem'] = {'id': item_id}
+    source['_executionItem'] = {'id': item_id} if item_id is not None else None
+    if item_id is None:
+        source['_executionSource'] = {'id': issue['id'], 'key': issue['key']}
+        if adapter.get('execution_mode') != 'source_metadata':
+            raise ApiError('No destination Execution Item: set run_adapter.execution_mode=source_metadata and map _executionSource/_executionItem explicitly')
     run_id = mapped_record(cb, state, settings, 'run', run['id'], source,
-                          {'trackerId': adapter['tracker_id'], 'executionId': item_id, 'testId': test[1]['id']}, adapter['fields'])
+                          {'trackerId': tracker_id, 'executionId': item_id, 'testId': test[1]['id']}, adapter['fields'])
     # Evidence format and its exact paths vary by Xray release; never guess a download URL.
     evidence_count = 0
     for evidence_list in adapter.get('evidence_lists', []):
@@ -78,3 +92,14 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
     if not adapter.get('activity_inventory_verified', False):
         raise ApiError('Xray Activity completeness has not been verified; do not infer it from Jira history')
     return {'id': run_id, 'evidence': evidence_count}
+
+
+def run_tracker_id(settings):
+    configured = settings.get('xray_run_tracker')
+    legacy = settings.get('run_adapter', {}).get('tracker_id')
+    if configured is not None and legacy is not None and configured != legacy:
+        raise ApiError('Conflicting xray_run_tracker and run_adapter.tracker_id')
+    tracker = configured if configured is not None else legacy
+    if type(tracker) is not int or tracker <= 0:
+        raise ApiError('Set migration.xray_run_tracker to a positive Test Run Tracker ID')
+    return tracker

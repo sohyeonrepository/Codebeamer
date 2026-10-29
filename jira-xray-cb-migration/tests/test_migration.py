@@ -287,3 +287,76 @@ class TrackerConfigurationTests(unittest.TestCase):
         self.assertEqual(result[0]['tracker_id'], 123)
         self.assertEqual(result[1]['config_key'], 'STGVSTAR:2')
         self.assertIsNone(result[1]['tracker_id'])
+
+
+class RunTrackerTests(unittest.TestCase):
+    def test_explicit_run_tracker_and_legacy_config(self):
+        from migration.records import run_tracker_id
+        self.assertEqual(run_tracker_id({'xray_run_tracker': 4862420}), 4862420)
+        self.assertEqual(run_tracker_id({'run_adapter': {'tracker_id': 123}}), 123)
+        with self.assertRaises(ApiError):
+            run_tracker_id({'xray_run_tracker': 1, 'run_adapter': {'tracker_id': 2}})
+        for value in (None, 0, -1, '123', True):
+            with self.assertRaises(ApiError):
+                run_tracker_id({'xray_run_tracker': value})
+
+
+class RunOnlyTests(unittest.TestCase):
+    def test_run_only_never_creates_or_updates_tests_or_plans(self):
+        from migration.engine import Engine
+        class Jira:
+            config = {'xray_run_field': 'runs'}
+            http = None
+            def fields(self):
+                return [{'id': 'runs'}]
+            def projects(self):
+                return [{'key': 'ANY'}]
+            def issues(self, project):
+                return [{'key': 'ANY-EXEC'}]
+            def run_source(self, key):
+                return {'id': 'e1', 'key': key, 'fields': {'runs': [{'testRunId': 'r1'}]}}
+        class Xray:
+            def runs(self, issue, field):
+                return [{'id': 'r1', 'data': {'testId': 'ANY-TEST', 'status': 'PASS'}}]
+        class CB:
+            def __init__(self):
+                self.calls = []
+                self.run = None
+            def discover(self):
+                return []
+            def call(self, name, params=None, data=None):
+                self.calls.append(name)
+                if name == 'item_get':
+                    return {'id': params['itemId']}
+                if name == 'run_lookup':
+                    return [{'id': 900}] if self.run else []
+                if name == 'run_create':
+                    assert params['trackerId'] == 777
+                    self.run = dict(data)
+                    return {'id': 900}
+                if name == 'run_get':
+                    return dict(self.run)
+                raise AssertionError('Forbidden operation: ' + name)
+        with tempfile.TemporaryDirectory() as root:
+            state = State(root)
+            self.addCleanup(state.db.close)
+            cb = CB()
+            settings = {'mode': 'test-runs', 'xray_run_tracker': 777, 'test_mapping': {'ANY-TEST': 123},
+                        'run_adapter': {'test_issue_id_path': 'testId', 'execution_mode': 'source_metadata',
+                                        'fields': {k: {'target': k, 'type': 'raw'} for k in
+                                                   ['testId', 'status', '_testItem', '_executionItem', '_executionSource']},
+                                        'evidence_inventory_verified': True, 'activity_inventory_verified': True}}
+            planned = Engine(Jira(), Xray(), cb, state, settings, False).migrate()
+            self.assertFalse(planned['complete'])
+            self.assertFalse(any(name.endswith('_create') for name in cb.calls))
+            first = Engine(Jira(), Xray(), cb, state, settings, True).migrate()
+            self.assertTrue(first['complete'], first)
+            self.assertEqual(cb.run['_testItem'], {'id': 123})
+            self.assertEqual(cb.run['_executionSource'], {'id': 'e1', 'key': 'ANY-EXEC'})
+            self.assertIsNone(cb.run['_executionItem'])
+            second = Engine(Jira(), Xray(), cb, state, settings, True).migrate()
+            self.assertTrue(second['complete'], second)
+            self.assertEqual(cb.calls.count('run_create'), 1)
+            self.assertNotIn('item_create', cb.calls)
+            self.assertNotIn('item_update', cb.calls)
+            self.assertEqual(second['counts'], {'source_runs': 1, 'verified_runs': 1})

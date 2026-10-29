@@ -18,7 +18,7 @@
     "allow_http": false
   },
   "migration": {
-    "state_dir": ".migration",
+    "state_dir": ".migration/test-runs",
     "project_mapping": {
       "STGVSTAR": 551
     },
@@ -27,7 +27,17 @@
     "user_mapping": {},
     "status_mapping": {},
     "value_mapping": {},
-    "xray_run_tracker": null,
-    "history_replay": false
+    "xray_run_tracker": 4862420,
+    "history_replay": false,
+    "mode": "test-runs",
+    "test_mapping": {},
+    "run_adapter": {
+      "test_issue_id_path": "",
+      "execution_mode": "source_metadata",
+      "fields": {},
+      "evidence_lists": [],
+      "evidence_inventory_verified": false,
+      "activity_inventory_verified": false
+    }
   }
 }

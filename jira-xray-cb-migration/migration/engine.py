@@ -30,6 +30,9 @@ class Engine:
         return self.state.once(f'{kind}:{key}', lambda: self.cb.call(kind + '_create', data=spec['create_payload']))['id']
 
     def migrate(self):
+        if self.settings.get('mode') == 'test-runs':
+            from migration.run_only import migrate_runs
+            return migrate_runs(self)
         try:
             source_fields = self.jira.fields()
             self.state.save('source', 'field-definitions', source_fields)
