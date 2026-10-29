@@ -183,3 +183,23 @@ class RunExtensions(unittest.TestCase):
         cb.config['operations']['run_history'] = {'path': '/actual/{recordId}', 'method': 'POST'}
         with self.assertRaises(ApiError):
             cb.operation('run_history')
+
+    def test_confirmed_unrestricted_type_object_and_legacy_label(self):
+        class CB:
+            def __init__(self):
+                self.config = {'fields': [{'label': 'existing', 'typeId': 1, 'permission': {'type': 'UNRESTRICTED'}}]}
+            def configuration(self, tracker):
+                return copy.deepcopy(self.config)
+            def operation(self, name):
+                pass
+            def call(self, name, params, data):
+                self.config = copy.deepcopy(data)
+                return {}
+        cb = CB()
+        settings = {'field_sync': {'enabled': True, 'unrestricted_permission': 'Unrestricted',
+                                  'definitions': [{'label': 'new', 'typeId': 2}]}}
+        sync_run_fields(cb, self.state, 7, settings, True)
+        self.assertEqual(cb.config['fields'][1]['permission'], {'type': 'UNRESTRICTED'})
+        settings['field_sync']['unrestricted_permission'] = {'type': 'UNRESTRICTED'}
+        sync_run_fields(cb, self.state, 7, settings, True)
+        self.assertTrue(all(f['permission'] == {'type': 'UNRESTRICTED'} for f in cb.config['fields']))

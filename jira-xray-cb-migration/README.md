@@ -242,7 +242,7 @@ python main.py migrate --config config.json --prompt-auth --apply
 
 ### 누락 필드 생성 / 기존 필드 갱신 / Unrestricted
 
-`field_sync.unrestricted_permission`의 기본값은 `"Unrestricted"`입니다. 서버에서 permission 객체를 사용하면 조회된 동일 이름의 객체를 재사용합니다. 단순 문자열을 잘못된 객체 자리로 무조건 전송하지 않습니다.
+`field_sync.unrestricted_permission`의 기본값은 실서버에서 확인된 `{"type": "UNRESTRICTED"}`입니다. 기존 문자열 `"Unrestricted"`도 조회된 동일 type 객체로 변환합니다. 서버에서 permission 객체를 사용하면 조회된 동일 이름의 객체를 재사용합니다. 단순 문자열을 잘못된 객체 자리로 무조건 전송하지 않습니다.
 
 `field_sync.definitions`에 실제 필드 정의(label, typeId, mandatory, 선택지/참조 속성 등)를 주거나 `run_adapter.fields`의 `definition` 및 `field_sync.type_templates`에서 생성할 수 있습니다. 생성하려는 필드와 같은 label이 있으면 업데이트하고, 없으면 생성합니다. 기존 typeId가 다르면 데이터를 파괴할 수 있는 타입 변경을 하지 않고 충돌로 보고합니다. 대상 Test Run Tracker의 **모든 필드** permission을 Unrestricted로 맞춥니다. 다른 Tracker의 권한은 변경하지 않습니다.
 
@@ -290,3 +290,11 @@ python main.py prepare-run-migration --config config.json --prompt-auth
 ```
 
 성공하면 state_dir의 `run-api-capabilities.json`에 실제 Swagger와 Tracker 필드/권한 구조가 저장됩니다. 인증정보는 기록하지 않습니다. 내부 스키마/필드명 등 조직 정보는 포함될 수 있으므로 공유 전에 검토하세요. 자동 조회가 모두 실패하면 정확한 Swagger JSON 또는 `file:` 로컬 정의가 필요합니다. 이 파일의 실제 API 스키마 없이 빈 operations를 임의로 채워 운영 쓰기를 시도해서는 안 됩니다.
+
+
+### 실서버에서 확인한 API 정보
+
+- 생성: `POST /v3/trackers/{trackerId}/items`, operationId `createTrackerItem`. 기본 `run_create`에 이 operationId를 연결했습니다. 실제 생성 body와 응답 필드 매핑은 별도 검증이 필요합니다.
+- 필드 권한 표현: `permission: {"type": "UNRESTRICTED"}`.
+- `getTrackerFieldsPermissions`/`getTrackerFieldPermissions`는 GET 조회 API이며 권한 변경 API가 아닙니다.
+- Wiki History/Attachment API는 Run의 History/Attachment 용도로 사용하지 않습니다. 아이템 수정·History 조회·첨부 API는 해당 Item/Run 작업 정의가 필요합니다.

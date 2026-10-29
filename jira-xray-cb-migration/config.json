@@ -18,7 +18,11 @@
   "codebeamer": {
     "url": "",
     "swagger_url": "",
-    "operations": {},
+    "operations": {
+      "run_create": {
+        "operationId": "createTrackerItem"
+      }
+    },
     "auth": "basic",
     "username_env": "CB_USERNAME",
     "password_env": "CB_PASSWORD",
@@ -50,7 +54,9 @@
     },
     "field_sync": {
       "enabled": true,
-      "unrestricted_permission": "Unrestricted",
+      "unrestricted_permission": {
+        "type": "UNRESTRICTED"
+      },
       "definitions": [],
       "type_templates": {}
     }

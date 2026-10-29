@@ -33,7 +33,8 @@ def sync_run_fields(cb, state, tracker, settings, write):
     if isinstance(permission, str):
         structured = [f['permission'] for f in fields if isinstance(f.get('permission'), dict)]
         if structured:
-            matches = [p for p in structured if p.get('name', p.get('label', p.get('value'))) == permission]
+            matches = [p for p in structured if p.get('name', p.get('label', p.get('value'))) == permission
+                       or (permission == 'Unrestricted' and p.get('type') == 'UNRESTRICTED')]
             if not matches:
                 raise ApiError('Server uses structured permissions; no observed ' + permission + ' permission object')
             if any(p != matches[0] for p in matches):
