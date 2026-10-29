@@ -298,3 +298,23 @@ python main.py prepare-run-migration --config config.json --prompt-auth
 - 필드 권한 표현: `permission: {"type": "UNRESTRICTED"}`.
 - `getTrackerFieldsPermissions`/`getTrackerFieldPermissions`는 GET 조회 API이며 권한 변경 API가 아닙니다.
 - Wiki History/Attachment API는 Run의 History/Attachment 용도로 사용하지 않습니다. 아이템 수정·History 조회·첨부 API는 해당 Item/Run 작업 정의가 필요합니다.
+
+
+### 추가 확인한 Item/Run 수정 API
+
+`run_update`는 `updateCustomFieldTrackerItem` (`PUT /v3/items/{itemId}/fields`), `run_history`는 `getTrackerItemHistory` (`GET /v3/items/{itemId}/history`), `tracker_configuration_update`는 `postTrackerConfiguration` (`POST /v3/tracker/configuration`)에 연결했습니다. 이들은 사용자 환경의 실제 Swagger 작업명입니다. `run_fields_get`은 `getTrackerItemFields`입니다.
+
+실행 결과용 `run_result_update` (`updateTestRunResult`, `PUT /v3/testruns/{testRunId}`)는 일반 필드 수정과 구분합니다. 기본 History Replay는 이벤트마다 설정된 `run_update` 한 번만 호출하며 `run_result_update`를 자동으로 중복 호출하지 않습니다. 네이티브 결과 상태를 갱신하려면 그 요청/응답 구조와 Revision 생성을 별도로 검증해야 합니다. 한 소스 이벤트에 두 API 수정이 필수라면 한 이벤트=한 Revision 요구를 만족한다고 보고할 수 없습니다.
+
+작업명/경로 확인만으로 request body가 검증된 것은 아닙니다. `fieldValues` 같은 envelope, 구체적인 FieldValue 타입, native Run 결과 body, Tracker configuration body는 실제 Swagger의 request schema에 맞춰 operation body와 응답 정규화를 설정해야 합니다. `migrateAttachments`도 일반 파일 업로드와 같다고 가정하지 않습니다. 실제 binary/multipart 계약을 확인해야 합니다.
+
+작업의 실제 경로 변수명이 내부 이름과 다르면 `path_parameters`에서 `${recordId}` 등의 값을 매핑할 수 있습니다. 예: `run_result_update.path_parameters: {"testRunId": "${recordId}"}`.
+
+
+수집 파일 전체를 공유할 수 없으면 오프라인 스키마 요약 도구를 사용할 수 있습니다. 네트워크/인증/쓰기 없이 기존 파일에서 요청 스키마의 속성·타입·필수값만 출력하며 examples/defaults는 출력하지 않습니다. API 구조/필드명은 포함되므로 조직 정책에 맞게 검토하세요.
+
+```powershell
+python inspect_contract.py --capabilities ".migration/run-api-capabilities.json"
+```
+
+특정 작업만 보려면 `--operation updateCustomFieldTrackerItem`, 펼침 깊이는 `--depth 2` 등으로 지정하세요. 설정의 state_dir가 다르면 실제 수집 파일 경로로 바꾸세요. 이 도구 실행은 이관 완료나 쓰기 검증을 의미하지 않습니다.

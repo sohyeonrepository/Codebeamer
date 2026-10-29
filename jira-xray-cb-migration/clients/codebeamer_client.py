@@ -69,8 +69,14 @@ class CodebeamerClient:
         method = op['method'].upper()
         if method != 'GET' and not self.write:
             raise ApiError('Write refused in dry-run')
-        path = re.sub(r'\{([^}]+)\}', lambda m: segment((params or {})[m[1]]), op['path'])
         context = dict(params or {}, payload=data)
+        path_params = dict(params or {})
+        for name, template in op.get('path_parameters', {}).items():
+            path_params[name] = render(template, context)
+        try:
+            path = re.sub(r'\{([^}]+)\}', lambda m: segment(path_params[m[1]]), op['path'])
+        except KeyError:
+            raise ApiError('Missing path parameter for configured operation') from None
         if op.get('query'):
             query = {k: render(v, context) for k, v in op['query'].items()}
             path += '?' + urllib.parse.urlencode(query, doseq=True)

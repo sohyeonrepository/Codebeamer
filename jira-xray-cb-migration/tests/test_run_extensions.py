@@ -203,3 +203,32 @@ class RunExtensions(unittest.TestCase):
         settings['field_sync']['unrestricted_permission'] = {'type': 'UNRESTRICTED'}
         sync_run_fields(cb, self.state, 7, settings, True)
         self.assertTrue(all(f['permission'] == {'type': 'UNRESTRICTED'} for f in cb.config['fields']))
+
+    def test_actual_test_run_path_parameter_alias(self):
+        from clients.codebeamer_client import CodebeamerClient
+        class HTTP:
+            def request(self, method, path, data=None, **kwargs):
+                self.result = (method, path, data)
+                return {}
+        http = HTTP()
+        cb = CodebeamerClient(http, {'operations': {'run_result_update': {
+            'operationId': 'updateTestRunResult', 'path_parameters': {'testRunId': '${recordId}'}}}}, True)
+        cb.spec = {'paths': {'/v3/testruns/{testRunId}': {'put': {'operationId': 'updateTestRunResult'}}}}
+        cb.call('run_result_update', {'recordId': 42}, {'status': 'PASS'})
+        self.assertEqual(http.result, ('PUT', '/v3/testruns/42', {'status': 'PASS'}))
+
+    def test_contract_extractor_supports_swagger_and_openapi_without_examples(self):
+        from inspect_contract import contracts
+        schemas = {'Update': {'type': 'object', 'properties': {'fieldValues': {'type': 'array', 'items': {'type': 'object'}}},
+                              'example': {'password': 'do-not-output'}}}
+        spec = {'definitions': schemas, 'paths': {'/v3/items/{itemId}/fields': {'put': {
+            'operationId': 'updateCustomFieldTrackerItem',
+            'parameters': [{'in': 'body', 'schema': {'$ref': '#/definitions/Update'}}]}}}}
+        import json
+        result = contracts({'openapi': spec}, ['updateCustomFieldTrackerItem'], 2)
+        self.assertEqual(result['operations'][0]['request'][0]['schema']['schema'], 'Update')
+        self.assertNotIn('do-not-output', json.dumps(result))
+        spec['paths']['/v3/items/{itemId}/fields']['put'] = {'operationId': 'updateCustomFieldTrackerItem',
+            'requestBody': {'content': {'application/json': {'schema': {'$ref': '#/definitions/Update'}}}}}
+        result = contracts({'openapi': spec}, ['updateCustomFieldTrackerItem'], 2)
+        self.assertEqual(result['operations'][0]['request'][0]['media_type'], 'application/json')

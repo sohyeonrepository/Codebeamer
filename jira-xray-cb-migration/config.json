@@ -21,6 +21,24 @@
     "operations": {
       "run_create": {
         "operationId": "createTrackerItem"
+      },
+      "run_update": {
+        "operationId": "updateCustomFieldTrackerItem"
+      },
+      "run_history": {
+        "operationId": "getTrackerItemHistory"
+      },
+      "run_fields_get": {
+        "operationId": "getTrackerItemFields"
+      },
+      "run_result_update": {
+        "operationId": "updateTestRunResult",
+        "path_parameters": {
+          "testRunId": "${recordId}"
+        }
+      },
+      "tracker_configuration_update": {
+        "operationId": "postTrackerConfiguration"
       }
     },
     "auth": "basic",

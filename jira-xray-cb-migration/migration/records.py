@@ -38,7 +38,7 @@ def mapped_record(cb, state, settings, category, source_id, source, params, mapp
             state.mark(identity, 'done', created)
         else:
             created = state.once(identity, lambda: cb.call(category + '_create', params, expected))
-    target_params = dict(params, recordId=created['id'])
+    target_params = dict(params, recordId=created['id'], itemId=created['id'])
     actual = cb.call(category + '_get', target_params)
     if compare_fields(expected, actual):
         state.once(identity + ':update:' + fingerprint, lambda: cb.call(category + '_update', target_params, expected))
