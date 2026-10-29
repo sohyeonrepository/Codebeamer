@@ -318,3 +318,20 @@ python inspect_contract.py --capabilities ".migration/run-api-capabilities.json"
 ```
 
 특정 작업만 보려면 `--operation updateCustomFieldTrackerItem`, 펼침 깊이는 `--depth 2` 등으로 지정하세요. 설정의 state_dir가 다르면 실제 수집 파일 경로로 바꾸세요. 이 도구 실행은 이관 완료나 쓰기 검증을 의미하지 않습니다.
+
+### 확인된 요청 본문 구조 적용
+
+사용자 환경에서 추출한 네 가지 request schema를 기준으로 클라이언트가 다음 형식을 검사/직렬화합니다.
+
+- `createTrackerItem`: native `name` 및 `customFields` 배열을 사용합니다. 대상의 Name 필수 설정에 따라 빈 이름을 거부합니다.
+- `updateCustomFieldTrackerItem`: `fieldValues`/`tableValues` envelope만 사용합니다. 평평한 필드 사전을 TrackerItem 수정 body로 그대로 보내지 않습니다.
+- `updateTestRunResult`: `updateRequestModels` 배열과 각 모델의 필수 `result`, `testCaseReference`를 검증합니다. 단일 결과 모델 입력은 해당 배열로 감쌀 수 있습니다.
+- `postTrackerConfiguration`: `basicInformation.trackerId`, `fields` 배열 및 객체형 permission 구조를 확인합니다.
+
+일반 필드값과 실행 결과는 서로 다른 API 계약입니다. Test Set/Plan 참조가 있다고 해서 그것을 `testCaseReference`로 바꾸지 않습니다. 기본 Replay가 결과 갱신 API까지 자동 호출해 한 이벤트에 두 Revision을 생성하지 않습니다.
+
+`codebeamer.field_bindings` 또는 작업별 `field_bindings`는 canonical payload 키를 실제 대상 FieldValue에 연결합니다. 각 항목에는 실제 `fieldId`, 서버의 구체적인 discriminator `type`, 값을 담는 실제 속성명 `value_property`가 필요합니다. 이름만 보고 FieldValue 타입을 추측하지 않습니다. 생성 시 바인딩한 값은 customFields로, 수정 시에는 fieldValues로 직렬화됩니다. native name 같은 생성 속성을 custom field로 옮기지 않도록 실제 스키마/필드 정의와 맞춰 설정하세요.
+
+`response_format: "field-values"`를 지정한 조회 작업은 `response_path`로 선택한 FieldValue 배열을 동일한 binding으로 정규화해 값 비교에 사용합니다. 모든 FieldValue의 fieldId/type/value 속성과 중복 fieldId를 확인합니다. 구체적인 FieldValue 스키마는 AbstractFieldValue 요약만으로 확정할 수 없으므로 서버의 원본 Swagger 하위 모델 또는 실제 필드값 조회 응답에서 확인해야 합니다.
+
+이 변경은 request 계약을 구현한 것이며, 실서버 생성/수정 성공이나 Workflow에 따른 Revision 개수를 검증한 것은 아닙니다. Xray Run History/Activity 수집 API 및 실제 원본 before/after 형태가 확인되지 않았다면 전체 이관은 계속 미완료로 처리합니다.

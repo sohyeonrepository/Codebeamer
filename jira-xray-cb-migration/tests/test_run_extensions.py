@@ -214,8 +214,9 @@ class RunExtensions(unittest.TestCase):
         cb = CodebeamerClient(http, {'operations': {'run_result_update': {
             'operationId': 'updateTestRunResult', 'path_parameters': {'testRunId': '${recordId}'}}}}, True)
         cb.spec = {'paths': {'/v3/testruns/{testRunId}': {'put': {'operationId': 'updateTestRunResult'}}}}
-        cb.call('run_result_update', {'recordId': 42}, {'status': 'PASS'})
-        self.assertEqual(http.result, ('PUT', '/v3/testruns/42', {'status': 'PASS'}))
+        model = {'result': 'PASS', 'testCaseReference': {'id': 123, 'type': 'TrackerItemReference'}}
+        cb.call('run_result_update', {'recordId': 42}, model)
+        self.assertEqual(http.result, ('PUT', '/v3/testruns/42', {'updateRequestModels': [model]}))
 
     def test_contract_extractor_supports_swagger_and_openapi_without_examples(self):
         from inspect_contract import contracts

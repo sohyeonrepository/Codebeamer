@@ -82,10 +82,18 @@ class CodebeamerClient:
             path += '?' + urllib.parse.urlencode(query, doseq=True)
         if 'body' in op and not isinstance(data, bytes):
             data = render(op['body'], context)
+        bindings = op.get('field_bindings', self.config.get('field_bindings', {}))
+        if method in ('POST', 'PUT', 'PATCH') and not isinstance(data, bytes):
+            from clients.codebeamer_payloads import request_body
+            operation_id = self.spec['paths'][op['path']][method.lower()].get('operationId')
+            data = request_body(operation_id, data, bindings)
         result = self.http.request(method, path, data, raw=raw, headers=headers)
         for part in op.get('response_path', '').split('.'):
             if part:
                 result = result[part]
+        if op.get('response_format') == 'field-values':
+            from clients.codebeamer_payloads import canonical_fields
+            result = canonical_fields(result, bindings)
         if op.get('response_fields'):
             result = {target: resolve(result, source) for target, source in op['response_fields'].items()}
         return result
