@@ -11,7 +11,7 @@ from migration.engine import Engine
 
 def main():
     parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
-    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection'])
+    parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types'])
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--prompt-auth', action='store_true', help='Prompt for missing credentials; never save them')
     parser.add_argument('--tracker-id', type=int, help='Tracker to inspect with diagnose-connection')
@@ -29,6 +29,16 @@ def main():
                         password_env=settings.get('password_env'), allow_http=settings.get('allow_http', False),
                         prompt_auth=args.prompt_auth)
         jira = JiraClient(http(config['jira']), config['jira'], state.save)
+        if args.command == 'list-issue-types':
+            from migration.configuration import mapping_catalog
+            catalog = mapping_catalog(jira, config['migration'])
+            report_path = state.root / 'tracker-mapping-template.json'
+            report_path.write_text(json.dumps({
+                'project_mapping': {p['project']: config['migration'].get('project_mapping', {}).get(p['project']) for p in catalog},
+                'tracker_mapping': {p['config_key']: p['tracker_id'] for p in catalog},
+                'issue_types': catalog}, ensure_ascii=False, indent=2), encoding='utf-8')
+            print(json.dumps({'issue_types': catalog, 'template': str(report_path), 'writes': 0}, ensure_ascii=False))
+            return 0
         cb = CodebeamerClient(http(config['codebeamer']), config['codebeamer'], args.apply)
         identity = {'jira': config['jira']['url'], 'codebeamer': config['codebeamer']['url']}
         prior = state.get('environment-binding')

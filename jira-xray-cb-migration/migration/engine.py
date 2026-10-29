@@ -2,6 +2,7 @@ import json
 from clients.http import ApiError
 from clients.xray_client import XrayClient
 from migration.fields import payload, compare_definitions
+from migration.configuration import tracker_for
 from migration.history_replay import timeline, replay
 from migration.attachments import transfer
 from validation.compare_fields import compare_fields
@@ -84,9 +85,11 @@ class Engine:
     def issue(self, project, issue, definitions):
         key = issue['key']
         type_id = str(issue['fields']['issuetype']['id'])
-        tracker_key = project['key'] + ':' + type_id
-        tracker_spec = self.settings.get('tracker_mapping', {}).get(tracker_key)
-        mapping = self.settings.get('field_mapping', {}).get(type_id, {})
+        tracker_key, tracker_spec = tracker_for(self.settings, project['key'], issue['fields']['issuetype'])
+        if not (type(tracker_spec) is int and tracker_spec > 0) and not (isinstance(tracker_spec, dict) and 'create_payload' in tracker_spec):
+            raise ApiError('Set a positive target Tracker ID for ' + tracker_key)
+        mappings = self.settings.get('field_mapping', {})
+        mapping = mappings.get(type_id, mappings.get(issue['fields']['issuetype'].get('name'), {}))
         record = {'key': key, 'planned_fields': len(mapping), 'comments': len(issue['_comments']),
                   'worklogs': len(issue['_worklogs']), 'runs': len(issue['_runs']), 'status': 'planned'}
         self.report['issues'].append(record)

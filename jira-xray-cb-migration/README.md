@@ -179,3 +179,19 @@ python main.py diagnose-connection --config config.local.json --tracker-id 48624
 이 Tracker ID는 지시서의 검증용 예시입니다. 실제 접근 가능한 ID로 바꾸세요. 명령은 Jira 토큰과 Codebeamer 아이디·비밀번호를 입력받고 Jira 필드, 대상 Tracker 설정·필드를 GET으로 조회합니다. **Swagger 주소 없이 실행할 수 있으며 대상 쓰기는 하지 않습니다.** `jira: ok`, `codebeamer: ok`이면 이 조회 범위의 인증/연결 확인에 성공한 것입니다. 전체 이관이나 쓰기 권한 검증을 뜻하지 않습니다.
 
 HTTP 401은 인증 방식·아이디·비밀번호, 403은 권한, 404는 주소/컨텍스트 경로/Tracker ID를 우선 확인하세요. 저장되는 diagnostics 원본에는 업무 데이터가 포함될 수 있으므로 그대로 공유하지 마세요. 실패 시 인증정보를 제외한 콘솔 결과를 제공하면 다음 설정을 진단할 수 있습니다.
+
+## STGVSTAR → 프로젝트 551: Tracker 직접 지정
+
+기본 예제의 대상은 `migration.project_mapping: {"STGVSTAR": 551}`입니다. 다른 프로젝트에서는 변경하세요. 기존 로컬 `config.json`은 최신 ZIP으로 교체하기 전에 백업하세요.
+
+Jira 이슈 유형별 Tracker ID를 `migration.tracker_mapping`에 지정합니다. 키는 `프로젝트키:Jira Issue Type ID` 또는 `프로젝트키:정확한 이슈 유형 이름`입니다. ID 설정이 이름 설정보다 우선합니다. 예를 들어 실제 Jira 이름이 Test라면 `"STGVSTAR:Test": 대상_Tracker_ID` 형식입니다. ID는 따옴표 없는 양의 정수여야 하며, 같은 이름의 유형이 여러 개면 ID를 사용하세요. Test Run Tracker를 모든 이슈의 대상으로 사용하지 마세요.
+
+Jira 유형 ID를 모르면 다음 읽기 전용 명령으로 실제 목록과 설정 템플릿을 만듭니다. Codebeamer 인증이나 Swagger가 필요하지 않습니다.
+
+```powershell
+python main.py list-issue-types --config config.json --prompt-auth
+```
+
+`.migration/tracker-mapping-template.json`의 `tracker_mapping`에서 null을 대응 Tracker ID로 바꾼 뒤 config의 `migration.tracker_mapping`에 복사합니다. 프로그램이 원본 config를 덮어쓰지 않습니다. 이 명령의 `writes: 0`은 대상 데이터를 쓰지 않는다는 뜻입니다.
+
+`field_mapping`도 이슈 유형 ID 또는 정확한 이름을 키로 사용할 수 있습니다. Tracker 설정만으로 필드 및 API 스키마를 검증한 것이 되지는 않습니다. 실제 이관에는 기존에 설명한 `operations`, 필드/사용자/상태 매핑, 해당 child 어댑터가 여전히 필요합니다. 설정 후 `migrate --config config.json --prompt-auth`의 오류를 해결한 다음 검증계에서 `--apply`를 사용하세요.

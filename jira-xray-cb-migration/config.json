@@ -2,7 +2,9 @@
   "jira": {
     "url": "https://ade-jira.hmckmc.co.kr",
     "token_env": "JIRA_TOKEN",
-    "projects": [],
+    "projects": [
+      "STGVSTAR"
+    ],
     "page_size": 100,
     "xray_run_field": null
   },
@@ -17,7 +19,9 @@
   },
   "migration": {
     "state_dir": ".migration",
-    "project_mapping": {},
+    "project_mapping": {
+      "STGVSTAR": 551
+    },
     "tracker_mapping": {},
     "field_mapping": {},
     "user_mapping": {},

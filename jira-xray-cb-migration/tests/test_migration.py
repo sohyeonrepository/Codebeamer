@@ -261,3 +261,29 @@ class AuthenticationTests(unittest.TestCase):
         with patch('builtins.input', return_value='testuser'), patch('getpass.getpass', return_value='test-password'):
             client = Http(self.url, auth='basic', prompt_auth=True)
         self.assertEqual(client.request('GET', '/basic'), {'authenticated': True})
+
+
+class TrackerConfigurationTests(unittest.TestCase):
+    def test_name_mapping_and_id_precedence(self):
+        from migration.configuration import tracker_for
+        settings = {'tracker_mapping': {'STGVSTAR:Test': 100, 'STGVSTAR:7': 200}}
+        self.assertEqual(tracker_for(settings, 'STGVSTAR', {'id': '7', 'name': 'Test'}), ('STGVSTAR:7', 200))
+        self.assertEqual(tracker_for(settings, 'STGVSTAR', {'id': '8', 'name': 'Test'}), ('STGVSTAR:Test', 100))
+        with self.assertRaises(ApiError):
+            tracker_for(settings, 'OTHER', {'id': '8', 'name': 'Test'})
+
+    def test_catalog_retains_manual_assignments(self):
+        from migration.configuration import mapping_catalog
+        class Jira:
+            def projects(self):
+                return [{'key': 'STGVSTAR'}]
+            @property
+            def http(self):
+                return self
+            def request(self, method, path):
+                assert method == 'GET'
+                return {'issueTypes': [{'id': '1', 'name': 'Test'}, {'id': '2', 'name': 'Bug'}]}
+        result = mapping_catalog(Jira(), {'tracker_mapping': {'STGVSTAR:Test': 123}})
+        self.assertEqual(result[0]['tracker_id'], 123)
+        self.assertEqual(result[1]['config_key'], 'STGVSTAR:2')
+        self.assertIsNone(result[1]['tracker_id'])
