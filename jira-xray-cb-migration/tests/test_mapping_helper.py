@@ -572,3 +572,44 @@ class MappingHelperTests(unittest.TestCase):
         field=dict(FIELD,id=None,referenceId=42)
         self.assertEqual(field_identifier(field),42)
         self.assertEqual(build_spec('name',field,'text','name',{})['field_id'],42)
+
+    def test_type_names_use_metadata_models_not_numeric_guesses(self):
+        from mapping_helper import field_type_label
+        self.assertEqual(field_type_label({'typeId':999,'valueModel':'TextFieldValue'}),'Text (텍스트)')
+        self.assertEqual(field_type_label({'typeId':999,'valueModel':{'$ref':'#/components/schemas/WikiTextFieldValue'}}),'Wikitext (위키 텍스트)')
+        self.assertEqual(field_type_label({'type':'IntegerFieldReference'}),'Integer (정수)')
+        self.assertIsNone(field_type_label({'label':'Priority','typeId':7}))
+        self.assertEqual(field_type_label({'type':'UserFieldReference','multipleValues':True}),'Members (사용자 목록)')
+        self.assertEqual(field_type_label({'type':'TableFieldReference','columns':[{'name':'Action'}]}),'Table (테이블)')
+
+    def test_creation_selector_shows_document_type_names_without_existing_field_labels(self):
+        from mapping_helper import creation_templates
+        config={'fields':[dict(FIELD,label='Customer secret label',permission={'type':'UNRESTRICTED'})]}
+        metadata=[dict(FIELD,type='ChoiceFieldReference')]
+        templates=creation_templates(config,metadata)
+        self.assertEqual(templates[0]['name'],'Choice (선택)')
+        self.assertEqual(templates[0]['definition']['typeId'],FIELD['typeId'])
+        self.assertNotIn('Customer secret label',templates[0]['name'])
+        self.assertTrue(templates[0]['type_verified'])
+
+    def test_unknown_creation_type_is_not_shown_as_a_guessed_numeric_type(self):
+        from mapping_helper import creation_templates
+        template=creation_templates({'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]})[0]
+        self.assertFalse(template['type_verified'])
+        self.assertIn('타입 확인 필요',template['name'])
+
+    def test_creation_metadata_fetches_details_only_when_declared_in_swagger(self):
+        from mapping_helper import load_creation_metadata,creation_templates
+        calls=[]
+        class Http:
+            def request(self,method,path):
+                calls.append((method,path))
+                return {'id':5,'valueModel':'ChoiceFieldValue','multipleValues':False}
+        cb=SimpleNamespace(http=Http(),spec={'paths':{'/v3/trackers/{trackerId}/fields/{fieldId}':{'get':{}}}})
+        tracker={'id':100,'fields':[FIELD], 'configuration':{'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}}
+        metadata=load_creation_metadata(cb,tracker)
+        self.assertEqual(calls,[('GET','/v3/trackers/100/fields/5')])
+        self.assertEqual(creation_templates(tracker['configuration'],metadata)[0]['name'],'Choice (선택)')
+        cb.spec={'paths':{}};calls.clear()
+        load_creation_metadata(cb,tracker)
+        self.assertEqual(calls,[])

@@ -463,3 +463,11 @@ python main.py migrate --config config.local.json --mapping mapping.local.json -
 ![대상에 없는 값의 생성 선택](docs/mapping-helper-missing-value-preview.png)
 
 필드 ID가 null이고 referenceId가 존재하는 응답에서는 실제 referenceId를 사용합니다. 권한 생략 처리 수정은 `mapping_helper.py`와 `clients/codebeamer_payloads.py`를 함께 교체해야 반영됩니다.
+
+### 생성 타입 이름
+
+생성 화면에는 Text/Integer/Decimal/Bool/Choice/User/Members/Date/Duration/Wikitext/Table 같은 타입 이름을 표시합니다. 기존 필드의 표시 이름을 타입 이름으로 사용하지 않습니다. 숫자 typeId의 고정 대응표도 만들지 않습니다. 실제 서버의 type/typeName/valueModel 및 multipleValues 메타데이터에서 확인된 이름을 사용하고, 필요한 경우 Swagger에 선언된 `GET /v3/trackers/{trackerId}/fields/{fieldId}`로 상세를 조회합니다. 확인할 수 없는 타입은 미확인으로 표시해 생성하지 않습니다. Table/참조 생성은 별도의 검증된 스키마가 필요하며 일반 텍스트 필드처럼 생성하지 않습니다.
+
+첨부 설계 가이드는 검증 완료 문서가 아니므로 의미상 후보를 운영 매핑으로 확정하거나 숫자 ID를 하드코딩하는 데 사용하지 않았습니다. Test Steps의 Action/Expected result가 테이블 하위 열이면 독립 필드로 취급할 수 없습니다. 이번 수정은 타입 이름과 메타데이터 조회에 관한 것이며, 해당 테이블/관계 이관을 추가 구현한 것은 아닙니다.
+
+![서버에서 확인한 타입 이름을 표시하는 생성 화면 — 예시 데이터](docs/mapping-helper-type-preview.png)

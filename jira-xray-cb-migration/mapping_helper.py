@@ -508,16 +508,93 @@ def source_choices(samples):
     return choices
 
 
-def creation_templates(configuration):
+TYPE_LABELS = {
+    'text': 'Text (텍스트)', 'wikitext': 'Wikitext (위키 텍스트)',
+    'integer': 'Integer (정수)', 'decimal': 'Decimal (소수)',
+    'bool': 'Bool (예/아니오)', 'boolean': 'Bool (예/아니오)',
+    'choice': 'Choice (선택)', 'user': 'User (사용자)',
+    'members': 'Members (사용자 목록)', 'users': 'Members (사용자 목록)', 'date': 'Date (날짜)',
+    'duration': 'Duration (기간)', 'table': 'Table (테이블)',
+    'references': 'References (참조)', 'reference': 'References (참조)',
+    'wikilink': 'Wiki Link / URL (링크)', 'url': 'Wiki Link / URL (링크)',
+}
+
+
+def field_type_label(field):
+    """Use observed type/model names; never derive a type from field labels or IDs."""
+    candidates=[]
+    for key in ('typeName','fieldType','type','valueModel'):
+        value=field.get(key)
+        if isinstance(value,dict):
+            candidates.extend(value.get(name) for name in ('name','label','type','$ref'))
+        elif isinstance(value,str):candidates.append(value)
+    for value in candidates:
+        if not isinstance(value,str):continue
+        token=value.rsplit('/',1)[-1].rsplit('.',1)[-1]
+        for suffix in ('FieldReference','FieldValue','FieldDefinition','Field'):
+            if token.endswith(suffix):token=token[:-len(suffix)];break
+        key=normalized_label(token)
+        if key in TYPE_LABELS:
+            if key=='user' and (field.get('multipleValues') if isinstance(field.get('multipleValues'),bool) else field.get('multipleSelection')) is True:
+                return TYPE_LABELS['members']
+            return TYPE_LABELS[key]
+    if isinstance(field.get('columns'),list) and field['columns']:
+        return TYPE_LABELS['table']
+    return None
+
+
+def load_creation_metadata(cb, tracker):
+    """Resolve one representative detail per unknown numeric type, preserving raw config."""
+    configured=tracker.get('configuration',{}).get('fields',[])
+    indexed={str(field_identifier(field)):field for field in tracker['fields']}
+    metadata=[]
+    for field in configured:
+        item=dict(field,**indexed.get(str(field_identifier(field)),{}))
+        if field.get('typeId') is not None:item['typeId']=field['typeId']
+        metadata.append(item)
+    if not metadata:metadata=deepcopy(tracker['fields'])
+    unknown=[field for field in metadata if not field_type_label(field)]
+    if not unknown:return metadata
+    if cb.spec is None:read_stage('Codebeamer 필드 타입 상세 API 조회',cb.discover)
+    route='/v3/trackers/{trackerId}/fields/{fieldId}'
+    if 'get' not in cb.spec.get('paths',{}).get(route,{}):
+        return metadata
+    from clients.jira_client import segment
+    resolved={}
+    for field in unknown:
+        key=('typeId',field['typeId']) if field.get('typeId') is not None else ('field',field_identifier(field))
+        if key in resolved:continue
+        identifier=field_identifier(field)
+        if identifier is None:continue
+        try:
+            detail=read_stage('Codebeamer 생성 타입 상세 조회',lambda:cb.http.request('GET','/v3/trackers/'+segment(tracker['id'])+'/fields/'+segment(identifier)))
+        except ApiError:continue
+        if not isinstance(detail,dict):continue
+        # Infer only the shared base type; each field retains its own cardinality and columns.
+        base=dict(detail,multipleValues=False,multipleSelection=False)
+        label=field_type_label(base)
+        if label:resolved[key]=label.split(' (',1)[0]
+        for item in metadata:
+            if field_identifier(item)==identifier:
+                item.update(detail)
+    for field in metadata:
+        key=('typeId',field['typeId']) if field.get('typeId') is not None else ('field',field_identifier(field))
+        if not field_type_label(field) and key in resolved:field['typeName']=resolved[key]
+    return metadata
+
+def creation_templates(configuration, metadata=None):
     """Minimal templates from observed field definitions; no copied ID or options."""
     templates = []
     seen = set()
+    types={str(field_identifier(field)):field for field in metadata or []}
     for field in configuration.get('fields', []):
         if 'typeId' not in field or not isinstance(field.get('permission'),dict):
             continue
         if field.get('reference') is not None:
             continue
-        signature = json.dumps(field['typeId'],sort_keys=True)
+        observed=dict(field,**types.get(str(field_identifier(field)),{}))
+        label=field_type_label(observed)
+        signature = json.dumps([field['typeId'],label],sort_keys=True)
         if signature in seen:
             continue
         seen.add(signature)
@@ -525,7 +602,8 @@ def creation_templates(configuration):
         template={'typeId':deepcopy(field['typeId']), 'permission':deepcopy(field['permission']),
                   'mandatory':False,'multipleSelection':False,
                   'options':[] if isinstance(field.get('options'),list) else None,'reference':None}
-        templates.append({'name': str(field.get('label', field.get('name', ''))) + '와 같은 API 타입 (' + str(field['typeId']) + ')', 'definition': template})
+        if label and label.startswith('Members'):template['multipleSelection']=True
+        templates.append({'name':label or '타입 확인 필요 (서버 상세 정보 없음)', 'definition':template, 'type_verified':bool(label)})
     return templates
 
 
@@ -834,7 +912,9 @@ def partial_field_templates(fields):
         seen.add(identity)
         draft=dict(observed,mandatory=False,multipleSelection=False,options=None,reference=None)
         if isinstance(field.get('permission'),dict):draft['permission']=deepcopy(field['permission'])
-        templates.append({'name':str(field.get('label',field.get('name','필드')))+'와 같은 서버 타입 ('+str(observed.get('typeId',observed.get('type')))+')','definition':draft})
+        label=field_type_label(field)
+        if label and label.startswith('Members'):draft['multipleSelection']=True
+        templates.append({'name':label or '타입 확인 필요 (서버 상세 정보 없음)','definition':draft,'type_verified':bool(label)})
     return templates
 
 
@@ -1168,18 +1248,19 @@ def main():
             p,t,tracker=current();source,_=rows[parent]
             expected=tracker.get('configuration',{})
             _diagnostics.tracker_profile(tracker)
-            templates=creation_templates(expected)
-            if templates and expected.get('basicInformation',{}).get('trackerId')==tracker['id']:
-                open_creation_dialog(p,t,tracker,source,expected,templates,False);return
-            creation_busy.set(True);notice.set('전체 설정 대신 사용할 필드 전용 생성 API를 확인 중…')
+            creation_busy.set(True);notice.set('서버 필드 상세에서 타입 이름을 확인 중…')
             def prepare():
                 try:
-                    dedicated_field_contract(cb)
-                    templates=partial_field_templates(tracker['fields'])
-                    if not templates:raise ApiError('필드 목록에도 실제 생성 타입 정보(typeId/type)가 없습니다. 타입을 추측해 생성할 수 없습니다.')
-                    results.put(('field-prepared',p['key'],t['id'],tracker['id'],source,templates))
+                    metadata=load_creation_metadata(cb,tracker)
+                    templates=creation_templates(expected,metadata)
+                    direct=not (templates and expected.get('basicInformation',{}).get('trackerId')==tracker['id'])
+                    if direct:
+                        dedicated_field_contract(cb)
+                        templates=partial_field_templates(metadata)
+                    if not templates:raise ApiError('서버에서 생성에 사용할 타입 정보가 없습니다.')
+                    results.put(('field-prepared',p['key'],t['id'],tracker['id'],source,templates,direct))
                 except Exception as exc:
-                    _diagnostics.record('필드 전용 생성 API/타입 확인','error',error=exc)
+                    _diagnostics.record('필드 생성 API/타입 확인','error',error=exc)
                     results.put(('creation-error',type(exc).__name__+': '+str(exc)))
             threading.Thread(target=prepare,daemon=True).start()
 
@@ -1190,7 +1271,7 @@ def main():
             ttk.Label(panel,text='기존 필드와 권한은 유지합니다. 이 작업은 실제 서버를 변경합니다.',wraplength=600).pack(anchor='w',pady=6)
             ttk.Label(panel,text='새 필드 이름').pack(anchor='w')
             label=ttk.Entry(panel);label.insert(0,definitions.get(source,{}).get('name',source));label.pack(fill='x')
-            ttk.Label(panel,text='서버에서 확인된 타입 (같은 타입의 기존 필드 기준)').pack(anchor='w',pady=(8,0))
+            ttk.Label(panel,text='필드 타입 (서버 상세 조회 기준)').pack(anchor='w',pady=(8,0))
             template=ttk.Combobox(panel,state='readonly',values=[item['name'] for item in templates]);template.pack(fill='x')
             proposal_summary=tk.StringVar(value='타입을 선택하면 생성 제안 요약을 표시합니다.')
             ttk.Label(panel,textvariable=proposal_summary,wraplength=600).pack(anchor='w',pady=8)
@@ -1200,12 +1281,17 @@ def main():
             ttk.Checkbutton(panel,text='고급 설정 · 생성 API 정의 보기/편집',variable=expanded,command=lambda:definition_frame.pack(fill='both',expand=True,before=create_button) if expanded.get() else definition_frame.pack_forget()).pack(anchor='w')
             def fill(event=None):
                 draft=deepcopy(templates[template.current()]['definition']);draft['label']=label.get().strip()
-                proposal_summary.set('새 이름: '+draft['label']+' / 타입 ID: '+str(draft.get('typeId',draft.get('type')))+' / 필수: '+str(draft['mandatory'])+' / 선택지: '+str(len(draft.get('options') or []))+'개\n선택지 추가나 배포별 정의 변경이 필요하면 고급 설정에서 검토하세요.')
+                entry=templates[template.current()]
+                supported=entry.get('type_verified',False) and not entry['name'].startswith(('Table','References'))
+                create_button.configure(state='normal' if supported else 'disabled')
+                proposal_summary.set('이름: '+draft['label']+' / 타입: '+entry['name']+' / 필수: '+('예' if draft['mandatory'] else '아니오')+' / 선택지: '+str(len(draft.get('options') or []))+'개'+('' if supported else '\n타입 상세 정보 또는 테이블/참조 생성 스키마를 추가 확인해야 합니다.'))
                 definition_text.delete('1.0','end');definition_text.insert('1.0',json.dumps(draft,ensure_ascii=False,indent=2))
             template.bind('<<ComboboxSelected>>',fill)
             def create():
                 try:
                     if template.current()<0:raise ValueError('생성할 서버 필드 타입을 선택하세요.')
+                    entry=templates[template.current()]
+                    if not entry.get('type_verified',False) or entry['name'].startswith(('Table','References')):raise ApiError('타입 또는 복잡한 생성 스키마를 확인해야 합니다.')
                     draft=json.loads(definition_text.get('1.0','end'));draft['label']=label.get().strip()
                     create_button.configure(state='disabled');dialog.update_idletasks()
                     creation_busy.set(True)
@@ -1223,7 +1309,7 @@ def main():
                 except (ValueError,ApiError,TypeError) as exc:
                     messagebox.showerror('생성 제안 확인',str(exc),parent=dialog)
                     create_button.configure(state='normal')
-            create_button=ttk.Button(panel,text='새 필드 생성',command=create);create_button.pack(pady=(10,0))
+            create_button=ttk.Button(panel,text='새 필드 생성',command=create,state='disabled');create_button.pack(pady=(10,0))
 
         def process_actions():
             try:
@@ -1232,11 +1318,11 @@ def main():
                 root.after(150,process_actions);return
             creation_busy.set(False)
             if item[0]=='field-prepared':
-                _,project_key,kind_id,tracker_id,source,templates=item
+                _,project_key,kind_id,tracker_id,source,templates,direct=item
                 p,t,tracker=current()
                 parent=selected_parent()
                 if (p['key'],t['id'],tracker['id'])==(project_key,kind_id,tracker_id) and parent in rows and rows[parent][0]==source:
-                    open_creation_dialog(p,t,tracker,source,tracker.get('configuration',{}),templates,True)
+                    open_creation_dialog(p,t,tracker,source,tracker.get('configuration',{}),templates,direct)
                 else:notice.set('대상 선택이 바뀌었습니다. 새 필드 생성을 다시 선택하세요.')
             elif item[0]=='created-field':
                 _,tracker_id,created,actual,source,project_key,kind_id=item
