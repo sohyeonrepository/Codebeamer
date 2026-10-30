@@ -33,6 +33,7 @@ class Diagnostics:
         self.failures = []
         self.latest = '시작'
         self.count = 0
+        self.profiles = []
         self.record('프로그램 시작', 'ok')
 
     def record(self, stage, outcome, error=None, result=None):
@@ -61,10 +62,25 @@ class Diagnostics:
                 self.failures.append(text)
             lines = ['Mapping helper diagnostic summary v1', 'Python: ' + sys.version.split()[0] + ' / ' + sys.platform,
                      'Events: ' + str(self.count), 'Latest: ' + self.latest]
-            lines.extend(self.failures[-6:])
+            lines.extend(self.profiles[-2:])
+            lines.extend(self.failures[-4:])
             if not self.failures:
                 lines.append('Recorded errors: 0')
             (self.root / 'summary.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    def tracker_profile(self, tracker):
+        fields=tracker.get('fields',[])
+        config=tracker.get('configuration',{})
+        configured=config.get('fields',[]) if isinstance(config.get('fields'),list) else []
+        profile=('Tracker '+str(tracker['id'])+': config_fields='+str(len(configured))+
+                 ', api_fields='+str(len(fields))+
+                 ', api_types='+str(sum('typeId' in f or 'type' in f for f in fields))+
+                 ', typeIds='+str(sum('typeId' in f for f in configured))+
+                 ', permissions='+str(sum(isinstance(f.get('permission'),dict) for f in configured))+
+                 ', templates='+str(len(creation_templates(config)))+
+                 ', trackerId_match='+str(config.get('basicInformation',{}).get('trackerId')==tracker['id']))
+        self.profiles=[profile]
+        self.record('새 필드 생성 준비 상태','info')
 
 
 def read_stage(label, action, diagnostics=None):
@@ -493,18 +509,18 @@ def creation_templates(configuration):
     templates = []
     seen = set()
     for field in configuration.get('fields', []):
-        required = ('typeId', 'mandatory', 'multipleSelection', 'options', 'reference', 'permission')
-        if any(key not in field for key in required) or not isinstance(field['permission'], dict):
+        if 'typeId' not in field or not isinstance(field.get('permission'),dict):
             continue
-        # Reference/table/user types need a separately validated creation contract.
-        if field['reference'] is not None:
+        if field.get('reference') is not None:
             continue
-        signature = json.dumps([field['typeId'], field['multipleSelection']], sort_keys=True)
+        signature = json.dumps(field['typeId'],sort_keys=True)
         if signature in seen:
             continue
         seen.add(signature)
-        template = {key: deepcopy(field[key]) for key in required}
-        template.update(mandatory=False, options=[] if isinstance(field['options'], list) else None)
+        # These are explicit defaults for the NEW field, not inferred old-field attributes.
+        template={'typeId':deepcopy(field['typeId']), 'permission':deepcopy(field['permission']),
+                  'mandatory':False,'multipleSelection':False,
+                  'options':[] if isinstance(field.get('options'),list) else None,'reference':None}
         templates.append({'name': str(field.get('label', field.get('name', ''))) + '와 같은 API 타입 (' + str(field['typeId']) + ')', 'definition': template})
     return templates
 
@@ -730,6 +746,107 @@ def create_missing_option(cb, tracker, field, label, journal_path):
             elif new.get(key)!=value:raise ApiError('기존 필드 설정이 변경되었습니다. 서버를 확인하세요.')
     journal[identity]={'status':'done','tracker':tracker,'field_id':field_id,'option_id':created['id']};persist()
     return created,actual
+
+def dedicated_field_contract(cb, definition=None, tracker=None):
+    if cb.spec is None:read_stage('Codebeamer 필드 전용 생성 API 조회',cb.discover)
+    configured=cb.config.get('operations',{}).get('field_create')
+    paths=[]
+    if configured:
+        op=cb.operation('field_create');paths.append((op['path'],op['method'].lower(),op))
+    else:
+        for path,methods in cb.spec.get('paths',{}).items():
+            if not path.rstrip('/').casefold().endswith('/fields') or 'tracker' not in path.casefold():continue
+            if isinstance(methods.get('post'),dict):paths.append((path,'post',{'path':path,'method':'POST'}))
+    matches=[]
+    for path,method,op in paths:
+        parameters=set(re.findall(r'\{([^}]+)\}',path))
+        if parameters not in ({'trackerId'},{'id'}):continue
+        if method!='post':continue
+        api=cb.spec['paths'][path][method]
+        try:
+            schema=request_schema(cb.spec,api)
+            properties=schema.get('properties',{})
+            if not any(key in properties for key in ('name','label')):continue
+            if definition is None:
+                matches.append((op,schema));continue
+            label_key='label' if 'label' in properties else 'name'
+            body={label_key:definition['label']}
+            for name,prop in properties.items():
+                prop=schema_object(cb.spec,prop)
+                if prop.get('readOnly') or name in ('id','fieldId','referenceId') or name==label_key:continue
+                if name in definition:
+                    value=deepcopy(definition[name])
+                    if prop.get('enum') and value not in prop['enum']:raise ApiError('제안한 필드 타입이 생성 API의 타입 목록과 다릅니다.')
+                    body[name]=value
+                elif name=='trackerId' and tracker is not None:body[name]=tracker
+                elif name in schema.get('required',[]):
+                    if 'const' in prop:body[name]=prop['const']
+                    elif len(prop.get('enum',[]))==1:body[name]=prop['enum'][0]
+                    elif 'default' in prop:body[name]=deepcopy(prop['default'])
+                    else:raise ApiError('필드 생성 API의 추가 필수값이 필요합니다: '+name)
+            missing=[name for name in schema.get('required',[]) if name not in body and not schema_object(cb.spec,properties.get(name,{})).get('readOnly')]
+            if missing:raise ApiError('필드 생성 API에서 확인되지 않은 필수값이 있습니다.')
+            matches.append((op,body))
+        except ApiError:
+            if configured:raise
+            continue
+    if len(matches)!=1:
+        raise ApiError('Swagger에서 사용할 필드 전용 생성 API를 하나로 확인할 수 없습니다. 전체 설정 API가 HTTP 500이면 서버 관리자 확인이 필요합니다.')
+    return matches[0]
+
+
+def partial_field_templates(fields):
+    templates=[];seen=set()
+    for field in fields:
+        if field.get('reference') is not None:continue
+        observed={key:deepcopy(field[key]) for key in ('typeId','type') if key in field and isinstance(field[key],(str,int)) and not isinstance(field[key],bool)}
+        if not observed:continue
+        identity=json.dumps(observed,sort_keys=True)
+        if identity in seen:continue
+        seen.add(identity)
+        draft=dict(observed,mandatory=False,multipleSelection=False,options=None,reference=None)
+        if isinstance(field.get('permission'),dict):draft['permission']=deepcopy(field['permission'])
+        templates.append({'name':str(field.get('label',field.get('name','필드')))+'와 같은 서버 타입 ('+str(observed.get('typeId',observed.get('type')))+')','definition':draft})
+    return templates
+
+
+def create_dedicated_field(cb, tracker, definition, journal_path):
+    if not isinstance(definition.get('label'),str) or not definition['label'].strip():raise ApiError('새 필드 이름이 필요합니다.')
+    if any(key in definition for key in ('id','fieldId','referenceId')):raise ApiError('새 필드 ID는 서버가 부여해야 합니다.')
+    operation,body=dedicated_field_contract(cb,definition,tracker)
+    before=read_stage('Codebeamer 전용 생성 전 필드 목록',lambda:cb.fields(tracker))
+    if not isinstance(before,list):raise ApiError('필드 목록 배열을 확인할 수 없습니다.')
+    if any(normalized_label(field.get('label',field.get('name','')))==normalized_label(definition['label']) for field in before):raise ApiError('같은 이름의 필드가 이미 있습니다. 기존 필드에 연결하세요.')
+    import hashlib
+    journal_path=Path(journal_path)
+    journal=json.loads(journal_path.read_text(encoding='utf-8')) if journal_path.exists() else {}
+    identity=hashlib.sha256(json.dumps([tracker,definition['label']],ensure_ascii=False).encode()).hexdigest()
+    if identity in journal:raise ApiError('이 필드의 이전 생성 기록이 있습니다. 서버에서 확인한 뒤 기존 필드에 연결하세요.')
+    journal[identity]={'status':'pending','tracker':tracker}
+    def persist():
+        temporary=journal_path.with_suffix(journal_path.suffix+'.tmp')
+        temporary.write_text(json.dumps(journal,indent=2),encoding='utf-8');temporary.replace(journal_path)
+    persist()
+    previous=cb.write
+    previous_op=cb.config.setdefault('operations',{}).get('helper_field_create')
+    try:
+        cb.write=True;cb.config['operations']['helper_field_create']=operation
+        read_stage('Codebeamer 전용 API 필드 생성',lambda:cb.call('helper_field_create',{'trackerId':tracker,'id':tracker},body))
+    finally:
+        cb.write=previous
+        if previous_op is None:cb.config['operations'].pop('helper_field_create',None)
+        else:cb.config['operations']['helper_field_create']=previous_op
+    fields=read_stage('Codebeamer 전용 생성 후 필드 확인',lambda:cb.fields(tracker))
+    matches=[field for field in fields if normalized_label(field.get('label',field.get('name','')))==normalized_label(definition['label'])]
+    if len(matches)!=1 or matches[0].get('id',matches[0].get('referenceId')) is None:raise ApiError('생성한 필드 ID를 확인할 수 없습니다. 반복 생성하지 마세요.')
+    created=matches[0]
+    for key in ('typeId','type'):
+        if key in definition and key in created and created[key]!=definition[key]:raise ApiError('생성된 필드 타입이 요청과 다릅니다. 서버에서 확인하세요.')
+    old_ids={str(field.get('id',field.get('referenceId'))) for field in before}
+    new_ids={str(field.get('id',field.get('referenceId'))) for field in fields}
+    if not old_ids<=new_ids:raise ApiError('기존 필드 보존을 확인할 수 없습니다.')
+    journal[identity]={'status':'done','tracker':tracker,'field_id':created.get('id',created.get('referenceId'))};persist()
+    return created,{'fields':fields,'_fields_only':True}
 
 def main():
     parser = argparse.ArgumentParser(description='고객 PC 내부 매핑 도우미 (연결 자동 반영 / 없는 값 생성)')
@@ -1022,9 +1139,23 @@ def main():
                 notice.set('새로 만들 원본 필드를 먼저 선택하세요.');return
             p,t,tracker=current();source,_=rows[parent]
             expected=tracker.get('configuration',{})
+            _diagnostics.tracker_profile(tracker)
             templates=creation_templates(expected)
-            if not templates or expected.get('basicInformation',{}).get('trackerId')!=tracker['id']:
-                messagebox.showinfo('생성에 필요한 정보 없음','대상 트래커의 전체 설정과 생성용 타입 정의가 필요합니다.\n설정 조회가 HTTP 500으로 실패한 트래커에는 자동 생성할 수 없습니다.\n서버에서 필드를 만든 뒤 도우미를 다시 실행할 수 있습니다.',parent=root);return
+            if templates and expected.get('basicInformation',{}).get('trackerId')==tracker['id'] and all(isinstance(f.get('permission'),dict) and f.get('id',f.get('referenceId')) is not None for f in expected.get('fields',[])):
+                open_creation_dialog(p,t,tracker,source,expected,templates,False);return
+            creation_busy.set(True);notice.set('전체 설정 대신 사용할 필드 전용 생성 API를 확인 중…')
+            def prepare():
+                try:
+                    dedicated_field_contract(cb)
+                    templates=partial_field_templates(tracker['fields'])
+                    if not templates:raise ApiError('필드 목록에도 실제 생성 타입 정보(typeId/type)가 없습니다. 타입을 추측해 생성할 수 없습니다.')
+                    results.put(('field-prepared',p['key'],t['id'],tracker['id'],source,templates))
+                except Exception as exc:
+                    _diagnostics.record('필드 전용 생성 API/타입 확인','error',error=exc)
+                    results.put(('creation-error',type(exc).__name__+': '+str(exc)))
+            threading.Thread(target=prepare,daemon=True).start()
+
+        def open_creation_dialog(p,t,tracker,source,expected,templates,direct):
             dialog=tk.Toplevel(root);dialog.title('새 필드 생성 제안');dialog.transient(root);dialog.grab_set();dialog.geometry('650x480')
             panel=ttk.Frame(dialog,padding=14);panel.pack(fill='both',expand=True)
             ttk.Label(panel,text='대상 트래커 '+str(tracker['id'])+'에 새 필드를 생성합니다.',style='Title.TLabel').pack(anchor='w')
@@ -1041,7 +1172,7 @@ def main():
             ttk.Checkbutton(panel,text='고급 설정 · 생성 API 정의 보기/편집',variable=expanded,command=lambda:definition_frame.pack(fill='both',expand=True,before=create_button) if expanded.get() else definition_frame.pack_forget()).pack(anchor='w')
             def fill(event=None):
                 draft=deepcopy(templates[template.current()]['definition']);draft['label']=label.get().strip()
-                proposal_summary.set('새 이름: '+draft['label']+' / 타입 ID: '+str(draft['typeId'])+' / 필수: '+str(draft['mandatory'])+' / 선택지: '+str(len(draft.get('options') or []))+'개\n선택지 추가나 배포별 정의 변경이 필요하면 고급 설정에서 검토하세요.')
+                proposal_summary.set('새 이름: '+draft['label']+' / 타입 ID: '+str(draft.get('typeId',draft.get('type')))+' / 필수: '+str(draft['mandatory'])+' / 선택지: '+str(len(draft.get('options') or []))+'개\n선택지 추가나 배포별 정의 변경이 필요하면 고급 설정에서 검토하세요.')
                 definition_text.delete('1.0','end');definition_text.insert('1.0',json.dumps(draft,ensure_ascii=False,indent=2))
             template.bind('<<ComboboxSelected>>',fill)
             def create():
@@ -1053,7 +1184,8 @@ def main():
                     journal=output.with_name(output.stem+'.field-actions.local.json')
                     def worker():
                         try:
-                            created,actual=create_confirmed_field(cb,tracker['id'],draft,expected,journal,approved=True)
+                            if direct:created,actual=create_dedicated_field(cb,tracker['id'],draft,journal)
+                            else:created,actual=create_confirmed_field(cb,tracker['id'],draft,expected,journal,approved=True)
                             results.put(('created-field',tracker['id'],created,actual,source,p['key'],t['id']))
                         except Exception as exc:
                             _diagnostics.record('필드 생성 처리','error',error=exc)
@@ -1071,11 +1203,21 @@ def main():
             except queue.Empty:
                 root.after(150,process_actions);return
             creation_busy.set(False)
-            if item[0]=='created-field':
+            if item[0]=='field-prepared':
+                _,project_key,kind_id,tracker_id,source,templates=item
+                p,t,tracker=current()
+                parent=selected_parent()
+                if (p['key'],t['id'],tracker['id'])==(project_key,kind_id,tracker_id) and parent in rows and rows[parent][0]==source:
+                    open_creation_dialog(p,t,tracker,source,tracker.get('configuration',{}),templates,True)
+                else:notice.set('대상 선택이 바뀌었습니다. 새 필드 생성을 다시 선택하세요.')
+            elif item[0]=='created-field':
                 _,tracker_id,created,actual,source,project_key,kind_id=item
                 tracker=next(target for target in catalog['targets'] if target['id']==tracker_id)
-                tracker['configuration']=actual
-                tracker['fields'].append(created)
+                if not actual.get('_fields_only'):tracker['configuration']=actual
+                if actual.get('_fields_only'):
+                    previous_fields={str(field.get('id',field.get('referenceId'))):field for field in tracker['fields']}
+                    tracker['fields']=[dict(previous_fields.get(str(field.get('id',field.get('referenceId'))),{}),**field) for field in actual['fields']]
+                else:tracker['fields'].append(created)
                 refresh()
                 notice.set('필드 생성 확인 완료: '+str(created.get('label'))+' · 실제 ID '+str(created.get('id',created.get('referenceId')))+' · 대상에 선택하면 매핑이 자동 반영됩니다.')
             elif item[0]=='options-created':

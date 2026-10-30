@@ -472,3 +472,52 @@ class MappingHelperTests(unittest.TestCase):
         self.assertEqual(created['id'],77)
         self.assertEqual(http.writes,1)
         self.assertEqual(actual['fields'][0]['options'][0],baseline['fields'][0]['options'][0])
+
+    def test_optional_old_field_attributes_do_not_block_new_field_templates(self):
+        from mapping_helper import creation_templates
+        templates=creation_templates({'fields':[{'id':1,'label':'Name','typeId':0,'permission':{'type':'UNRESTRICTED'}}]})
+        self.assertEqual(len(templates),1)
+        self.assertEqual(templates[0]['definition']['typeId'],0)
+        self.assertFalse(templates[0]['definition']['mandatory'])
+        self.assertFalse(templates[0]['definition']['multipleSelection'])
+        self.assertIsNone(templates[0]['definition']['reference'])
+
+    def test_dedicated_field_creation_works_without_configuration_api(self):
+        from mapping_helper import create_dedicated_field,partial_field_templates
+        from clients.codebeamer_client import CodebeamerClient
+        from clients.http import ApiError
+        from pathlib import Path
+        from copy import deepcopy
+        import tempfile
+        before=[{'id':1,'name':'Name','typeId':0}]
+        class Http:
+            writes=0
+            def request(self,method,path,data=None,**kwargs):
+                if path.endswith('/configuration'):raise ApiError('GET request failed: HTTP 500')
+                if method=='POST':
+                    self.writes+=1;self.fields=deepcopy(before)+[dict(data,id=100)];return {'id':100}
+                return deepcopy(self.fields if self.writes else before)
+        http=Http();cb=CodebeamerClient(http,{})
+        schema={'type':'object','required':['name','typeId'],'properties':{'name':{'type':'string'},'typeId':{'type':'integer'},'mandatory':{'type':'boolean'}}}
+        cb.spec={'paths':{'/actual/trackers/{trackerId}/fields':{'post':{'requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        draft=partial_field_templates(before)[0]['definition'];draft['label']='Build'
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_dedicated_field(cb,1000,draft,Path(directory)/'a.json')
+        self.assertEqual(created['id'],100)
+        self.assertTrue(actual['_fields_only'])
+        self.assertEqual(http.writes,1)
+        self.assertFalse(cb.write)
+        self.assertNotIn('helper_field_create',cb.config['operations'])
+
+    def test_tracker_diagnostics_explain_missing_templates_without_data_values(self):
+        from mapping_helper import Diagnostics
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            diag=Diagnostics(directory)
+            diag.tracker_profile({'id':4872985,'fields':[{'name':'SECRET-LABEL'}],
+                                  'configuration':{'basicInformation':{'trackerId':4872985},'fields':[{'typeId':0,'permission':{'type':'UNRESTRICTED'}}]}})
+            summary=(diag.root/'summary.txt').read_text(encoding='utf-8')
+            self.assertIn('Tracker 4872985',summary)
+            self.assertIn('templates=1',summary)
+            self.assertNotIn('SECRET-LABEL',summary)
+            self.assertLessEqual(len(summary.splitlines()),10)
