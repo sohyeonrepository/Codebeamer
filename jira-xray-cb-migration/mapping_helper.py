@@ -1,5 +1,10 @@
 """Local desktop mapping editor. API calls are GET-only; credentials stay in memory."""
 import argparse
+from datetime import datetime, timezone
+import re
+import sys
+import traceback
+import uuid
 from copy import deepcopy
 from itertools import islice
 import json
@@ -15,11 +20,67 @@ from clients.http import ApiError
 from migration.fields import convert
 
 
-def read_stage(label, action):
+_diagnostics = None
+
+
+class Diagnostics:
+    """Bounded shareable summary; no exception messages, URLs, values or locals."""
+    def __init__(self, directory):
+        self.root = Path(directory) / ('mapping-helper-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8])
+        self.root.mkdir(parents=True, exist_ok=False)
+        self.lock = threading.Lock()
+        self.failures = []
+        self.latest = '시작'
+        self.count = 0
+        self.record('프로그램 시작', 'ok')
+
+    def record(self, stage, outcome, error=None, result=None):
+        event = {'time': datetime.now(timezone.utc).isoformat(), 'stage': stage, 'outcome': outcome}
+        if result is not None:
+            event['shape'] = type(result).__name__
+            if isinstance(result, (list, dict)):
+                event['count'] = len(result)
+        if error is not None:
+            event['error_type'] = type(error).__name__
+            # HTTP status is the only part taken from exception text.
+            match = re.search(r'HTTP (\d{3})\b', str(error))
+            if match:
+                event['http_status'] = int(match[1])
+            event['frames'] = [{'file': Path(f.filename).name, 'function': f.name, 'line': f.lineno}
+                               for f in traceback.extract_tb(error.__traceback__)[-8:]]
+        with self.lock:
+            with (self.root / 'events.jsonl').open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(event, ensure_ascii=False) + '\n')
+            self.count += 1
+            self.latest = stage + ' / ' + outcome
+            if error is not None:
+                text = stage + ' / ' + type(error).__name__
+                if 'http_status' in event:
+                    text += ' / HTTP ' + str(event['http_status'])
+                self.failures.append(text)
+            lines = ['Mapping helper diagnostic summary v1', 'Python: ' + sys.version.split()[0] + ' / ' + sys.platform,
+                     'Events: ' + str(self.count), 'Latest: ' + self.latest]
+            lines.extend(self.failures[-6:])
+            if not self.failures:
+                lines.append('Recorded errors: 0')
+            (self.root / 'summary.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def read_stage(label, action, diagnostics=None):
+    diagnostics = diagnostics or _diagnostics
+    if diagnostics:
+        diagnostics.record(label, 'start')
     try:
-        return action()
-    except ApiError as exc:
-        raise ApiError(label + ': ' + str(exc)) from None
+        result = action()
+        if diagnostics:
+            diagnostics.record(label, 'ok', result=result)
+        return result
+    except Exception as exc:
+        if diagnostics:
+            diagnostics.record(label, 'error', error=exc)
+        if isinstance(exc, ApiError):
+            raise ApiError(label + ': ' + str(exc)) from None
+        raise
 
 
 def collect_catalog(jira, cb, trackers, sample_limit=20):
@@ -171,10 +232,14 @@ def main():
     parser.add_argument('--sample-limit', type=int, default=20)
     parser.add_argument('--prompt-auth', action='store_true')
     parser.add_argument('--output', default='mapping.local.json')
+    parser.add_argument('--log-dir', default='logs', help='Local diagnostic log directory')
     args = parser.parse_args()
+    global _diagnostics
+    _diagnostics = Diagnostics(args.log_dir)
+    print('진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve()))
     config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
     def http(settings):
-        return Http(settings['url'], settings.get('token_env'), auth=settings.get('auth', 'bearer'),
+        return Http(settings['url'], settings.get('token_env'), log=_diagnostics.root / 'requests.jsonl', auth=settings.get('auth', 'bearer'),
                     username_env=settings.get('username_env'), password_env=settings.get('password_env'),
                     allow_http=settings.get('allow_http', False), prompt_auth=args.prompt_auth)
     jira = JiraClient(http(config['jira']), config['jira'])
@@ -182,16 +247,25 @@ def main():
     import tkinter as tk
     from tkinter import ttk, messagebox
     root = tk.Tk()
+    def callback_error(error_type, error, tb):
+        _diagnostics.record('GUI 콜백', 'error', error=error)
+        messagebox.showerror('화면 처리 실패', '진단 요약 파일을 확인하세요:\n' + str(_diagnostics.root / 'summary.txt'))
+    root.report_callback_exception = callback_error
+    _diagnostics.record('GUI 창 생성', 'ok')
     root.title('Jira → Codebeamer 로컬 매핑 도우미')
     root.geometry('1150x850')
     status = tk.StringVar(value='필드 조회 중… 서버 쓰기는 하지 않습니다.')
     ttk.Label(root, textvariable=status).pack(fill='x')
+    ttk.Label(root, text='진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve())).pack(fill='x')
     ttk.Label(root, text='값은 프로젝트별 최대 지정 건수의 표본입니다. 전체 값 목록이나 이관 준비 완료를 뜻하지 않습니다.').pack()
     results = queue.Queue()
     def fetch():
         try:
-            results.put((collect_catalog(jira, cb, args.tracker_id, args.sample_limit), None))
+            catalog = collect_catalog(jira, cb, args.tracker_id, args.sample_limit)
+            _diagnostics.record('전체 조회 완료', 'ok')
+            results.put((catalog, None))
         except Exception as exc:
+            _diagnostics.record('전체 조회', 'error', error=exc)
             results.put((None, type(exc).__name__ + ': ' + str(exc)))
     threading.Thread(target=fetch, daemon=True).start()
     def render(catalog):
@@ -289,11 +363,24 @@ def main():
         if error:
             status.set('조회 실패'); messagebox.showerror('조회 실패', error)
         else:
-            try: render(catalog)
-            except (ValueError, OSError, KeyError) as exc: messagebox.showerror('설정 확인', str(exc))
+            try:
+                render(catalog)
+                _diagnostics.record('매핑 화면 구성', 'ok')
+            except Exception as exc:
+                _diagnostics.record('매핑 화면 구성', 'error', error=exc)
+                status.set('화면 구성 실패: summary.txt 확인')
+                messagebox.showerror('화면 구성 실패', '오류 종류: ' + type(exc).__name__ + '\n진단 요약 파일을 확인하세요.')
     root.after(100, poll)
     root.mainloop()
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        if _diagnostics:
+            _diagnostics.record('프로그램 실행', 'error', error=exc)
+            print('실행 실패: ' + type(exc).__name__ + '\n진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve()))
+        else:
+            print('로그 초기화 실패: ' + type(exc).__name__)
+        raise SystemExit(2)

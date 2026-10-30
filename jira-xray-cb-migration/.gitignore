@@ -4,3 +4,4 @@ __pycache__/
 config.local.json
 mapping*.local.json
 config.*.local.json
+logs/

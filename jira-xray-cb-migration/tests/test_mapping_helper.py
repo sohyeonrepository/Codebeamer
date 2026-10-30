@@ -96,3 +96,33 @@ class MappingHelperTests(unittest.TestCase):
         result = collect_catalog(jira, cb, [2])
         self.assertEqual(result['targets'][0]['fields'], [FIELD])
         self.assertIn('트래커 2 설정', result['warnings'][0])
+
+    def test_diagnostics_excludes_payload_and_exception_secrets(self):
+        import tempfile
+        from pathlib import Path
+        from mapping_helper import Diagnostics, read_stage
+        from clients.http import ApiError
+        with tempfile.TemporaryDirectory() as directory:
+            diagnostics = Diagnostics(directory)
+            def failure():
+                raise ApiError('HTTP 500 password=SECRET-TOKEN https://private.example/path')
+            with self.assertRaises(ApiError):
+                read_stage('Codebeamer 트래커 123 설정', failure, diagnostics)
+            read_stage('필드 조회', lambda: {'private_value': 'SECRET-PAYLOAD'}, diagnostics)
+            contents = '\n'.join(p.read_text(encoding='utf-8') for p in diagnostics.root.iterdir())
+            for secret in ('SECRET-TOKEN', 'SECRET-PAYLOAD', 'private.example', 'private_value'):
+                self.assertNotIn(secret, contents)
+            summary = (diagnostics.root / 'summary.txt').read_text(encoding='utf-8')
+            self.assertIn('HTTP 500', summary)
+            self.assertIn('트래커 123 설정', summary)
+            self.assertLessEqual(len(summary.splitlines()), 10)
+
+    def test_diagnostics_summary_bounded_and_runs_separate(self):
+        import tempfile
+        from mapping_helper import Diagnostics
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Diagnostics(directory), Diagnostics(directory)
+            self.assertNotEqual(first.root, second.root)
+            for _ in range(50):
+                first.record('화면 구성', 'error', error=KeyError('private-data'))
+            self.assertLessEqual(len((first.root / 'summary.txt').read_text(encoding='utf-8').splitlines()), 10)
