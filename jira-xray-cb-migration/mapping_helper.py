@@ -15,16 +15,23 @@ from clients.http import ApiError
 from migration.fields import convert
 
 
+def read_stage(label, action):
+    try:
+        return action()
+    except ApiError as exc:
+        raise ApiError(label + ': ' + str(exc)) from None
+
+
 def collect_catalog(jira, cb, trackers, sample_limit=20):
     if sample_limit < 1 or sample_limit > 1000:
         raise ValueError('sample_limit must be between 1 and 1000')
-    definitions = jira.fields()
+    definitions = read_stage('Jira 필드 목록', jira.fields)
     projects = []
-    for project in jira.projects():
+    for project in read_stage('Jira 프로젝트 목록', jira.projects):
         config = dict(jira.config)
         config.pop('execution_issue_types', None)
         reader = JiraClient(jira.http, config)
-        samples = list(islice(reader.issues(project['key']), sample_limit))
+        samples = read_stage('Jira 프로젝트 이슈 표본 검색', lambda: list(islice(reader.issues(project['key']), sample_limit)))
         types = {}
         run_samples = {}
         for issue in samples:
@@ -38,7 +45,7 @@ def collect_catalog(jira, cb, trackers, sample_limit=20):
             relationship = XrayClient.relationship_field(issue, config.get('xray_run_field'))
             if relationship:
                 xray = XrayClient(jira.http, dict(config, history_source='mapping-sample', collect_run_events=False))
-                for run in xray.runs(issue, relationship):
+                for run in read_stage('Xray Run 표본 상세 조회', lambda: xray.runs(issue, relationship)):
                     for key, value in run['data'].items():
                         values = run_samples.setdefault(key, [])
                         if value not in values and len(values) < 5:
@@ -49,15 +56,26 @@ def collect_catalog(jira, cb, trackers, sample_limit=20):
             types['__run__'] = {'id': '__run__', 'name': '개별 Xray Run (내부 메타 필드 포함)', 'fields': run_samples}
         projects.append({'key': project['key'], 'types': list(types.values()), 'sample_count': len(samples)})
     targets = []
+    warnings = []
     for tracker in trackers:
-        fields = cb.fields(tracker)
-        configuration = cb.configuration(tracker)
+        try:
+            fields = read_stage('Codebeamer 트래커 ' + str(tracker) + ' 필드 목록', lambda: cb.fields(tracker))
+        except ApiError as exc:
+            warnings.append(str(exc))
+            continue
+        try:
+            configuration = read_stage('Codebeamer 트래커 ' + str(tracker) + ' 설정', lambda: cb.configuration(tracker))
+        except ApiError as exc:
+            warnings.append(str(exc))
+            configuration = {'fields': []}
         if not isinstance(fields, list) or not isinstance(configuration.get('fields'), list):
             raise ValueError('Expected full Codebeamer fields arrays')
         configured = {str(f.get('id', f.get('referenceId'))): f for f in configuration['fields']}
         merged = [dict(configured.get(str(f.get('id', f.get('referenceId'))), {}), **f) for f in fields]
         targets.append({'id': tracker, 'fields': merged})
-    return {'definitions': definitions, 'projects': projects, 'targets': targets,
+    if not targets:
+        raise ApiError('대상 트래커 조회 실패\n' + '\n'.join(warnings))
+    return {'warnings': warnings, 'definitions': definitions, 'projects': projects, 'targets': targets,
             'sample_limit': sample_limit, 'values_complete': False}
 
 
@@ -109,7 +127,7 @@ def build_spec(source, target, conversion, target_key, values):
 
 
 def validate_overlay(overlay, catalog):
-    errors = []
+    errors = list(catalog.get('warnings', []))
     if not any(p['types'] for p in catalog['projects']):
         errors.append('조회된 원본 유형이 없습니다. 프로젝트/표본 범위를 확인하세요.')
     for project in catalog['projects']:
@@ -260,6 +278,8 @@ def main():
         ttk.Button(root, text='선택한 필드 매핑 추가/갱신', command=add).pack(fill='x')
         ttk.Button(root, text='선택한 원본 필드의 매핑 삭제', command=remove).pack(fill='x')
         ttk.Button(root, text='누락 검사 후 로컬 매핑 저장 (서버 쓰기 없음)', command=save).pack(fill='x')
+        if catalog.get('warnings'):
+            messagebox.showwarning('일부 조회 실패: 표시된 정보만 사용 가능', '\n'.join(catalog['warnings']))
         status.set('조회 완료. 프로젝트 ' + str(len(catalog['projects'])) + '개 / 트래커 ' + str(len(catalog['targets'])) + '개')
     def poll():
         try:

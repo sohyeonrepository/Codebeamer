@@ -65,3 +65,34 @@ class MappingHelperTests(unittest.TestCase):
 
     def test_empty_source_is_not_ready(self):
         self.assertTrue(validate_overlay({'migration': {}}, {'projects': [], 'targets': []}))
+
+    def test_error_identifies_server_and_stage(self):
+        from clients.http import ApiError
+        from mapping_helper import read_stage
+        def failure():
+            raise ApiError('GET request failed: HTTP 500')
+        with self.assertRaisesRegex(ApiError, 'Codebeamer 트래커 123 설정: GET request failed: HTTP 500'):
+            read_stage('Codebeamer 트래커 123 설정', failure)
+
+    def test_one_tracker_failure_preserves_other_trackers(self):
+        from clients.http import ApiError
+        jira = SimpleNamespace(config={}, http=None, fields=lambda: [], projects=lambda: [])
+        def fields(tracker):
+            if tracker == 1:
+                raise ApiError('GET request failed: HTTP 500')
+            return [FIELD]
+        cb = SimpleNamespace(fields=fields, configuration=lambda tracker: {'fields': [FIELD]})
+        result = collect_catalog(jira, cb, [1, 2])
+        self.assertEqual([t['id'] for t in result['targets']], [2])
+        self.assertIn('트래커 1 필드 목록', result['warnings'][0])
+        self.assertTrue(validate_overlay({'migration': {}}, result))
+
+    def test_configuration_failure_keeps_field_definitions_with_warning(self):
+        from clients.http import ApiError
+        jira = SimpleNamespace(config={}, http=None, fields=lambda: [], projects=lambda: [])
+        def failure(tracker):
+            raise ApiError('GET request failed: HTTP 500')
+        cb = SimpleNamespace(fields=lambda tracker: [FIELD], configuration=failure)
+        result = collect_catalog(jira, cb, [2])
+        self.assertEqual(result['targets'][0]['fields'], [FIELD])
+        self.assertIn('트래커 2 설정', result['warnings'][0])
