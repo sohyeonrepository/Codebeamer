@@ -91,7 +91,7 @@ def request_body(operation_id, body, bindings=None):
         if not isinstance(basic, dict) or type(basic.get('trackerId')) is not int or not isinstance(fields, list):
             raise ApiError('Tracker configuration update requires basicInformation.trackerId and fields array')
         for field in fields:
-            if not isinstance(field, dict) or not isinstance(field.get('permission'), dict):
+            if not isinstance(field, dict) or ('permission' in field and not isinstance(field['permission'], dict)):
                 raise ApiError('Tracker field permissions must use an object, e.g. type=UNRESTRICTED')
     return body
 

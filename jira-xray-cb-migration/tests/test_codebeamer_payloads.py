@@ -59,3 +59,9 @@ class ConfirmedContracts(unittest.TestCase):
         cb.spec = {'paths': {'/v3/items/{itemId}/fields': {'put': {'operationId': 'updateCustomFieldTrackerItem'}}}}
         with self.assertRaises(ApiError):
             cb.call('run_update', {'itemId': 123}, {'name': 'flat payload'})
+
+    def test_optional_permission_is_preserved_as_omitted(self):
+        body={'basicInformation':{'trackerId':4872985},'fields':[{'id':1,'label':'System field'}]}
+        self.assertEqual(request_body('postTrackerConfiguration',body),body)
+        body['fields'][0]['permission']=None
+        with self.assertRaises(ApiError):request_body('postTrackerConfiguration',body)

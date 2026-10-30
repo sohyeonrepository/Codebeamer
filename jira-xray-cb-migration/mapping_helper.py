@@ -24,6 +24,10 @@ from migration.fields import convert
 _diagnostics = None
 
 
+def field_identifier(field):
+    return next((field[key] for key in ('id','referenceId','fieldId') if field.get(key) is not None), None)
+
+
 class Diagnostics:
     """Bounded shareable summary; no exception messages, URLs, values or locals."""
     def __init__(self, directory):
@@ -162,8 +166,8 @@ def collect_catalog(jira, cb, trackers, sample_limit=20):
             configuration = {'fields': []}
         if not isinstance(fields, list) or not isinstance(configuration.get('fields'), list):
             raise ValueError('Expected full Codebeamer fields arrays')
-        configured = {str(f.get('id', f.get('referenceId'))): f for f in configuration['fields']}
-        merged = [dict(configured.get(str(f.get('id', f.get('referenceId'))), {}), **f) for f in fields]
+        configured = {str(field_identifier(f)): f for f in configuration['fields']}
+        merged = [dict(configured.get(str(field_identifier(f)), {}), **f) for f in fields]
         targets.append({'id': tracker, 'name': configuration.get('name', configuration.get('basicInformation', {}).get('name', '')), 'fields': merged, 'configuration': configuration})
     if not targets:
         raise ApiError('대상 트래커 조회 실패\n' + '\n'.join(warnings))
@@ -213,7 +217,7 @@ def build_spec(source, target, conversion, target_key, values):
         raise ValueError('지원하지 않는 변환입니다.')
     if conversion in ('user', 'status', 'option', 'reference') and not values:
         raise ValueError('선택지/사용자/참조 변환은 값 매핑이 필요합니다.')
-    field_id = target.get('id', target.get('referenceId'))
+    field_id = field_identifier(target)
     if field_id is None:
         raise ValueError('대상 API 필드 ID가 없습니다.')
     required = ('typeId', 'mandatory', 'multipleSelection', 'options', 'reference')
@@ -258,7 +262,7 @@ def validate_overlay(overlay, catalog):
                 continue
             mapped_ids = {str(m['field_id']) for m in mappings.values()}
             for field in destination['fields']:
-                if field.get('mandatory') and str(field.get('id', field.get('referenceId'))) not in mapped_ids:
+                if field.get('mandatory') and str(field_identifier(field)) not in mapped_ids:
                     errors.append(key + ': 필수 대상 필드 미매핑: ' + str(field.get('label', field.get('name'))))
     return errors
 
@@ -379,7 +383,7 @@ def suggest_mapping(source, definition, samples, target_fields, settings, manual
     if conversion is None and samples:
         nonnull = next((s for s in samples if s is not None), None)
         conversion = 'text' if isinstance(nonnull, str) else ('boolean' if isinstance(nonnull, bool) else ('number' if isinstance(nonnull, (int, float)) else None))
-    fid = field.get('id', field.get('referenceId'))
+    fid = field_identifier(field)
     bindings = settings.get('codebeamer', {}).get('field_bindings', {})
     keys = [key for key, binding in bindings.items() if str(binding.get('fieldId')) == str(fid)]
     target_key = keys[0] if len(keys) == 1 else ''
@@ -417,7 +421,7 @@ def suggest_scope(kind, definitions, fields, settings, existing):
     for source, proposal in proposals.items():
         field = proposal.get('field')
         if field:
-            key = str(field.get('id', field.get('referenceId')))
+            key = str(field_identifier(field))
             identities.setdefault(key, []).append(source)
     for key, sources in identities.items():
         if key in claimed or len(sources) > 1:
@@ -544,10 +548,11 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         raise ApiError('참조 필드 자동 생성은 별도 검증된 참조 생성 계약이 필요합니다.')
     if not isinstance(expected.get('fields'), list) or expected.get('basicInformation', {}).get('trackerId') != tracker:
         raise ApiError('대상 트래커의 전체 설정을 조회해야 생성할 수 있습니다.')
-    if not all(isinstance(f, dict) and isinstance(f.get('permission'), dict) for f in expected['fields']):
-        raise ApiError('기존 필드 권한 객체가 누락되어 설정 덮어쓰기를 중단합니다.')
-    if any(f.get('id', f.get('referenceId')) is None for f in expected['fields']):
-        raise ApiError('기존 필드 ID가 누락되어 생성 후 보존 검사를 할 수 없습니다.')
+    if not all(isinstance(f,dict) for f in expected['fields']):
+        raise ApiError('기존 필드 설정의 구조가 올바르지 않습니다.')
+    identities=[('id',str(field_identifier(f))) if field_identifier(f) is not None else ('label',f.get('label'),f.get('typeId')) for f in expected['fields']]
+    if len(set(identities))!=len(identities) or any(key[0]=='label' and not key[1] for key in identities):
+        raise ApiError('기존 필드의 고유 ID/이름을 확인할 수 없어 생성을 중단합니다.')
     if definition['typeId'] not in {f.get('typeId') for f in expected['fields']}:
         raise ApiError('서버에서 확인되지 않은 필드 타입 ID입니다.')
     if any(normalized_label(f.get('label','')) == normalized_label(definition['label']) for f in expected['fields']):
@@ -566,6 +571,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         raise ApiError('트래커 설정이 변경됐습니다. 도우미를 재실행해 다시 조회하세요.')
     body = deepcopy(expected)
     body['fields'].append(deepcopy(definition))
+    body=prepare_configuration_permissions(cb,body)
     journal[identity] = {'tracker': tracker, 'status': 'pending'}
     def persist():
         temporary = journal_path.with_suffix(journal_path.suffix + '.tmp')
@@ -580,17 +586,17 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         cb.write = previous
     actual = read_stage('Codebeamer 생성 후 설정 확인', lambda: cb.configuration(tracker))
     matches = [field for field in actual.get('fields', []) if field.get('label') == definition['label']]
-    if len(matches) != 1 or matches[0].get('id', matches[0].get('referenceId')) is None:
+    if len(matches) != 1 or field_identifier(matches[0]) is None:
         raise ApiError('생성 결과의 실제 필드 ID를 확인할 수 없습니다. 재생성하지 말고 서버에서 확인하세요.')
     created = dict(definition, **matches[0])
     if any(created.get(key) != definition[key] for key in required):
         raise ApiError('생성된 필드 정의가 제안과 다릅니다. 재생성하지 말고 서버에서 확인하세요.')
     for old in expected['fields']:
-        field_id = old.get('id', old.get('referenceId'))
-        existing = [field for field in actual.get('fields', []) if field.get('id', field.get('referenceId')) == field_id]
+        field_id = field_identifier(old)
+        existing = [field for field in actual.get('fields', []) if (field_identifier(field) == field_id if field_id is not None else (field.get('label')==old.get('label') and field.get('typeId')==old.get('typeId')))]
         if len(existing) != 1 or any(existing[0].get(key) != value for key, value in old.items()):
             raise ApiError('기존 필드의 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
-    journal[identity] = {'tracker': tracker, 'status': 'done', 'field_id': created.get('id', created.get('referenceId'))}
+    journal[identity] = {'tracker': tracker, 'status': 'done', 'field_id': field_identifier(created)}
     persist()
     return created, actual
 
@@ -650,6 +656,28 @@ def option_payload(spec, schema, label):
     return body
 
 
+def prepare_configuration_permissions(cb, body):
+    """Preserve optional omissions. Never invent permissions for old fields."""
+    fields=body.get('fields',[])
+    if all(isinstance(field.get('permission'),dict) for field in fields):
+        return body
+    op=cb.operation('tracker_configuration_update')
+    schema=request_schema(cb.spec,cb.spec['paths'][op['path']][op['method'].lower()])
+    array=schema_object(cb.spec,schema.get('properties',{}).get('fields',{}))
+    item=schema_object(cb.spec,array.get('items',{}))
+    if not item.get('properties'):
+        raise ApiError('Swagger에서 기존 필드의 permission 선택 여부를 확인할 수 없습니다.')
+    if 'permission' in item.get('required',[]):
+        raise ApiError('서버는 모든 필드에 permission을 요구하지만 조회 응답에는 일부가 없습니다. 권한을 임의로 채우지 않습니다.')
+    result=deepcopy(body)
+    for field in result['fields']:
+        if field.get('permission') is None:
+            field.pop('permission',None)
+        elif not isinstance(field['permission'],dict):
+            raise ApiError('일부 기존 permission이 객체형이 아닙니다. 원래 권한을 자동 변환하지 않습니다.')
+    return result
+
+
 def choice_contract(cb, tracker, field_id, label):
     if cb.spec is None:read_stage('Codebeamer 선택지 생성 API 조회',cb.discover)
     candidates=[]
@@ -689,13 +717,13 @@ def create_missing_option(cb, tracker, field, label, journal_path):
     """Create only an absent named option and map to the ID read back from server."""
     existing=matching_option(field,label)
     if existing:return existing,None
-    field_id=field.get('id',field.get('referenceId'))
+    field_id=field_identifier(field)
     if type(field_id) is not int or field_id<=0:raise ApiError('선택지 대상 필드의 실제 ID가 필요합니다.')
     operation,payload,mode=choice_contract(cb,tracker,field_id,label)
     expected=({'fields':read_stage('Codebeamer 선택지 생성 전 필드 조회',lambda:cb.fields(tracker)), '_fields_only':True} if mode=='option' else read_stage('Codebeamer 선택지 생성 전 설정',lambda:cb.configuration(tracker)))
     fields=expected.get('fields')
     if not isinstance(fields,list):raise ApiError('전체 필드 설정을 확인할 수 없습니다.')
-    matches=[item for item in fields if item.get('id',item.get('referenceId'))==field_id]
+    matches=[item for item in fields if field_identifier(item)==field_id]
     if len(matches)!=1:raise ApiError('선택지 대상 필드를 설정에서 식별할 수 없습니다.')
     current=matches[0]
     if not isinstance(current.get('options'),list):raise ApiError('대상 필드가 선택지 배열을 제공하지 않습니다. 선택형 필드를 선택하세요.')
@@ -710,7 +738,7 @@ def create_missing_option(cb, tracker, field, label, journal_path):
     if mode=='configuration':
         if expected.get('basicInformation',{}).get('trackerId')!=tracker:raise ApiError('대상 트래커 설정 ID를 확인할 수 없습니다.')
         body=deepcopy(expected)
-        target=next(item for item in body['fields'] if item.get('id',item.get('referenceId'))==field_id)
+        target=next(item for item in body['fields'] if field_identifier(item)==field_id)
         if not isinstance(target.get('options'),list):raise ApiError('기존 선택지 배열이 없습니다.')
         target['options'].append(payload)
     if mode=='configuration' and read_stage('Codebeamer 선택지 생성 전 변경 검사',lambda:cb.configuration(tracker))!=expected:
@@ -732,13 +760,13 @@ def create_missing_option(cb, tracker, field, label, journal_path):
         if previous_operation is None:cb.config['operations'].pop('helper_option_create',None)
         else:cb.config['operations']['helper_option_create']=previous_operation
     actual=({'fields':read_stage('Codebeamer 선택지 생성 후 필드 확인',lambda:cb.fields(tracker)), '_fields_only':True} if mode=='option' else read_stage('Codebeamer 선택지 생성 후 확인',lambda:cb.configuration(tracker)))
-    actual_fields=[item for item in actual.get('fields',[]) if item.get('id',item.get('referenceId'))==field_id]
+    actual_fields=[item for item in actual.get('fields',[]) if field_identifier(item)==field_id]
     if len(actual_fields)!=1:raise ApiError('생성 후 대상 필드를 확인할 수 없습니다.')
     created=matching_option(actual_fields[0],label)
     if not created:raise ApiError('생성 후 선택지 ID가 확인되지 않습니다. 반복 생성하지 마세요.')
     for old in fields:
-        old_id=old.get('id',old.get('referenceId'))
-        new=next((item for item in actual.get('fields',[]) if item.get('id',item.get('referenceId'))==old_id),None)
+        old_id=field_identifier(old)
+        new=next((item for item in actual.get('fields',[]) if field_identifier(item)==old_id),None)
         if new is None:raise ApiError('기존 필드 보존을 확인할 수 없습니다.')
         for key,value in old.items():
             if old_id==field_id and key=='options':
@@ -838,14 +866,14 @@ def create_dedicated_field(cb, tracker, definition, journal_path):
         else:cb.config['operations']['helper_field_create']=previous_op
     fields=read_stage('Codebeamer 전용 생성 후 필드 확인',lambda:cb.fields(tracker))
     matches=[field for field in fields if normalized_label(field.get('label',field.get('name','')))==normalized_label(definition['label'])]
-    if len(matches)!=1 or matches[0].get('id',matches[0].get('referenceId')) is None:raise ApiError('생성한 필드 ID를 확인할 수 없습니다. 반복 생성하지 마세요.')
+    if len(matches)!=1 or field_identifier(matches[0]) is None:raise ApiError('생성한 필드 ID를 확인할 수 없습니다. 반복 생성하지 마세요.')
     created=matches[0]
     for key in ('typeId','type'):
         if key in definition and key in created and created[key]!=definition[key]:raise ApiError('생성된 필드 타입이 요청과 다릅니다. 서버에서 확인하세요.')
-    old_ids={str(field.get('id',field.get('referenceId'))) for field in before}
-    new_ids={str(field.get('id',field.get('referenceId'))) for field in fields}
+    old_ids={str(field_identifier(field)) for field in before}
+    new_ids={str(field_identifier(field)) for field in fields}
     if not old_ids<=new_ids:raise ApiError('기존 필드 보존을 확인할 수 없습니다.')
-    journal[identity]={'status':'done','tracker':tracker,'field_id':created.get('id',created.get('referenceId'))};persist()
+    journal[identity]={'status':'done','tracker':tracker,'field_id':field_identifier(created)};persist()
     return created,{'fields':fields,'_fields_only':True}
 
 def main():
@@ -995,7 +1023,7 @@ def main():
             except ValueError:
                 counts.set('대상 트래커를 선택하면 자동 추천을 시작합니다.');return
             fields[:]=tracker['fields']
-            field_box.configure(values=[str(f.get('label',f.get('name',''))) + '  ·  ID ' + str(f.get('id',f.get('referenceId'))) for f in fields])
+            field_box.configure(values=[str(f.get('label',f.get('name',''))) + '  ·  ID ' + str(field_identifier(f)) for f in fields])
             scoped_definitions=dict(definitions,**t.get('definitions',{}))
             if selected_tracker(overlay,p,t) is None:
                 if t['id']=='__run__':overlay['migration']['xray_run_tracker']=tracker['id']
@@ -1011,7 +1039,7 @@ def main():
                 display=definition.get('name',source)
                 spec=existing.get(source)
                 if spec:
-                    field=next((f for f in fields if str(f.get('id',f.get('referenceId'))) == str(spec.get('field_id'))),None)
+                    field=next((f for f in fields if str(field_identifier(f)) == str(spec.get('field_id'))),None)
                     proposal={'field':field,'spec':spec,'conversion':spec.get('type','raw'),'target_key':spec.get('target',''),'values':spec.get('value_mapping',{}),'reason':'기존 매핑 유지' if field else '기존 대상 필드가 조회되지 않음 · 설정 유지','ready':False}
                     state='자동 반영' if (p['key'],t['id'],source) in confirmed else '기존 유지';tag='kept';kept+=1
                 else:
@@ -1029,7 +1057,7 @@ def main():
                 iid='field-'+str(len(rows));rows[iid]=(source,proposal)
                 field=proposal.get('field')
                 if field:
-                    field=next((item for item in fields if str(item.get('id',item.get('referenceId')))==str(field.get('id',field.get('referenceId')))),field)
+                    field=next((item for item in fields if str(field_identifier(item))==str(field_identifier(field))),field)
                     proposal['field']=field
                 table.insert('', 'end',iid=iid,text=display+' ('+str(definition.get('schema',{}).get('type',proposal.get('conversion','필드')))+')',values=(field.get('label',field.get('name','')) if field else '— 대상 선택 / 새 필드 생성 —',state),tags=(tag,))
                 if proposal.get('conversion') in ('option','status','user','reference') or definition.get('schema',{}).get('type') in ('option','status','priority','user') or definition.get('schema',{}).get('items') in ('option','user','version'):
@@ -1103,8 +1131,8 @@ def main():
             value_drafts[(p['key'],t['id'],source)]=mapping
             if actual:
                 if not actual.get('_fields_only'):tracker['configuration']=actual
-                by_id={str(f.get('id',f.get('referenceId'))):f for f in actual.get('fields',[])}
-                tracker['fields']=[dict(field,**by_id.get(str(field.get('id',field.get('referenceId'))),{})) for field in tracker['fields']]
+                by_id={str(field_identifier(f)):f for f in actual.get('fields',[])}
+                tracker['fields']=[dict(field,**by_id.get(str(field_identifier(field)),{})) for field in tracker['fields']]
             refresh();apply_selected()
 
         def create_options(source, proposal, selected=None):
@@ -1141,7 +1169,7 @@ def main():
             expected=tracker.get('configuration',{})
             _diagnostics.tracker_profile(tracker)
             templates=creation_templates(expected)
-            if templates and expected.get('basicInformation',{}).get('trackerId')==tracker['id'] and all(isinstance(f.get('permission'),dict) and f.get('id',f.get('referenceId')) is not None for f in expected.get('fields',[])):
+            if templates and expected.get('basicInformation',{}).get('trackerId')==tracker['id']:
                 open_creation_dialog(p,t,tracker,source,expected,templates,False);return
             creation_busy.set(True);notice.set('전체 설정 대신 사용할 필드 전용 생성 API를 확인 중…')
             def prepare():
@@ -1215,11 +1243,11 @@ def main():
                 tracker=next(target for target in catalog['targets'] if target['id']==tracker_id)
                 if not actual.get('_fields_only'):tracker['configuration']=actual
                 if actual.get('_fields_only'):
-                    previous_fields={str(field.get('id',field.get('referenceId'))):field for field in tracker['fields']}
-                    tracker['fields']=[dict(previous_fields.get(str(field.get('id',field.get('referenceId'))),{}),**field) for field in actual['fields']]
+                    previous_fields={str(field_identifier(field)):field for field in tracker['fields']}
+                    tracker['fields']=[dict(previous_fields.get(str(field_identifier(field)),{}),**field) for field in actual['fields']]
                 else:tracker['fields'].append(created)
                 refresh()
-                notice.set('필드 생성 확인 완료: '+str(created.get('label'))+' · 실제 ID '+str(created.get('id',created.get('referenceId')))+' · 대상에 선택하면 매핑이 자동 반영됩니다.')
+                notice.set('필드 생성 확인 완료: '+str(created.get('label'))+' · 실제 ID '+str(field_identifier(created))+' · 대상에 선택하면 매핑이 자동 반영됩니다.')
             elif item[0]=='options-created':
                 _,project_key,kind_id,tracker_id,source,mapping,actual,error=item
                 p,t,tracker=current()
@@ -1229,8 +1257,8 @@ def main():
                     target=next(target for target in catalog['targets'] if target['id']==tracker_id)
                     if actual:
                         if not actual.get('_fields_only'):target['configuration']=actual
-                        by_id={str(f.get('id',f.get('referenceId'))):f for f in actual['fields']}
-                        target['fields']=[dict(f,**by_id.get(str(f.get('id',f.get('referenceId'))),{})) for f in target['fields']]
+                        by_id={str(field_identifier(f)):f for f in actual['fields']}
+                        target['fields']=[dict(f,**by_id.get(str(field_identifier(f)),{})) for f in target['fields']]
                 if error:notice.set('일부 값 생성 중단: '+error)
                 else:notice.set('선택지 생성/연결 완료. 매핑 저장으로 보관하세요.')
             elif item[0]=='creation-error':
@@ -1262,7 +1290,7 @@ def main():
             if not bbox:return
             x,y,width,height=bbox
             if item in rows:
-                labels=['＋ 새 필드 생성']+[str(field.get('label',field.get('name','')))+' / ID '+str(field.get('id',field.get('referenceId'))) for field in fields]
+                labels=['＋ 새 필드 생성']+[str(field.get('label',field.get('name','')))+' / ID '+str(field_identifier(field)) for field in fields]
                 box=ttk.Combobox(table,state='readonly',values=labels)
                 old=proposal.get('field')
                 box.current(fields.index(old)+1 if old in fields else 0)

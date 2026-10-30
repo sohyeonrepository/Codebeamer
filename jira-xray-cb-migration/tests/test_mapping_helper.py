@@ -521,3 +521,54 @@ class MappingHelperTests(unittest.TestCase):
             self.assertIn('templates=1',summary)
             self.assertNotIn('SECRET-LABEL',summary)
             self.assertLessEqual(len(summary.splitlines()),10)
+
+    def test_reported_137_fields_119_permissions_can_add_a_field(self):
+        from mapping_helper import create_confirmed_field,creation_templates
+        from clients.codebeamer_client import CodebeamerClient
+        from pathlib import Path
+        from copy import deepcopy
+        import tempfile
+        fields=[]
+        for number in range(137):
+            field={'id':number+1,'label':'Existing '+str(number),'typeId':0}
+            if number<119:field['permission']={'type':'UNRESTRICTED'}
+            elif number<125:field['permission']=None
+            if number==130:field.update(id=None,referenceId=number+1)
+            fields.append(field)
+        expected={'basicInformation':{'trackerId':4872985},'fields':fields}
+        class Http:
+            writes=0
+            def request(self,method,path,data=None,**kwargs):
+                if method=='POST':
+                    self.writes+=1;self.body=deepcopy(data);self.actual=deepcopy(data);self.actual['fields'][-1]['id']=999;return {}
+                return deepcopy(self.actual if self.writes else expected)
+        schema={'type':'object','properties':{'fields':{'type':'array','items':{'type':'object','required':['label','typeId'],
+                'properties':{'label':{'type':'string'},'typeId':{'type':'integer'},'permission':{'type':'object'}}}}}}
+        http=Http();cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
+        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        definition=creation_templates(expected)[0]['definition'];definition['label']='Build'
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_confirmed_field(cb,4872985,definition,expected,Path(directory)/'a.json',approved=True)
+        self.assertEqual(created['id'],999)
+        self.assertEqual(len(actual['fields']),138)
+        self.assertEqual(http.writes,1)
+        for original,sent in zip(fields,http.body['fields']):
+            if original.get('permission') is None:self.assertNotIn('permission',sent)
+            else:self.assertEqual(original['permission'],sent['permission'])
+        self.assertIn('permission',http.body['fields'][-1])
+
+    def test_permission_omission_must_be_allowed_by_actual_schema(self):
+        from mapping_helper import prepare_configuration_permissions
+        from clients.codebeamer_client import CodebeamerClient
+        from clients.http import ApiError
+        schema={'properties':{'fields':{'type':'array','items':{'type':'object','required':['permission'],
+                 'properties':{'permission':{'type':'object'}}}}}}
+        cb=CodebeamerClient(None,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
+        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        with self.assertRaises(ApiError):prepare_configuration_permissions(cb,{'fields':[{'id':1}]})
+
+    def test_field_identifier_uses_reference_when_id_is_null(self):
+        from mapping_helper import field_identifier,build_spec
+        field=dict(FIELD,id=None,referenceId=42)
+        self.assertEqual(field_identifier(field),42)
+        self.assertEqual(build_spec('name',field,'text','name',{})['field_id'],42)
