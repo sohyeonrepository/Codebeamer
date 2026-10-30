@@ -229,3 +229,140 @@ class MappingHelperTests(unittest.TestCase):
         self.assertEqual(mappings['summary']['target'],'new')
         self.assertEqual(mappings['description']['target'],'description')
         self.assertEqual(mappings['priority']['target'],'priority')
+
+    def test_default_field_filter_uses_screen_fields_and_preserves_existing(self):
+        from mapping_helper import visible_sources
+        kind={'fields':{'summary':['a'],'customfield_1':[],'customfield_2':['hidden'],
+                        'customfield_3':[],'votes':[{'votes':1}],'_sourceEvent':[]},
+              'screen_fields':['summary','customfield_1']}
+        self.assertEqual(visible_sources(kind,{'customfield_3':{}}),['summary','customfield_1','customfield_3'])
+        self.assertEqual(visible_sources(kind,{},True),list(kind['fields']))
+
+    def test_field_filter_fallback_does_not_claim_jira_screen_equivalence(self):
+        from mapping_helper import visible_sources
+        kind={'fields':{'summary':[None],'customfield_1':[],'customfield_2':['has value'],'votes':[1]}}
+        self.assertEqual(visible_sources(kind,{}),['summary','customfield_2'])
+
+    def creation_client(self, fail=False, changed=False):
+        from copy import deepcopy
+        from clients.http import ApiError
+        baseline={'basicInformation':{'trackerId':100},'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}
+        class Client:
+            write=False
+            spec=None
+            writes=0
+            def discover(self): self.spec={};return []
+            def operation(self,name): return {}
+            def configuration(self,tracker):
+                if changed and not self.writes:return dict(baseline,changed=True)
+                return deepcopy(self.actual if self.writes else baseline)
+            def call(self,name,params,body):
+                self.writes+=1
+                if fail:raise ApiError('POST request failed: HTTP 500')
+                self.assertion=(body['fields'][:-1]==baseline['fields'])
+                self.actual=deepcopy(body);self.actual['fields'][-1]['id']=99
+                return {}
+        return Client(),baseline
+
+    def test_field_creation_needs_approval_and_preserves_existing_fields(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from clients.http import ApiError
+        from pathlib import Path
+        import tempfile
+        cb,baseline=self.creation_client()
+        template=creation_templates(baseline)[0]['definition'];template['label']='New field'
+        self.assertNotIn('id',template)
+        self.assertFalse(template['mandatory'])
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'actions.json'
+            with self.assertRaises(ApiError):create_confirmed_field(cb,100,template,baseline,path)
+            self.assertEqual(cb.writes,0)
+            created,_=create_confirmed_field(cb,100,template,baseline,path,approved=True)
+            self.assertEqual(created['id'],99)
+            self.assertTrue(cb.assertion)
+            self.assertFalse(cb.write)
+            with self.assertRaises(ApiError):create_confirmed_field(cb,100,template,baseline,path,approved=True)
+            self.assertEqual(cb.writes,1)
+
+    def test_changed_configuration_blocks_field_creation(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from clients.http import ApiError
+        from pathlib import Path
+        import tempfile
+        cb,baseline=self.creation_client(changed=True)
+        template=creation_templates(baseline)[0]['definition'];template['label']='New field'
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ApiError):create_confirmed_field(cb,100,template,baseline,Path(directory)/'a.json',approved=True)
+        self.assertEqual(cb.writes,0)
+
+    def test_uncertain_create_is_not_retried_and_write_permission_restored(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from clients.http import ApiError
+        from pathlib import Path
+        import tempfile,json
+        cb,baseline=self.creation_client(fail=True)
+        template=creation_templates(baseline)[0]['definition'];template['label']='New field'
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'a.json'
+            with self.assertRaises(ApiError):create_confirmed_field(cb,100,template,baseline,path,approved=True)
+            self.assertFalse(cb.write)
+            self.assertEqual(next(iter(json.loads(path.read_text()).values()))['status'],'pending')
+            with self.assertRaises(ApiError):create_confirmed_field(cb,100,template,baseline,path,approved=True)
+        self.assertEqual(cb.writes,1)
+
+    def test_jira_editmeta_is_collected_per_type_without_exporting_values(self):
+        from mapping_helper import collect_catalog
+        issue={'key':'P-1','fields':{'issuetype':{'id':'1','name':'Test'},'summary':'sample','customfield_1':None}}
+        class Reader:
+            def __init__(self,*args):pass
+            def issues(self,project):return iter([issue])
+        class Http:
+            calls=[]
+            def request(self,method,path):
+                self.calls.append((method,path))
+                return {'fields':{'summary':{'name':'Summary'},'customfield_1':{'name':'Build'}}}
+        http=Http()
+        jira=SimpleNamespace(config={},http=http,fields=lambda:[],projects=lambda:[{'key':'P'}])
+        cb=SimpleNamespace(fields=lambda tracker:[FIELD],configuration=lambda tracker:{'fields':[FIELD]})
+        with patch('mapping_helper.JiraClient',Reader):
+            result=collect_catalog(jira,cb,[100])
+        kind=result['projects'][0]['types'][0]
+        self.assertEqual(kind['screen_fields'],['summary','customfield_1'])
+        self.assertEqual(http.calls,[('GET','/rest/api/2/issue/P-1/editmeta')])
+
+    def test_create_uses_verified_codebeamer_operation_and_native_envelope(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from clients.codebeamer_client import CodebeamerClient
+        from copy import deepcopy
+        from pathlib import Path
+        import tempfile
+        baseline={'basicInformation':{'trackerId':100},'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}
+        class Http:
+            body=None
+            def request(self,method,path,data=None,**kwargs):
+                if method=='POST':
+                    self.body=deepcopy(data)
+                    self.actual=deepcopy(data);self.actual['fields'][-1]['id']=101
+                    return {}
+                return deepcopy(self.actual if self.body else baseline)
+        http=Http()
+        cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
+        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration'}}}}
+        proposal=creation_templates(baseline)[0]['definition'];proposal['label']='Build'
+        with tempfile.TemporaryDirectory() as directory:
+            created,_=create_confirmed_field(cb,100,proposal,baseline,Path(directory)/'journal.json',approved=True)
+        self.assertEqual(created['id'],101)
+        self.assertEqual(http.body['basicInformation'],baseline['basicInformation'])
+        self.assertEqual(http.body['fields'][:-1],baseline['fields'])
+        self.assertFalse(cb.write)
+
+    def test_allowed_values_are_proposed_even_if_not_in_sample(self):
+        from mapping_helper import source_observations
+        kind={'fields':{'customfield_1':[]},'definitions':{'customfield_1':{'allowedValues':[{'id':'1','value':'A'},{'id':'2','value':'B'}]}}}
+        self.assertEqual(len(source_observations(kind,'customfield_1')),2)
+        self.assertEqual(kind['fields']['customfield_1'],[])
+
+    def test_configuration_failure_disables_field_creation_templates(self):
+        from mapping_helper import creation_templates
+        self.assertEqual(creation_templates({'fields':[]}),[])
+        self.assertEqual(creation_templates({'fields':[dict(FIELD,reference={'tracker':1})]}),[])
