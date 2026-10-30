@@ -411,6 +411,17 @@ def suggest_scope(kind, definitions, fields, settings, existing):
     return proposals
 
 
+def auto_connect_scope(overlay, project, kind, fields, definitions, settings):
+    existing=scope_mappings(overlay,project,kind)
+    proposals=suggest_scope(kind,definitions,fields,settings,existing)
+    applied=[]
+    for source,proposal in proposals.items():
+        if proposal.get('ready') and proposal.get('spec'):
+            confirm_row(overlay,project,kind,source,selected_tracker(overlay,project,kind),proposal['spec'])
+            applied.append(source)
+    return applied
+
+
 def confirm_row(overlay, project, kind, source, tracker, spec):
     migration = overlay['migration']
     previous = selected_tracker(overlay, project, kind)
@@ -548,7 +559,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     previous = cb.write
     try:
         cb.write = True
-        read_stage('Codebeamer 승인된 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
+        read_stage('Codebeamer 새 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
     finally:
         cb.write = previous
     actual = read_stage('Codebeamer 생성 후 설정 확인', lambda: cb.configuration(tracker))
@@ -567,8 +578,161 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     persist()
     return created, actual
 
+def schema_object(spec, schema, seen=()):
+    if not isinstance(schema, dict):
+        raise ApiError('선택지 생성 스키마가 없습니다.')
+    if '$ref' in schema:
+        reference=schema['$ref']
+        if not reference.startswith('#/') or reference in seen:
+            raise ApiError('외부/순환 스키마는 자동 생성에 사용할 수 없습니다.')
+        value=spec
+        for part in reference[2:].split('/'):
+            value=value[part.replace('~1','/').replace('~0','~')]
+        return schema_object(spec,value,seen+(reference,))
+    if schema.get('oneOf') or schema.get('anyOf'):
+        raise ApiError('생성 스키마가 여러 타입으로 나뉩니다. 명시적인 API 설정이 필요합니다.')
+    result=deepcopy(schema)
+    for base in schema.get('allOf',[]):
+        resolved=schema_object(spec,base,seen)
+        result.setdefault('properties',{}).update(resolved.get('properties',{}))
+        result['required']=list(set(result.get('required',[]))|set(resolved.get('required',[])))
+    return result
+
+
+def request_schema(spec, operation):
+    body=operation.get('requestBody')
+    if body:
+        body=schema_object(spec,body)
+        media=body.get('content',{}).get('application/json')
+        if media:
+            return schema_object(spec,media.get('schema',{}))
+    for parameter in operation.get('parameters',[]):
+        parameter=schema_object(spec,parameter)
+        if parameter.get('in')=='body':
+            return schema_object(spec,parameter.get('schema',{}))
+    raise ApiError('JSON 생성 요청 스키마가 없습니다.')
+
+
+def option_payload(spec, schema, label):
+    schema=schema_object(spec,schema)
+    properties=schema.get('properties',{})
+    names=[name for name in ('name','label','value') if name in properties and schema_object(spec,properties[name]).get('type')=='string' and not properties[name].get('readOnly')]
+    if not names:
+        raise ApiError('선택지 이름을 전달할 속성이 스키마에 없습니다.')
+    selected=names[0]
+    body={selected:label}
+    for name in schema.get('required',[]):
+        if name in body:continue
+        definition=schema_object(spec,properties.get(name,{}))
+        if definition.get('readOnly'):continue
+        if name.lower() in ('id','fieldid','trackerid','referenceid'):
+            raise ApiError('서버가 선택지 ID를 필수 입력으로 요구합니다. ID를 추측하지 않습니다.')
+        if 'const' in definition:body[name]=deepcopy(definition['const'])
+        elif len(definition.get('enum',[]))==1:body[name]=definition['enum'][0]
+        elif 'default' in definition:body[name]=deepcopy(definition['default'])
+        else:raise ApiError('선택지 생성의 추가 필수값을 확인해야 합니다: '+name)
+    return body
+
+
+def choice_contract(cb, tracker, field_id, label):
+    if cb.spec is None:read_stage('Codebeamer 선택지 생성 API 조회',cb.discover)
+    candidates=[]
+    for path,methods in cb.spec.get('paths',{}).items():
+        operation=methods.get('post')
+        if not isinstance(operation,dict):continue
+        params=set(re.findall(r'\{([^}]+)\}',path))
+        if params != {'trackerId','fieldId'}:continue
+        if not any(word in (path+' '+operation.get('operationId','')).casefold() for word in ('option','choice')):continue
+        try:
+            if any(parameter.get('required') and parameter.get('in') not in ('path','body') for parameter in operation.get('parameters',[])):
+                continue
+            body=option_payload(cb.spec,request_schema(cb.spec,operation),label)
+            candidates.append(({'path':path,'method':'POST'},body,'option'))
+        except ApiError:continue
+    if len(candidates)==1:return candidates[0]
+    if len(candidates)>1:raise ApiError('선택지 생성 API가 여러 개입니다. 자동 선택하지 않습니다.')
+    # Configuration fallback is allowed only when its actual option-item schema is known.
+    operation=cb.operation('tracker_configuration_update')
+    definition=cb.spec['paths'][operation['path']][operation['method'].lower()]
+    root=request_schema(cb.spec,definition)
+    fields=schema_object(cb.spec,root.get('properties',{}).get('fields',{}))
+    field=schema_object(cb.spec,fields.get('items',{}))
+    options=schema_object(cb.spec,field.get('properties',{}).get('options',{}))
+    if options.get('type')!='array':raise ApiError('서버 Swagger에서 선택지 추가 형식을 확인할 수 없습니다.')
+    body=option_payload(cb.spec,options.get('items',{}),label)
+    return operation,body,'configuration'
+
+
+def matching_option(field, label):
+    matches=[option for option in field.get('options') or [] if isinstance(option,dict) and option.get('id') is not None and normalized_label(option.get('name',option.get('label',option.get('value',''))))==normalized_label(label)]
+    if len(matches)>1:raise ApiError('같은 이름의 대상 선택지가 여러 개입니다.')
+    return matches[0] if matches else None
+
+
+def create_missing_option(cb, tracker, field, label, journal_path):
+    """Create only an absent named option and map to the ID read back from server."""
+    existing=matching_option(field,label)
+    if existing:return existing,None
+    field_id=field.get('id',field.get('referenceId'))
+    if type(field_id) is not int or field_id<=0:raise ApiError('선택지 대상 필드의 실제 ID가 필요합니다.')
+    operation,payload,mode=choice_contract(cb,tracker,field_id,label)
+    expected=({'fields':read_stage('Codebeamer 선택지 생성 전 필드 조회',lambda:cb.fields(tracker)), '_fields_only':True} if mode=='option' else read_stage('Codebeamer 선택지 생성 전 설정',lambda:cb.configuration(tracker)))
+    fields=expected.get('fields')
+    if not isinstance(fields,list):raise ApiError('전체 필드 설정을 확인할 수 없습니다.')
+    matches=[item for item in fields if item.get('id',item.get('referenceId'))==field_id]
+    if len(matches)!=1:raise ApiError('선택지 대상 필드를 설정에서 식별할 수 없습니다.')
+    current=matches[0]
+    if not isinstance(current.get('options'),list):raise ApiError('대상 필드가 선택지 배열을 제공하지 않습니다. 선택형 필드를 선택하세요.')
+    found=matching_option(current,label)
+    if found:return found,expected
+    import hashlib
+    journal_path=Path(journal_path)
+    journal=json.loads(journal_path.read_text(encoding='utf-8')) if journal_path.exists() else {}
+    identity=hashlib.sha256(json.dumps(['option',tracker,field_id,normalized_label(label)]).encode()).hexdigest()
+    if identity in journal:raise ApiError('이 선택지의 이전 생성 기록이 있습니다. 중복 생성하지 말고 서버를 확인하세요.')
+    body=payload
+    if mode=='configuration':
+        if expected.get('basicInformation',{}).get('trackerId')!=tracker:raise ApiError('대상 트래커 설정 ID를 확인할 수 없습니다.')
+        body=deepcopy(expected)
+        target=next(item for item in body['fields'] if item.get('id',item.get('referenceId'))==field_id)
+        if not isinstance(target.get('options'),list):raise ApiError('기존 선택지 배열이 없습니다.')
+        target['options'].append(payload)
+    if mode=='configuration' and read_stage('Codebeamer 선택지 생성 전 변경 검사',lambda:cb.configuration(tracker))!=expected:
+        raise ApiError('트래커 설정이 변경됐습니다. 다시 조회하세요.')
+    journal[identity]={'status':'pending','tracker':tracker,'field_id':field_id}
+    def persist():
+        temporary=journal_path.with_suffix(journal_path.suffix+'.tmp')
+        temporary.write_text(json.dumps(journal,indent=2),encoding='utf-8');temporary.replace(journal_path)
+    persist()
+    previous=cb.write
+    previous_operation=cb.config.setdefault('operations',{}).get('helper_option_create')
+    try:
+        cb.write=True
+        cb.config['operations']['helper_option_create']=operation
+        name='helper_option_create' if mode=='option' else 'tracker_configuration_update'
+        read_stage('Codebeamer 없는 선택지 생성',lambda:cb.call(name,{'trackerId':tracker,'fieldId':field_id},body))
+    finally:
+        cb.write=previous
+        if previous_operation is None:cb.config['operations'].pop('helper_option_create',None)
+        else:cb.config['operations']['helper_option_create']=previous_operation
+    actual=({'fields':read_stage('Codebeamer 선택지 생성 후 필드 확인',lambda:cb.fields(tracker)), '_fields_only':True} if mode=='option' else read_stage('Codebeamer 선택지 생성 후 확인',lambda:cb.configuration(tracker)))
+    actual_fields=[item for item in actual.get('fields',[]) if item.get('id',item.get('referenceId'))==field_id]
+    if len(actual_fields)!=1:raise ApiError('생성 후 대상 필드를 확인할 수 없습니다.')
+    created=matching_option(actual_fields[0],label)
+    if not created:raise ApiError('생성 후 선택지 ID가 확인되지 않습니다. 반복 생성하지 마세요.')
+    for old in fields:
+        old_id=old.get('id',old.get('referenceId'))
+        new=next((item for item in actual.get('fields',[]) if item.get('id',item.get('referenceId'))==old_id),None)
+        if new is None:raise ApiError('기존 필드 보존을 확인할 수 없습니다.')
+        for key,value in old.items():
+            if old_id==field_id and key=='options':
+                if any(option not in new.get('options',[]) for option in value or []):raise ApiError('기존 선택지 보존을 확인할 수 없습니다.')
+            elif new.get(key)!=value:raise ApiError('기존 필드 설정이 변경되었습니다. 서버를 확인하세요.')
+    journal[identity]={'status':'done','tracker':tracker,'field_id':field_id,'option_id':created['id']};persist()
+    return created,actual
+
 def main():
-    parser = argparse.ArgumentParser(description='고객 PC 내부 매핑 도우미 (필드 생성은 개별 승인 후 실행)')
+    parser = argparse.ArgumentParser(description='고객 PC 내부 매핑 도우미 (연결 자동 반영 / 없는 값 생성)')
     parser.add_argument('--config', default='config.local.json')
     parser.add_argument('--tracker-id', type=int, action='append', required=True)
     parser.add_argument('--sample-limit', type=int, default=20)
@@ -589,6 +753,12 @@ def main():
     import tkinter as tk
     from tkinter import ttk, messagebox
     root = tk.Tk()
+    import tkinter.font as tkfont
+    families=set(tkfont.families(root))
+    ui_font=next((name for name in ('Malgun Gothic','맑은 고딕','Noto Sans CJK KR','unifont') if name in families),'Segoe UI')
+    for name in ('TkDefaultFont','TkTextFont','TkMenuFont','TkHeadingFont','TkTooltipFont','TkSmallCaptionFont'):
+        try:tkfont.nametofont(name).configure(family=ui_font,size=10)
+        except tk.TclError:pass
     def callback_error(error_type, error, tb):
         _diagnostics.record('GUI 콜백', 'error', error=error)
         messagebox.showerror('화면 처리 실패', '진단 요약 파일을 확인하세요:\n' + str(_diagnostics.root / 'summary.txt'))
@@ -597,9 +767,9 @@ def main():
     root.title('Jira → Codebeamer 로컬 매핑 도우미')
     root.geometry('1080x820')
     root.minsize(900, 680)
-    status = tk.StringVar(value='필드 조회 중… 생성 작업은 별도 승인 후 실행합니다.')
+    status = tk.StringVar(value='필드 조회 중… 연결은 자동 반영됩니다.')
     ttk.Label(root, textvariable=status).pack(fill='x')
-    ttk.Label(root, text='진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve())).pack(fill='x')
+    ttk.Label(root, text='진단 요약: ' + str(_diagnostics.root / 'summary.txt')).pack(fill='x')
     ttk.Label(root, text='값은 프로젝트별 최대 지정 건수의 표본입니다. 전체 값 목록이나 이관 준비 완료를 뜻하지 않습니다.').pack()
     results = queue.Queue()
     def fetch():
@@ -618,15 +788,15 @@ def main():
         style = ttk.Style(root)
         style.theme_use('clam')
         style.configure('TFrame', background='#f5f5f5')
-        style.configure('TLabel', background='#f5f5f5', foreground='#25314b', font=('Segoe UI', 10))
-        style.configure('Title.TLabel', font=('Segoe UI', 12, 'bold'))
-        style.configure('Note.TLabel', foreground='#65738a', font=('Segoe UI', 9))
-        style.configure('Treeview', rowheight=25, font=('Segoe UI', 10), background='white', fieldbackground='white')
-        style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'), padding=7)
+        style.configure('TLabel', background='#f5f5f5', foreground='#25314b', font=(ui_font, 10))
+        style.configure('Title.TLabel', font=(ui_font, 12, 'bold'))
+        style.configure('Note.TLabel', foreground='#65738a', font=(ui_font, 9))
+        style.configure('Treeview', rowheight=25, font=(ui_font, 10), background='white', fieldbackground='white')
+        style.configure('Treeview.Heading', font=(ui_font, 10, 'bold'), padding=7)
         style.configure('TButton', padding=(12, 7))
         body = ttk.Frame(root, padding=12); body.pack(fill='both', expand=True)
         ttk.Label(body, text='필드 동기화 설정', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(body, text='기존 매핑 유지 · 새 추천은 확인 후 저장 · 필드 생성은 별도 승인', style='Note.TLabel').pack(anchor='w', pady=(4,8))
+        ttk.Label(body, text='기존 매핑 유지 · 연결은 자동 반영 · 없는 선택지는 생성 후 ID로 연결', style='Note.TLabel').pack(anchor='w', pady=(4,8))
         connection=ttk.LabelFrame(body,text='연결',padding=8);connection.pack(fill='x',pady=(0,8))
         ttk.Label(connection,text='Jira 서버: '+config['jira']['url']).pack(anchor='w')
         ttk.Label(connection,text='Codebeamer 서버: '+config['codebeamer']['url']).pack(anchor='w')
@@ -677,17 +847,18 @@ def main():
         target_key=ttk.Entry(advanced_row,width=22);target_key.pack(side='left')
         ttk.Label(advanced_row,text='변환 / API 키',style='Note.TLabel').pack(side='left',padx=8)
         tabs=ttk.Notebook(advanced);tabs.pack(fill='x',pady=5)
-        samples=tk.Text(tabs,height=4,wrap='word',font=('Segoe UI',10),relief='flat')
+        samples=tk.Text(tabs,height=4,wrap='word',font=(ui_font,10),relief='flat')
         values=tk.Text(tabs,height=4,wrap='word',font=('Consolas',10),relief='flat')
         tabs.add(samples,text='원본 표본 · 대상 선택지');tabs.add(values,text='값 매핑 검토 (JSON)')
         foot=ttk.Frame(body);foot.pack(fill='x')
-        notice=tk.StringVar(value='추천은 검토용입니다. 확정 전에는 저장 파일에 포함되지 않습니다.')
+        notice=tk.StringVar(value='필드/선택지 변경은 바로 반영됩니다. 매핑 저장으로 나중에 다시 사용하세요.')
         ttk.Label(body,textvariable=notice,style='Note.TLabel',wraplength=1050).pack(anchor='w',pady=(8,0))
         definitions={f['id']:f for f in catalog['definitions']}
         rows={}
         fields=[]
         confirmed=set()
         value_drafts={}
+        field_drafts={}
         creation_busy=tk.BooleanVar(value=False)
         def selected_parent():
             selection=table.selection()
@@ -707,8 +878,12 @@ def main():
                 counts.set('대상 트래커를 선택하면 자동 추천을 시작합니다.');return
             fields[:]=tracker['fields']
             field_box.configure(values=[str(f.get('label',f.get('name',''))) + '  ·  ID ' + str(f.get('id',f.get('referenceId'))) for f in fields])
-            existing=scope_mappings(overlay,p,t)
             scoped_definitions=dict(definitions,**t.get('definitions',{}))
+            if selected_tracker(overlay,p,t) is None:
+                if t['id']=='__run__':overlay['migration']['xray_run_tracker']=tracker['id']
+                else:overlay['migration']['tracker_mapping'][p['key']+':'+t['id']]=tracker['id']
+            for source in auto_connect_scope(overlay,p,t,fields,scoped_definitions,config):confirmed.add((p['key'],t['id'],source))
+            existing=scope_mappings(overlay,p,t)
             proposals=suggest_scope(t,scoped_definitions,fields,config,existing)
             visible=set(visible_sources(t,existing,all_fields.get()))
             kept=ready=pending=0
@@ -720,7 +895,7 @@ def main():
                 if spec:
                     field=next((f for f in fields if str(f.get('id',f.get('referenceId'))) == str(spec.get('field_id'))),None)
                     proposal={'field':field,'spec':spec,'conversion':spec.get('type','raw'),'target_key':spec.get('target',''),'values':spec.get('value_mapping',{}),'reason':'기존 매핑 유지' if field else '기존 대상 필드가 조회되지 않음 · 설정 유지','ready':False}
-                    state='확정 완료' if (p['key'],t['id'],source) in confirmed else '기존 유지';tag='kept';kept+=1
+                    state='자동 반영' if (p['key'],t['id'],source) in confirmed else '기존 유지';tag='kept';kept+=1
                 else:
                     proposal=proposals[source]
                     state='추천 · 확인 대기' if proposal['ready'] else '검토 필요'
@@ -728,12 +903,16 @@ def main():
                     ready+=int(proposal['ready']);pending+=int(not proposal['ready'])
                 if new_only.get() and spec:continue
                 if search.get().casefold() not in (source+' '+display).casefold():continue
+                proposal=deepcopy(field_drafts.get((p['key'],t['id'],source,tracker['id']),proposal))
                 proposal['values']=deepcopy(value_drafts.get((p['key'],t['id'],source),proposal.get('values',{})))
                 if (p['key'],t['id'],source) in value_drafts:
                     proposal['ready']=False
                     proposal['spec']=None
                 iid='field-'+str(len(rows));rows[iid]=(source,proposal)
                 field=proposal.get('field')
+                if field:
+                    field=next((item for item in fields if str(item.get('id',item.get('referenceId')))==str(field.get('id',field.get('referenceId')))),field)
+                    proposal['field']=field
                 table.insert('', 'end',iid=iid,text=display+' ('+str(definition.get('schema',{}).get('type',proposal.get('conversion','필드')))+')',values=(field.get('label',field.get('name','')) if field else '— 대상 선택 / 새 필드 생성 —',state),tags=(tag,))
                 if proposal.get('conversion') in ('option','status','user','reference') or definition.get('schema',{}).get('type') in ('option','status','priority','user') or definition.get('schema',{}).get('items') in ('option','user','version'):
                     for number,(identity,label) in enumerate(source_choices(source_observations(t,source)).items()):
@@ -766,6 +945,8 @@ def main():
             if proposal.get('field'):
                 conversion.set(proposal['conversion']);target_key.delete(0,'end');target_key.insert(0,proposal['target_key'])
                 values.delete('1.0','end');values.insert('1.0',json.dumps(proposal['values'],ensure_ascii=False,indent=2))
+                field_drafts[(p['key'],t['id'],source,tracker['id'])]=deepcopy(proposal)
+                value_drafts.pop((p['key'],t['id'],source),None)
                 rows[parent]=(source,proposal)
                 table.item(parent,values=(proposal['field'].get('label',proposal['field'].get('name','')),'변경 대기'))
                 table.delete(*table.get_children(parent))
@@ -773,7 +954,8 @@ def main():
                     for number,(identity,label) in enumerate(source_choices(source_observations(t,source)).items()):
                         mapped=proposal['values'].get(identity)
                         table.insert(parent,'end',iid=parent+'-value-'+str(number),text=label,values=(str(mapped) if mapped is not None else '— 선택지 연결 —','값 확인'))
-        def confirm_selected():
+            apply_selected()
+        def apply_selected(event=None):
             try:
                 parent=selected_parent()
                 if not parent or field_box.current()<0:raise ValueError('필드와 대상을 선택하세요.')
@@ -782,21 +964,10 @@ def main():
                 for sample in t['fields'][source]:convert(sample,spec['type'],spec.get('value_mapping',{}))
                 confirm_row(overlay,p,t,source,tracker['id'],spec)
                 confirmed.add((p['key'],t['id'],source))
+                field_drafts.pop((p['key'],t['id'],source,tracker['id']),None)
                 value_drafts.pop((p['key'],t['id'],source),None)
-                notice.set('선택한 매핑 확정. 서버 변경 없이 메모리에 반영했습니다.');refresh()
-            except (ValueError,ApiError,TypeError) as exc:messagebox.showerror('확인 필요',str(exc),parent=root)
-        def confirm_suggestions():
-            candidates=[(source,p) for source,p in rows.values() if p.get('ready') and p.get('spec')]
-            if not candidates:notice.set('확정할 신규 추천이 없습니다. 검토 필요 항목을 선택하세요.');return
-            if not messagebox.askyesno('신규 추천 확정',str(len(candidates))+'개 신규 추천을 확정할까요?\n기존 매핑은 그대로 유지됩니다.\n값 매핑과 대상 API 형식을 확인했는지 검토하세요.',parent=root):return
-            try:
-                p,t,tracker=current()
-                for source,proposal in candidates:
-                    confirm_row(overlay,p,t,source,tracker['id'],proposal['spec'])
-                    confirmed.add((p['key'],t['id'],source))
-                value_drafts.pop((p['key'],t['id'],source),None)
-                notice.set(str(len(candidates))+'개 추천을 확정했습니다. 저장 전 검사를 실행하세요.');refresh()
-            except ValueError as exc:messagebox.showerror('확인 필요',str(exc),parent=root)
+                notice.set('매핑 자동 반영됨. 저장하면 나중에 다시 사용할 수 있습니다.');refresh()
+            except (ValueError,ApiError,TypeError) as exc:notice.set('매핑 설정 필요: '+str(exc))
         def check():
             errors=validate_overlay(overlay,catalog)
             notice.set('검사: '+str(len(errors))+'개 미해결. '+(' / '.join(errors[:3]) if errors else '표본 검사 통과. 관계·API·실제 쓰기는 별도 검증이 필요합니다.'))
@@ -804,38 +975,73 @@ def main():
         def save():
             if creation_busy.get():
                 notice.set('필드 생성 결과 확인 후 저장하세요.');return
+            apply_selected()
             errors=check()
-            if errors and not messagebox.askyesno('미완성 매핑 저장',str(len(errors))+'개 미해결 항목이 있습니다.\n기존/확정된 매핑만 작업 중 파일로 저장할까요?\n확정하지 않은 추천은 저장하지 않습니다.',parent=root):return
-            if output.exists() and not messagebox.askyesno('매핑 저장','기존 파일을 갱신할까요? 기존 매핑과 확정된 항목만 저장됩니다.',parent=root):return
             temporary=output.with_suffix(output.suffix+'.tmp')
             temporary.write_text(json.dumps(overlay,ensure_ascii=False,indent=2),encoding='utf-8');temporary.replace(output)
-            notice.set(str(output)+' 저장 완료 · 미확정 추천 제외 · 서버 쓰기 없음')
+            notice.set(str(output)+' 저장 완료 · 미해결 '+str(len(errors))+'개 · 서버 생성은 별도 동작')
+        def remember_values(source, mapping, actual=None):
+            p,t,tracker=current()
+            value_drafts[(p['key'],t['id'],source)]=mapping
+            if actual:
+                if not actual.get('_fields_only'):tracker['configuration']=actual
+                by_id={str(f.get('id',f.get('referenceId'))):f for f in actual.get('fields',[])}
+                tracker['fields']=[dict(field,**by_id.get(str(field.get('id',field.get('referenceId'))),{})) for field in tracker['fields']]
+            refresh();apply_selected()
+
+        def create_options(source, proposal, selected=None):
+            if creation_busy.get():notice.set('서버 생성 처리 중입니다.');return
+            p,t,tracker=current()
+            field=proposal.get('field')
+            if not field:notice.set('대상 필드를 먼저 선택하세요. 필드가 없으면 새 필드 생성을 사용하세요.');return
+            if not isinstance(field.get('options'),list):notice.set('대상 선택형 필드를 먼저 선택하세요.');return
+            choices=selected or source_choices(source_observations(t,source))
+            if not choices:notice.set('원본 선택지/표본 값이 없습니다.');return
+            creation_busy.set(True)
+            journal=output.with_name(output.stem+'.field-actions.local.json')
+            def worker():
+                mapping=deepcopy(proposal.get('values',{}));actual=None;error=None
+                try:
+                    for identity,label in choices.items():
+                        option,readback=create_missing_option(cb,tracker['id'],field,label,journal)
+                        mapping[identity]={'id':option['id']}
+                        if readback:actual=readback
+                except Exception as exc:
+                    _diagnostics.record('선택지 자동 생성','error',error=exc)
+                    error=type(exc).__name__+': '+str(exc)
+                results.put(('options-created',p['key'],t['id'],tracker['id'],source,mapping,actual,error))
+            threading.Thread(target=worker,daemon=True).start()
+            notice.set('대상에 없는 원본 값을 선택지로 생성 중…')
+
         def edit_value(event=None):
-            selection=table.selection()
-            if not selection or selection[0] in rows:return
             parent=selected_parent()
-            if parent not in rows:return
+            if not parent or parent not in rows:notice.set('원본 필드를 선택하세요.');return
             p,t,tracker=current();source,proposal=rows[parent]
             entries=list(source_choices(source_observations(t,source)).items())
-            children=list(table.get_children(parent))
-            if selection[0] not in children:return
-            identity,label=entries[children.index(selection[0])]
-            options=[o for o in (proposal.get('field') or {}).get('options') or [] if isinstance(o,dict) and o.get('id') is not None]
-            if not options:
-                notice.set('대상 선택지가 조회되지 않았습니다. 고급 설정에서 실제 사용자/참조 ID를 입력하세요.');return
-            dialog=tk.Toplevel(root);dialog.title('선택지 연결');dialog.transient(root);dialog.grab_set()
+            if not entries:notice.set('조회된 원본 선택지/값이 없습니다.');return
+            if not proposal.get('field'):notice.set('먼저 대상 필드를 선택하세요. 없으면 새 필드 생성을 사용하세요.');return
+            options=[o for o in proposal['field'].get('options') or [] if isinstance(o,dict) and o.get('id') is not None]
+            dialog=tk.Toplevel(root);dialog.title('선택지 연결 / 없는 값 생성');dialog.transient(root);dialog.grab_set()
             panel=ttk.Frame(dialog,padding=16);panel.pack(fill='both',expand=True)
-            ttk.Label(panel,text='Jira: '+label).pack(anchor='w')
-            ttk.Label(panel,text='Codebeamer 선택지').pack(anchor='w',pady=(8,0))
-            box=ttk.Combobox(panel,state='readonly',width=50,values=[str(o.get('name',o.get('label',''))) + ' / ID '+str(o['id']) for o in options]);box.pack(fill='x')
+            ttk.Label(panel,text='Jira 원본 값').pack(anchor='w')
+            original=ttk.Combobox(panel,state='readonly',width=55,values=[label for _,label in entries]);original.pack(fill='x');original.current(0)
+            selection=table.selection();children=list(table.get_children(parent))
+            if selection and selection[0] in children:original.current(children.index(selection[0]))
+            ttk.Label(panel,text='Codebeamer 대상 값').pack(anchor='w',pady=(8,0))
+            box=ttk.Combobox(panel,state='readonly',width=55,values=['＋ 같은 이름으로 새 선택지 생성']+[str(o.get('name',o.get('label',''))) + ' / ID '+str(o['id']) for o in options]);box.pack(fill='x')
+            def pick(event=None):
+                _,label=entries[original.current()]
+                matched=matching_option(proposal['field'],label)
+                box.current(options.index(matched)+1 if matched in options else 0)
+            original.bind('<<ComboboxSelected>>',pick);pick()
             def accept():
+                identity,label=entries[original.current()]
+                if box.current()==0:
+                    dialog.destroy();create_options(source,proposal,{identity:label});return
                 if box.current()<0:return
-                mapping=deepcopy(proposal.get('values',{}));mapping[identity]={'id':options[box.current()]['id']}
-                value_drafts[(p['key'],t['id'],source)]=mapping
-                dialog.destroy();refresh()
-                notice.set('선택지 후보 수정됨. 해당 필드를 선택하고 매핑 확정을 눌러야 저장됩니다.')
-            ttk.Button(panel,text='후보에 반영',command=accept).pack(pady=(12,0))
-
+                mapping=deepcopy(proposal.get('values',{}));mapping[identity]={'id':options[box.current()-1]['id']}
+                dialog.destroy();remember_values(source,mapping)
+            ttk.Button(panel,text='적용',command=accept).pack(pady=(12,0))
         def propose_creation():
             if creation_busy.get():
                 notice.set('이전 필드 생성 결과를 확인 중입니다. 잠시 기다려주세요.');return
@@ -870,7 +1076,6 @@ def main():
                 try:
                     if template.current()<0:raise ValueError('생성할 서버 필드 타입을 선택하세요.')
                     draft=json.loads(definition_text.get('1.0','end'));draft['label']=label.get().strip()
-                    if not messagebox.askyesno('실제 필드 생성 확인','트래커 '+str(tracker['id'])+'에 '+draft['label']+' 필드를 생성할까요?\nAPI 타입 ID: '+str(draft.get('typeId'))+'\n필수 여부: '+str(draft.get('mandatory'))+'\n선택지와 권한을 위 정의에서 검토했는지 확인하세요.\n이 작업은 매핑 저장과 별개의 서버 변경입니다.',parent=dialog):return
                     create_button.configure(state='disabled');dialog.update_idletasks()
                     creation_busy.set(True)
                     journal=output.with_name(output.stem+'.field-actions.local.json')
@@ -882,11 +1087,11 @@ def main():
                             _diagnostics.record('필드 생성 처리','error',error=exc)
                             results.put(('creation-error',type(exc).__name__+': '+str(exc)))
                     threading.Thread(target=worker,daemon=True).start()
-                    dialog.destroy();notice.set('승인한 필드 생성 중… 결과를 확인할 때까지 매핑 저장은 기다려주세요.')
+                    dialog.destroy();notice.set('새 필드 생성 중… 결과를 확인할 때까지 매핑 저장은 기다려주세요.')
                 except (ValueError,ApiError,TypeError) as exc:
                     messagebox.showerror('생성 제안 확인',str(exc),parent=dialog)
                     create_button.configure(state='normal')
-            create_button=ttk.Button(panel,text='검토 후 서버에 생성',command=create);create_button.pack(pady=(10,0))
+            create_button=ttk.Button(panel,text='새 필드 생성',command=create);create_button.pack(pady=(10,0))
 
         def process_actions():
             try:
@@ -900,7 +1105,20 @@ def main():
                 tracker['configuration']=actual
                 tracker['fields'].append(created)
                 refresh()
-                notice.set('필드 생성 확인 완료: '+str(created.get('label'))+' · 실제 ID '+str(created.get('id',created.get('referenceId')))+' · 매핑은 별도로 확인/확정하세요.')
+                notice.set('필드 생성 확인 완료: '+str(created.get('label'))+' · 실제 ID '+str(created.get('id',created.get('referenceId')))+' · 대상에 선택하면 매핑이 자동 반영됩니다.')
+            elif item[0]=='options-created':
+                _,project_key,kind_id,tracker_id,source,mapping,actual,error=item
+                p,t,tracker=current()
+                if (p['key'],t['id'],tracker['id'])==(project_key,kind_id,tracker_id):remember_values(source,mapping,actual)
+                else:
+                    value_drafts[(project_key,kind_id,source)]=mapping
+                    target=next(target for target in catalog['targets'] if target['id']==tracker_id)
+                    if actual:
+                        if not actual.get('_fields_only'):target['configuration']=actual
+                        by_id={str(f.get('id',f.get('referenceId'))):f for f in actual['fields']}
+                        target['fields']=[dict(f,**by_id.get(str(f.get('id',f.get('referenceId'))),{})) for f in target['fields']]
+                if error:notice.set('일부 값 생성 중단: '+error)
+                else:notice.set('선택지 생성/연결 완료. 매핑 저장으로 보관하세요.')
             elif item[0]=='creation-error':
                 notice.set('필드 생성 확인 실패. 반복 생성하지 말고 서버 필드와 로그를 확인하세요.')
                 messagebox.showerror('필드 생성 확인',item[1],parent=root)
@@ -908,15 +1126,16 @@ def main():
 
         ttk.Checkbutton(bar,text='전체 API 필드',variable=all_fields,command=refresh).pack(side='right',padx=8)
         ttk.Checkbutton(bar,text='신규만',variable=new_only,command=refresh).pack(side='right',padx=12)
-        ttk.Button(row,text='새 필드 생성 제안…',command=propose_creation).pack(side='left',padx=8)
-        ttk.Button(foot,text='선택 매핑 확정',command=confirm_selected).pack(side='left')
-        ttk.Button(foot,text='표시된 신규 추천 확정',command=confirm_suggestions).pack(side='left',padx=8)
+        ttk.Button(row,text='새 필드 생성…',command=propose_creation).pack(side='left',padx=8)
+        ttk.Button(foot,text='선택지 수정 / 없는 값 생성',command=edit_value).pack(side='left')
+        ttk.Button(foot,text='없는 선택지 모두 생성',command=lambda:create_options(*rows[selected_parent()]) if selected_parent() in rows else notice.set('원본 필드를 선택하세요.')).pack(side='left',padx=8)
         ttk.Button(foot,text='누락 검사',command=check).pack(side='right',padx=8)
-        ttk.Button(foot,text='확인 · 매핑 저장',command=save).pack(side='right')
-        ttk.Button(foot,text='취소',command=lambda:root.destroy() if messagebox.askyesno('닫기','미저장 매핑은 취소됩니다. 이미 생성한 서버 필드는 유지됩니다. 닫을까요?',parent=root) else None).pack(side='right')
+        ttk.Button(foot,text='매핑 저장',command=save).pack(side='right')
+        ttk.Button(foot,text='닫기',command=root.destroy).pack(side='right')
         show_advanced=tk.BooleanVar(value=False)
         ttk.Checkbutton(editor,text='고급 설정 (API 키 / JSON)',variable=show_advanced,command=lambda:advanced.pack(fill='x',pady=5) if show_advanced.get() else advanced.pack_forget()).pack(anchor='w')
         table.bind('<<TreeviewSelect>>',inspect);table.bind('<Double-1>',edit_value);field_box.bind('<<ComboboxSelected>>',change_field)
+        conversion.bind('<<ComboboxSelected>>',apply_selected);target_key.bind('<FocusOut>',apply_selected);values.bind('<FocusOut>',apply_selected)
         def scope_changed(event=None):
             if scope_box.current()<0:return
             p,t=scopes[scope_box.current()];tracker=selected_tracker(overlay,p,t)

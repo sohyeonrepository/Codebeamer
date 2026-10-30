@@ -366,3 +366,109 @@ class MappingHelperTests(unittest.TestCase):
         from mapping_helper import creation_templates
         self.assertEqual(creation_templates({'fields':[]}),[])
         self.assertEqual(creation_templates({'fields':[dict(FIELD,reference={'tracker':1})]}),[])
+
+    def test_auto_connect_applies_known_mapping_without_confirmation(self):
+        from mapping_helper import auto_connect_scope,existing_overlay
+        settings={'migration':{'tracker_mapping':{'P:1':100}}}
+        overlay=existing_overlay(settings)
+        kind={'id':'1','name':'Test','fields':{'summary':['x']}}
+        applied=auto_connect_scope(overlay,{'key':'P'},kind,[dict(FIELD,label='Name',options=[])],{'summary':{'schema':{'type':'string'}}},settings)
+        self.assertEqual(applied,['summary'])
+        self.assertEqual(overlay['migration']['field_mapping']['P:1']['summary']['target'],'name')
+
+    def option_client(self, fail=False):
+        from copy import deepcopy
+        from clients.http import ApiError
+        from clients.codebeamer_client import CodebeamerClient
+        baseline={'basicInformation':{'trackerId':100},'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}
+        class Http:
+            writes=0
+            def request(self,method,path,data=None,**kwargs):
+                if method=='POST':
+                    self.writes+=1
+                    if fail:raise ApiError('POST request failed: HTTP 500')
+                    self.actual=deepcopy(baseline)
+                    self.actual['fields'][0]['options'].append({'id':1000,'name':data['name']})
+                    return {'id':1000,'name':data['name']}
+                current=deepcopy(self.actual if self.writes else baseline)
+                return current['fields'] if path.endswith('/fields') else current
+        http=Http()
+        cb=CodebeamerClient(http,{})
+        cb.spec={'paths':{'/actual/trackers/{trackerId}/fields/{fieldId}/choices':{'post':{
+            'operationId':'createActualChoice','requestBody':{'content':{'application/json':{'schema':{
+                'type':'object','required':['name'],'properties':{'name':{'type':'string'},'id':{'type':'integer','readOnly':True}}}}}}}}}}
+        return cb,http,baseline
+
+    def test_missing_option_created_and_server_id_used(self):
+        from mapping_helper import create_missing_option
+        from pathlib import Path
+        import tempfile
+        cb,http,baseline=self.option_client()
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_missing_option(cb,100,baseline['fields'][0],'Failed',Path(directory)/'a.json')
+            self.assertEqual(created,{'id':1000,'name':'Failed'})
+            self.assertEqual(actual['fields'][0]['options'][0],FIELD['options'][0])
+            self.assertEqual(http.writes,1)
+            created,_=create_missing_option(cb,100,actual['fields'][0],'Failed',Path(directory)/'a.json')
+            self.assertEqual(http.writes,1)
+        self.assertFalse(cb.write)
+        self.assertNotIn('helper_option_create',cb.config['operations'])
+
+    def test_uncertain_option_create_is_not_retried(self):
+        from mapping_helper import create_missing_option
+        from pathlib import Path
+        from clients.http import ApiError
+        import tempfile
+        cb,http,baseline=self.option_client(fail=True)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'a.json'
+            with self.assertRaises(ApiError):create_missing_option(cb,100,baseline['fields'][0],'Failed',path)
+            http.writes=0
+            with self.assertRaises(ApiError):create_missing_option(cb,100,baseline['fields'][0],'Failed',path)
+            self.assertEqual(http.writes,0)
+        self.assertFalse(cb.write)
+
+    def test_option_contract_does_not_invent_required_ids(self):
+        from mapping_helper import option_payload
+        from clients.http import ApiError
+        with self.assertRaises(ApiError):option_payload({}, {'type':'object','required':['name','id'],'properties':{'name':{'type':'string'},'id':{'type':'integer'}}},'Failed')
+
+    def test_direct_choice_api_does_not_need_failing_tracker_configuration(self):
+        from mapping_helper import create_missing_option
+        from pathlib import Path
+        import tempfile
+        from clients.http import ApiError
+        cb,http,baseline=self.option_client()
+        original=http.request
+        def request(method,path,*args,**kwargs):
+            if path.endswith('/configuration'):raise ApiError('GET request failed: HTTP 500')
+            return original(method,path,*args,**kwargs)
+        http.request=request
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_missing_option(cb,100,baseline['fields'][0],'Failed',Path(directory)/'a.json')
+        self.assertEqual(created['id'],1000)
+        self.assertTrue(actual['_fields_only'])
+
+    def test_option_creation_via_verified_configuration_schema(self):
+        from mapping_helper import create_missing_option
+        from clients.codebeamer_client import CodebeamerClient
+        from pathlib import Path
+        from copy import deepcopy
+        import tempfile
+        baseline={'basicInformation':{'trackerId':100},'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}
+        class Http:
+            writes=0
+            def request(self,method,path,data=None,**kwargs):
+                if method=='POST':
+                    self.writes+=1;self.actual=deepcopy(data);self.actual['fields'][0]['options'][-1]['id']=77;return {}
+                return deepcopy(self.actual if self.writes else baseline)
+        http=Http()
+        cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
+        choice={'type':'object','required':['name'],'properties':{'name':{'type':'string'}}}
+        schema={'type':'object','properties':{'fields':{'type':'array','items':{'type':'object','properties':{'options':{'type':'array','items':choice}}}}}}
+        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_missing_option(cb,100,baseline['fields'][0],'Failed',Path(directory)/'a.json')
+        self.assertEqual(created['id'],77)
+        self.assertEqual(http.writes,1)
+        self.assertEqual(actual['fields'][0]['options'][0],baseline['fields'][0]['options'][0])
