@@ -9,7 +9,7 @@ from migration.state import State
 from migration.engine import Engine
 
 
-def main():
+def main(argv=None, clients=None, progress=None):
     parser = argparse.ArgumentParser(description='Jira DC / Xray → Codebeamer')
     parser.add_argument('command', choices=['discover', 'migrate', 'diagnose-history', 'diagnose-connection', 'list-issue-types', 'prepare-run-migration', 'extract-runs'])
     parser.add_argument('--config', default='config.json')
@@ -19,8 +19,16 @@ def main():
     parser.add_argument('--apply', action='store_true', help='Permit target writes')
     parser.add_argument('--item-id', type=int)
     parser.add_argument('--probe-payload', help='Validated update request JSON file')
-    args = parser.parse_args()
+    parser.add_argument('--wizard-plan', help='Require a complete wizard analysis before writes')
+    args = parser.parse_args(argv)
     config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
+    if args.wizard_plan:
+        from migration.wizard import assert_importable
+        try:
+            assert_importable(json.loads(Path(args.wizard_plan).read_text(encoding='utf-8-sig')), config)
+        except (ApiError, OSError, ValueError) as exc:
+            print(json.dumps({'complete': False, 'writes': 0, 'error': str(exc) if isinstance(exc, ApiError) else type(exc).__name__}, ensure_ascii=False))
+            return 2
     if args.mapping:
         from mapping_helper import apply_overlay
         try:
@@ -40,7 +48,7 @@ def main():
                         auth=settings.get('auth', 'bearer'), username_env=settings.get('username_env'),
                         password_env=settings.get('password_env'), allow_http=settings.get('allow_http', False),
                         prompt_auth=args.prompt_auth)
-        jira = JiraClient(http(config['jira']), config['jira'], state.save)
+        jira = JiraClient(clients[0].http if clients else http(config['jira']), config['jira'], state.save)
         if args.command == 'extract-runs':
             from migration.source_runs import collect_sources
             fields, runs, errors = collect_sources(jira, XrayClient(jira.http, config['jira'], state.save), state)
@@ -66,7 +74,7 @@ def main():
                 'issue_types': catalog}, ensure_ascii=False, indent=2), encoding='utf-8')
             print(json.dumps({'issue_types': catalog, 'template': str(report_path), 'writes': 0}, ensure_ascii=False))
             return 0
-        cb = CodebeamerClient(http(config['codebeamer']), config['codebeamer'], args.apply)
+        cb = CodebeamerClient(clients[1].http if clients else http(config['codebeamer']), config['codebeamer'], args.apply)
         identity = {'jira': config['jira']['url'], 'codebeamer': config['codebeamer']['url']}
         prior = state.get('environment-binding')
         if prior and prior[1] != identity:
@@ -130,7 +138,7 @@ def main():
             state.save('diagnostics', 'history-probe', result)
             print(json.dumps({'writes': result['writes'], 'native_author_time_restoration': 'unverified'}))
             return 0
-        report = Engine(jira, XrayClient(jira.http, config['jira'], state.save), cb, state, config['migration'], args.apply).migrate()
+        report = Engine(jira, XrayClient(jira.http, config['jira'], state.save), cb, state, config['migration'], args.apply, progress=progress).migrate()
         print(json.dumps({'mode': report['mode'], 'complete': report['complete'], 'issues': len(report['issues']), 'runs': len(report.get('runs', [])),
                           'scope': report.get('scope', 'all'),
                           'errors': len(report['errors']), 'limitations': len(report['limitations']),

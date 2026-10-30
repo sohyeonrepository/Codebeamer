@@ -956,7 +956,7 @@ def create_dedicated_field(cb, tracker, definition, journal_path):
     journal[identity]={'status':'done','tracker':tracker,'field_id':field_identifier(created)};persist()
     return created,{'fields':fields,'_fields_only':True}
 
-def main():
+def main(argv=None, clients=None, parent=None, catalog_override=None, exception_sources=None):
     parser = argparse.ArgumentParser(description='고객 PC 내부 매핑 도우미 (연결 자동 반영 / 없는 값 생성)')
     parser.add_argument('--config', default='config.local.json')
     parser.add_argument('--tracker-id', type=int, action='append', required=True)
@@ -964,7 +964,9 @@ def main():
     parser.add_argument('--prompt-auth', action='store_true')
     parser.add_argument('--output', default='mapping.local.json')
     parser.add_argument('--log-dir', default='logs', help='Local diagnostic log directory')
-    args = parser.parse_args()
+    parser.add_argument('--analysis-only', action='store_true', help='Disable server writes while reviewing a wizard plan')
+    parser.add_argument('--exceptions-only', action='store_true', help='Show unmapped fields by default')
+    args = parser.parse_args(argv)
     global _diagnostics
     _diagnostics = Diagnostics(args.log_dir)
     print('진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve()))
@@ -973,11 +975,25 @@ def main():
         return Http(settings['url'], settings.get('token_env'), log=_diagnostics.root / 'requests.jsonl', auth=settings.get('auth', 'bearer'),
                     username_env=settings.get('username_env'), password_env=settings.get('password_env'),
                     allow_http=settings.get('allow_http', False), prompt_auth=args.prompt_auth)
-    jira = JiraClient(http(config['jira']), config['jira'])
-    cb = CodebeamerClient(http(config['codebeamer']), config['codebeamer'], False)
+    if clients is None:
+        jira = JiraClient(http(config['jira']), config['jira'])
+        cb = CodebeamerClient(http(config['codebeamer']), config['codebeamer'], False)
+    else:
+        jira, cb = clients
     import tkinter as tk
     from tkinter import ttk, messagebox
-    root = tk.Tk()
+    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
+    scheduled = set()
+    def schedule(delay, callback):
+        handle = root.after(delay, callback)
+        scheduled.add(handle)
+        return handle
+    def cleanup(event):
+        if event.widget is root:
+            for handle in scheduled:
+                try: root.after_cancel(handle)
+                except tk.TclError: pass
+    root.bind('<Destroy>', cleanup, add='+')
     import tkinter.font as tkfont
     families=set(tkfont.families(root))
     ui_font=next((name for name in ('Malgun Gothic','맑은 고딕','Noto Sans CJK KR','unifont') if name in families),'Segoe UI')
@@ -999,7 +1015,7 @@ def main():
     results = queue.Queue()
     def fetch():
         try:
-            catalog = collect_catalog(jira, cb, args.tracker_id, args.sample_limit)
+            catalog = deepcopy(catalog_override) if catalog_override is not None else collect_catalog(jira, cb, args.tracker_id, args.sample_limit)
             _diagnostics.record('전체 조회 완료', 'ok')
             results.put((catalog, None))
         except Exception as exc:
@@ -1045,8 +1061,10 @@ def main():
         bar = ttk.Frame(body); bar.pack(fill='x',pady=10)
         counts = tk.StringVar()
         ttk.Label(bar,textvariable=counts).pack(side='left')
-        new_only = tk.BooleanVar(value=False)
-        all_fields = tk.BooleanVar(value=False)
+        new_only = tk.BooleanVar(value=args.exceptions_only)
+        all_fields = tk.BooleanVar(value=catalog_override is not None)
+        ttk.Checkbutton(bar, text='확인 필요만', variable=new_only, command=lambda:refresh()).pack(side='left', padx=8)
+        ttk.Checkbutton(bar, text='전체 API 필드', variable=all_fields, command=lambda:refresh()).pack(side='left')
         search = tk.StringVar()
         ttk.Entry(bar,textvariable=search,width=20).pack(side='right')
         ttk.Label(bar,text='검색  ').pack(side='right')
@@ -1127,7 +1145,9 @@ def main():
                     state='추천 · 확인 대기' if proposal['ready'] else '검토 필요'
                     tag='ready' if proposal['ready'] else 'review'
                     ready+=int(proposal['ready']);pending+=int(not proposal['ready'])
-                if new_only.get() and spec:continue
+                if new_only.get() and spec:
+                    scope_key=(p['key']+':'+t['id'],source)
+                    if exception_sources is None or scope_key not in exception_sources:continue
                 if search.get().casefold() not in (source+' '+display).casefold():continue
                 proposal=deepcopy(field_drafts.get((p['key'],t['id'],source,tracker['id']),proposal))
                 proposal['values']=deepcopy(value_drafts.get((p['key'],t['id'],source),proposal.get('values',{})))
@@ -1216,6 +1236,8 @@ def main():
             refresh();apply_selected()
 
         def create_options(source, proposal, selected=None):
+            if args.analysis_only:
+                notice.set('사전 분석 모드: 서버 생성은 실행하지 않습니다. 생성 필요 항목으로 유지됩니다.');return
             if creation_busy.get():notice.set('서버 생성 처리 중입니다.');return
             p,t,tracker=current()
             field=proposal.get('field')
@@ -1240,6 +1262,8 @@ def main():
             notice.set('대상에 없는 원본 값을 선택지로 생성 중…')
 
         def propose_creation():
+            if args.analysis_only:
+                notice.set('사전 분석 모드: 새 필드 생성안은 Wizard 목록에 표시됩니다. 서버 쓰기는 차단됩니다.');return
             if creation_busy.get():
                 notice.set('이전 필드 생성 결과를 확인 중입니다. 잠시 기다려주세요.');return
             parent=selected_parent()
@@ -1315,7 +1339,7 @@ def main():
             try:
                 item=results.get_nowait()
             except queue.Empty:
-                root.after(150,process_actions);return
+                schedule(150,process_actions);return
             creation_busy.set(False)
             if item[0]=='field-prepared':
                 _,project_key,kind_id,tracker_id,source,templates,direct=item
@@ -1350,7 +1374,7 @@ def main():
             elif item[0]=='creation-error':
                 notice.set('필드 생성 확인 실패. 반복 생성하지 말고 서버 필드와 로그를 확인하세요.')
                 messagebox.showerror('필드 생성 확인',item[1],parent=root)
-            root.after(150,process_actions)
+            schedule(150,process_actions)
 
         ttk.Checkbutton(bar,text='전체 API 필드',variable=all_fields,command=refresh).pack(side='right',padx=8)
         ttk.Checkbutton(bar,text='신규만',variable=new_only,command=refresh).pack(side='right',padx=12)
@@ -1440,13 +1464,13 @@ def main():
         search.trace_add('write',refresh)
         if scopes:scope_box.current(0);scope_changed()
         if catalog.get('warnings'):notice.set('일부 조회 실패: '+' / '.join(catalog['warnings']))
-        root.after(150,process_actions)
+        schedule(150,process_actions)
         status.set('조회 완료 · 편집 화면/기본 필드 우선 · 전체 필드는 별도 표시')
     def poll():
         try:
             catalog,error = results.get_nowait()
         except queue.Empty:
-            root.after(100, poll); return
+            schedule(100, poll); return
         if error:
             status.set('조회 실패'); messagebox.showerror('조회 실패', error)
         else:
@@ -1460,8 +1484,11 @@ def main():
                 _diagnostics.record('매핑 화면 구성', 'error', error=exc)
                 status.set('화면 구성 실패: summary.txt 확인')
                 messagebox.showerror('화면 구성 실패', '오류 종류: ' + type(exc).__name__ + '\n진단 요약 파일을 확인하세요.')
-    root.after(100, poll)
-    root.mainloop()
+    schedule(100, poll)
+    if parent is not None:
+        root.wait_window()
+    else:
+        root.mainloop()
 
 
 if __name__ == '__main__':

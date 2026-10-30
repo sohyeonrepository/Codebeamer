@@ -471,3 +471,18 @@ python main.py migrate --config config.local.json --mapping mapping.local.json -
 첨부 설계 가이드는 검증 완료 문서가 아니므로 의미상 후보를 운영 매핑으로 확정하거나 숫자 ID를 하드코딩하는 데 사용하지 않았습니다. Test Steps의 Action/Expected result가 테이블 하위 열이면 독립 필드로 취급할 수 없습니다. 이번 수정은 타입 이름과 메타데이터 조회에 관한 것이며, 해당 테이블/관계 이관을 추가 구현한 것은 아닙니다.
 
 ![서버에서 확인한 타입 이름을 표시하는 생성 화면 — 예시 데이터](docs/mapping-helper-type-preview.png)
+
+### Import Wizard (사전 분석 및 예외 매핑)
+
+```powershell
+python import_wizard.py
+```
+
+연결 → 기존 프로젝트 선택 → 전체 데이터 분석 → 예외 매핑 수정 순서입니다.
+기본 화면은 자동 매핑을 숨기고 생성안과 확인 필요 항목만 표시합니다.
+비밀번호·토큰은 저장하지 않으며, 분석 및 Wizard 내 예외 수정은 서버에 쓰지 않습니다.
+
+**전체 Import는 아직 활성화되지 않습니다.** R4J 복원, 대상 History 조회, 이미지 링크
+재작성, Parent-Child 검증, 일반 이슈와 Xray 통합 실행이 미구현이므로 명확히 차단합니다.
+기존 CLI/도우미 기능은 유지합니다. 상세 범위와 제한은
+[구현 현황](docs/import-wizard-status.md)을 확인하세요.

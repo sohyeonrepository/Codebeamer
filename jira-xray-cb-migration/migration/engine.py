@@ -9,10 +9,16 @@ from validation.compare_fields import compare_fields
 
 
 class Engine:
-    def __init__(self, jira, xray, cb, state, settings, write=False):
+    def __init__(self, jira, xray, cb, state, settings, write=False, progress=None):
         self.jira, self.xray, self.cb, self.state = jira, xray, cb, state
         self.settings, self.write = settings, write
+        self.progress = progress or (lambda **event: None)
         self.report = {'mode': 'apply' if write else 'dry-run', 'complete': False, 'issues': [], 'errors': [], 'limitations': []}
+
+    def notify(self, stage):
+        self.progress(stage=stage, processed=len(self.report['issues']),
+                      success=sum(row.get('status') == 'verified' for row in self.report['issues']),
+                      failed=len(self.report['errors']))
 
     def ensure(self, kind, key, spec):
         if isinstance(spec, int):
@@ -30,6 +36,7 @@ class Engine:
         return self.state.once(f'{kind}:{key}', lambda: self.cb.call(kind + '_create', data=spec['create_payload']))['id']
 
     def migrate(self):
+        self.notify('preflight')
         if self.settings.get('mode') == 'full-xray':
             from migration.full_xray import migrate_full
             return migrate_full(self)
@@ -87,8 +94,10 @@ class Engine:
     def error(self, key, error):
         # ApiError messages are controlled; arbitrary payload exceptions may contain source values.
         self.report['errors'].append({'source': key, 'error': str(error) if isinstance(error, ApiError) else type(error).__name__})
+        self.notify('error')
 
     def issue(self, project, issue, definitions):
+        self.notify('issues')
         key = issue['key']
         type_id = str(issue['fields']['issuetype']['id'])
         tracker_key, tracker_spec = tracker_for(self.settings, project['key'], issue['fields']['issuetype'])
@@ -174,8 +183,10 @@ class Engine:
         if differences:
             raise ApiError('Target field verification failed')
         record.update(status='verified', target_id=item_id)
+        self.notify('issues')
 
     def children(self, issue, item_id):
+        self.notify('children')
         key = issue['key']
         from migration.records import mapped_record, test_run
         for category, records in [('comment', issue['_comments']), ('worklog', issue['_worklogs'])]:
@@ -192,6 +203,7 @@ class Engine:
             test_run(self.cb, self.state, self.settings, self.jira.http, issue, item_id, run)
 
     def relations(self, bundles):
+        self.notify('relations')
         if not self.write:
             return
         for _, issue in bundles:
