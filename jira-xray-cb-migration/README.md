@@ -366,3 +366,66 @@ python main.py extract-runs --config config.json --prompt-auth
 state_dir에 원본 Execution/Run JSON, 공통 이벤트, Comments/Worklogs를 보관하고 `source-report.json`에 Run 건수, History/알려진 Activity 건수, 오류를 기록합니다. source_complete는 선택한 소스 수집 성공 여부이고 migration_complete는 항상 false입니다. 이 명령은 바이너리 다운로드/업로드나 target Revision 생성을 검증하지 않으며, source_complete가 전체 Run History 복원 완료를 뜻하지 않습니다. 최소 한 Run도 발견하지 못하면 성공으로 처리하지 않습니다.
 
 제공된 실제 샘플은 Steps/Evidence/Defects가 모두 빈 배열이므로, 이 구조만으로 비어 있지 않은 Steps/파일/결함 이관이 실서버 검증됐다고 주장하지 않습니다. 테스트에서는 고객 ID를 변형한 합성 fixture로 응답 형태와 공통 이벤트 처리를 검증합니다.
+
+## 전체 Xray 이관: Plan 먼저 생성
+
+`migration.mode: "full-xray"`는 **Plan → Test Case → Test Set → Test Execution** 순서로 객체를 생성한 후, 모든 대상 ID가 준비되면 관계와 실행 결과를 연결합니다. Plan이 Test Case보다 먼저 만들어져도, Case 연결은 나중에 수행합니다. 기존 `test-runs` 모드는 유지됩니다.
+
+이 기능은 배포별 실제 API/필드 매핑을 사용하는 엔진 확장입니다. 기본 config.json만으로 전체 이관이 자동 설정되지는 않습니다. 고객 서버에서 실제 쓰기 검증은 수행되지 않았습니다. 네이티브 과거 작성자/시각 복원과 Xray Run 과거 상태의 완전 복원을 보장하지 않습니다.
+
+별도 로컬 설정에서 `migration.state_dir`를 새 경로로 지정하고 `mode`를 `full-xray`로 변경합니다. `full_xray` 구성 예시는 다음과 같습니다. `relationships`에는 실제 조회된 관계 필드를 설정해야 하며, 아래 경로는 **형식 설명용 자리표시자**입니다.
+
+```json
+{
+  "issue_types": {
+    "plan": "Test Plan",
+    "test": "Test",
+    "set": "Test Set",
+    "execution": "Test Execution"
+  },
+  "relationships": [
+    {"name": "plan-test", "from": "plan", "to": "test", "path": "fields.ACTUAL_PLAN_TESTS_FIELD", "identity_path": "key"},
+    {"name": "set-test", "from": "set", "to": "test", "path": "fields.ACTUAL_SET_TESTS_FIELD", "identity_path": "key"},
+    {"name": "plan-execution", "from": "plan", "to": "execution", "path": "fields.ACTUAL_PLAN_EXECUTIONS_FIELD", "identity_path": "key"}
+  ]
+}
+```
+
+위 설정 객체를 `migration.full_xray`에 넣습니다.
+관계가 문자열 키 배열이면 `identity_path: "$"`, 객체 배열이면 실제 키/ID 속성 경로를 지정합니다. Jira issue 응답에 관계 필드가 없는 환경은 별도 검증된 수집 어댑터가 필요합니다. Xray 전용 API를 추측하지 않습니다.
+
+각 유형의 `tracker_mapping`, `field_mapping`, `project_mapping`, 사용자·선택지 매핑과 실제 `codebeamer.operations` 정의가 필요합니다. `relation_adapter.fields`는 `targetId`, `relationKind`를 대상 API 형식으로 변환합니다. 일반 Jira issuelinks도 있으면 기존 `sourceLink` 형식과의 호환성을 확인하세요.
+
+Run은 기존 `run_adapter`를, 첨부·댓글·Worklog는 각각의 기존 어댑터를 사용합니다. `reference_mode`를 field-values 이외의 값으로 설정하고 `test_issue_id_path: "testKey"`를 사용하면 새 Test Case의 키로 대상 ID를 조회합니다. field-values 모드는 별도 `reference_lookup` 설정이 필요합니다.
+
+```powershell
+python main.py migrate --config config.full.local.json --prompt-auth
+# dry-run 보고서와 매핑을 확인한 뒤 검증 환경에서만 실행:
+python main.py migrate --config config.full.local.json --prompt-auth --apply
+```
+
+원본 전체 수집, 관계 대상 누락 검사와 객체별 사전 검사가 끝나기 전에는 객체를 생성하지 않습니다. 이 사전 검사는 실서버 쓰기 성공을 보장하지 않습니다. 쓰기 중 실패하면 부분 이관이 남을 수 있으므로 상태 폴더를 삭제하지 말고 보고서를 확인하세요. 기존 트래커의 819건을 제한 없이 실행하지 말고, 작은 전용 Jira 검증 프로젝트에 완결된 Plan/Case/Set/Execution 샘플을 준비해 시험하세요. 현재 전체 이관 경로에 임의 1건 제한 옵션은 없습니다.
+
+## 고객 PC 내부 매핑 도우미
+
+Python 기본 GUI인 Tkinter를 사용하는 데스크톱 도우미를 추가했습니다. Jira 필드 정의와 현재 프로젝트 이슈의 표본 값, Codebeamer 트래커별 필드 정의/선택지를 직접 GET 조회하여 같은 화면에 표시합니다. 조회 결과는 메모리에 보관하며 외부 서비스로 전송하지 않습니다. 도우미는 서버 생성·수정 API를 호출하지 않습니다. Windows Python 설치 시 Tcl/Tk 구성요소가 필요합니다.
+
+```powershell
+python mapping_helper.py --config config.local.json --tracker-id 12345 --prompt-auth
+```
+
+`12345`를 실제 Codebeamer 트래커 ID로 바꾸세요. Plan/Case/Set/Execution 등 여러 트래커는 `--tracker-id 12345 --tracker-id 23456`처럼 반복 지정합니다. 기본값은 프로젝트당 첫 20개 이슈의 표본이며 `--sample-limit 100`으로 조절할 수 있습니다(최대 1000). 표본에 포함되지 않은 이슈 유형/필드 값은 표시되지 않습니다. Run 관계가 있는 표본 Execution에서는 개별 Run 필드도 조회합니다. Run 메타 필드는 선택한 이관/이력 모드에 필요한 항목만 매핑하세요.
+
+1. 원본 프로젝트/이슈 유형/필드를 선택해 실제 표본 값을 확인합니다.
+2. 대상 트래커/필드를 선택해 API 필드 ID, 타입, 필수 여부, 선택지를 확인합니다.
+3. 변환과 대상 payload 키를 지정합니다. payload 키는 실제 API와 기존 operation/field_bindings에서 사용하는 키여야 하며, 화면 표시 이름을 API 속성으로 추측하지 않습니다.
+4. 선택형·상태·사용자·참조는 필드별 값 매핑 JSON을 입력합니다. 예: `{"원본ID": {"id": 123}}`. 대상값의 형식은 서버 API 계약에 맞춰야 합니다. 일반 문자열/수치/날짜는 해당 변환을 선택합니다.
+5. 매핑을 추가하고 누락 검사 후 저장합니다. 재실행하면 저장된 매핑을 불러와 갱신/삭제할 수 있습니다.
+
+`mapping.local.json`에는 인증정보와 조회한 전체 표본을 저장하지 않습니다. 단, 사용자가 지정한 원본 식별값·대상값·필드/선택지 정의는 매핑에 포함되므로 고객 PC 내부에 보관하세요. 표본 값 검사는 전체 원본 값/관계의 완전성이나 서버 쓰기 성공을 보장하지 않습니다. 저장은 미완성 매핑도 보존하므로 미해결 항목을 확인하세요. 서버가 필드 타입·필수 여부·다중선택·선택지·참조 속성을 제공하지 않으면 필드 정의를 추측하지 않고 오류를 표시합니다.
+
+```powershell
+python main.py migrate --config config.local.json --mapping mapping.local.json --prompt-auth
+```
+
+이 명령은 dry-run입니다. 매핑 파일은 프로젝트+이슈 유형별 트래커/필드 매핑 및 Run 필드 매핑을 기존 설정에 병합하며 서버 주소·인증·실행 모드는 변경하지 않습니다. 필드마다 별도의 선택지 매핑을 사용하므로 서로 다른 필드에서 같은 원본 ID를 써도 충돌하지 않습니다. 기존 API operations, FieldValue bindings, 관계 어댑터 및 field_sync 설정은 별도입니다. 이 도우미가 빈 field_sync 정의나 미설정 API 작업까지 자동 완성하지는 않습니다. 전체 이관은 앞 절의 `full-xray` 설정과 검증이 필요합니다.

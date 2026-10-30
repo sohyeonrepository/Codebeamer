@@ -41,7 +41,7 @@ def payload(fields, mappings, settings):
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
-        output[spec['target']] = convert(fields[source], spec['type'], settings.get(group, {}))
+        output[spec['target']] = convert(fields[source], spec['type'], spec.get('value_mapping', settings.get(group, {})))
     return output
 
 

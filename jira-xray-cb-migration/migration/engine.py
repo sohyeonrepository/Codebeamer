@@ -30,6 +30,9 @@ class Engine:
         return self.state.once(f'{kind}:{key}', lambda: self.cb.call(kind + '_create', data=spec['create_payload']))['id']
 
     def migrate(self):
+        if self.settings.get('mode') == 'full-xray':
+            from migration.full_xray import migrate_full
+            return migrate_full(self)
         if self.settings.get('mode') == 'test-runs':
             from migration.run_only import migrate_runs
             return migrate_runs(self)
@@ -92,7 +95,7 @@ class Engine:
         if not (type(tracker_spec) is int and tracker_spec > 0) and not (isinstance(tracker_spec, dict) and 'create_payload' in tracker_spec):
             raise ApiError('Set a positive target Tracker ID for ' + tracker_key)
         mappings = self.settings.get('field_mapping', {})
-        mapping = mappings.get(type_id, mappings.get(issue['fields']['issuetype'].get('name'), {}))
+        mapping = mappings.get(project['key'] + ':' + type_id, mappings.get(type_id, mappings.get(issue['fields']['issuetype'].get('name'), {})))
         record = {'key': key, 'planned_fields': len(mapping), 'comments': len(issue['_comments']),
                   'worklogs': len(issue['_worklogs']), 'runs': len(issue['_runs']), 'status': 'planned'}
         self.report['issues'].append(record)

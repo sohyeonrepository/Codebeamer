@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .migration/
 config.local.json
+mapping*.local.json
+config.*.local.json
