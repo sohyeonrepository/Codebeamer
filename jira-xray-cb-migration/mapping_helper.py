@@ -836,12 +836,13 @@ def main():
         table.tag_configure('kept',foreground='#65738a')
         table.tag_configure('ready',foreground='#176c51')
         table.tag_configure('review',foreground='#9a6611')
-        editor = ttk.LabelFrame(body,text='선택한 필드 검토',padding=10);editor.pack(fill='x',pady=10)
+        editor=tk.Toplevel(root);editor.title('고급 매핑 설정');editor.withdraw()
+        editor.protocol('WM_DELETE_WINDOW',editor.withdraw)
         selected_text = tk.StringVar(value='목록에서 필드를 선택하세요.')
         ttk.Label(editor,textvariable=selected_text).pack(anchor='w')
         row = ttk.Frame(editor);row.pack(fill='x',pady=5)
         field_box=ttk.Combobox(row,state='readonly',width=37);field_box.pack(side='left',fill='x',expand=True)
-        advanced=ttk.Frame(editor)
+        advanced=ttk.Frame(editor);advanced.pack(fill='both',expand=True)
         advanced_row=ttk.Frame(advanced);advanced_row.pack(fill='x')
         conversion=ttk.Combobox(advanced_row,state='readonly',width=12,values=['text','json','raw','number','boolean','date','datetime','user','status','option','reference']);conversion.pack(side='left',padx=8)
         target_key=ttk.Entry(advanced_row,width=22);target_key.pack(side='left')
@@ -1013,35 +1014,6 @@ def main():
             threading.Thread(target=worker,daemon=True).start()
             notice.set('대상에 없는 원본 값을 선택지로 생성 중…')
 
-        def edit_value(event=None):
-            parent=selected_parent()
-            if not parent or parent not in rows:notice.set('원본 필드를 선택하세요.');return
-            p,t,tracker=current();source,proposal=rows[parent]
-            entries=list(source_choices(source_observations(t,source)).items())
-            if not entries:notice.set('조회된 원본 선택지/값이 없습니다.');return
-            if not proposal.get('field'):notice.set('먼저 대상 필드를 선택하세요. 없으면 새 필드 생성을 사용하세요.');return
-            options=[o for o in proposal['field'].get('options') or [] if isinstance(o,dict) and o.get('id') is not None]
-            dialog=tk.Toplevel(root);dialog.title('선택지 연결 / 없는 값 생성');dialog.transient(root);dialog.grab_set()
-            panel=ttk.Frame(dialog,padding=16);panel.pack(fill='both',expand=True)
-            ttk.Label(panel,text='Jira 원본 값').pack(anchor='w')
-            original=ttk.Combobox(panel,state='readonly',width=55,values=[label for _,label in entries]);original.pack(fill='x');original.current(0)
-            selection=table.selection();children=list(table.get_children(parent))
-            if selection and selection[0] in children:original.current(children.index(selection[0]))
-            ttk.Label(panel,text='Codebeamer 대상 값').pack(anchor='w',pady=(8,0))
-            box=ttk.Combobox(panel,state='readonly',width=55,values=['＋ 같은 이름으로 새 선택지 생성']+[str(o.get('name',o.get('label',''))) + ' / ID '+str(o['id']) for o in options]);box.pack(fill='x')
-            def pick(event=None):
-                _,label=entries[original.current()]
-                matched=matching_option(proposal['field'],label)
-                box.current(options.index(matched)+1 if matched in options else 0)
-            original.bind('<<ComboboxSelected>>',pick);pick()
-            def accept():
-                identity,label=entries[original.current()]
-                if box.current()==0:
-                    dialog.destroy();create_options(source,proposal,{identity:label});return
-                if box.current()<0:return
-                mapping=deepcopy(proposal.get('values',{}));mapping[identity]={'id':options[box.current()-1]['id']}
-                dialog.destroy();remember_values(source,mapping)
-            ttk.Button(panel,text='적용',command=accept).pack(pady=(12,0))
         def propose_creation():
             if creation_busy.get():
                 notice.set('이전 필드 생성 결과를 확인 중입니다. 잠시 기다려주세요.');return
@@ -1126,15 +1098,79 @@ def main():
 
         ttk.Checkbutton(bar,text='전체 API 필드',variable=all_fields,command=refresh).pack(side='right',padx=8)
         ttk.Checkbutton(bar,text='신규만',variable=new_only,command=refresh).pack(side='right',padx=12)
-        ttk.Button(row,text='새 필드 생성…',command=propose_creation).pack(side='left',padx=8)
-        ttk.Button(foot,text='선택지 수정 / 없는 값 생성',command=edit_value).pack(side='left')
-        ttk.Button(foot,text='없는 선택지 모두 생성',command=lambda:create_options(*rows[selected_parent()]) if selected_parent() in rows else notice.set('원본 필드를 선택하세요.')).pack(side='left',padx=8)
-        ttk.Button(foot,text='누락 검사',command=check).pack(side='right',padx=8)
-        ttk.Button(foot,text='매핑 저장',command=save).pack(side='right')
+        inline_widget=[None]
+        def edit_target(event=None):
+            if inline_widget[0] is not None:
+                try:inline_widget[0].destroy()
+                except tk.TclError:pass
+                inline_widget[0]=None
+            if event is not None and getattr(event,'num',None)==1:
+                item=table.identify_row(event.y)
+                if not item or table.identify_column(event.x)!='#1':return
+                table.selection_set(item)
+            else:
+                selection=table.selection()
+                if not selection:return
+                item=selection[0]
+            inspect()
+            parent=item if item in rows else table.parent(item)
+            if parent not in rows:return
+            p,t,tracker=current();source,proposal=rows[parent]
+            bbox=table.bbox(item,'target')
+            if not bbox:return
+            x,y,width,height=bbox
+            if item in rows:
+                labels=['＋ 새 필드 생성']+[str(field.get('label',field.get('name','')))+' / ID '+str(field.get('id',field.get('referenceId'))) for field in fields]
+                box=ttk.Combobox(table,state='readonly',values=labels)
+                old=proposal.get('field')
+                box.current(fields.index(old)+1 if old in fields else 0)
+                def accept(event=None):
+                    index=box.current();box.destroy();inline_widget[0]=None
+                    if index==0:propose_creation()
+                    elif index>0:field_box.current(index-1);change_field()
+            else:
+                entries=list(source_choices(source_observations(t,source)).items())
+                children=list(table.get_children(parent))
+                identity,label=entries[children.index(item)]
+                field=proposal.get('field')
+                if not field:notice.set('먼저 상위 필드의 대상 칸에서 연결하거나 새 필드를 만드세요.');return
+                options=[option for option in field.get('options') or [] if isinstance(option,dict) and option.get('id') is not None]
+                box=ttk.Combobox(table,state='readonly',values=['＋ '+label+' 새 선택지 생성']+[str(option.get('name',option.get('label','')))+' / ID '+str(option['id']) for option in options])
+                mapped=proposal.get('values',{}).get(identity)
+                index=next((number+1 for number,option in enumerate(options) if isinstance(mapped,dict) and mapped.get('id')==option['id']),0)
+                box.current(index)
+                def accept(event=None):
+                    index=box.current();box.destroy();inline_widget[0]=None
+                    if index==0:create_options(source,proposal,{identity:label})
+                    elif index>0:
+                        mapping=deepcopy(proposal.get('values',{}));mapping[identity]={'id':options[index-1]['id']}
+                        remember_values(source,mapping)
+            inline_widget[0]=box
+            box.place(x=x,y=y,width=width,height=height)
+            box.bind('<<ComboboxSelected>>',accept)
+            box.bind('<Escape>',lambda event:box.destroy())
+            box.focus_set()
+
+        def advanced_settings():
+            inspect();editor.deiconify();editor.lift()
+
+        menu=tk.Menu(root,tearoff=False)
+        menu.add_command(label='대상 필드/선택지 변경',command=edit_target)
+        menu.add_command(label='새 필드 생성…',command=propose_creation)
+        menu.add_command(label='이 필드의 없는 선택지 모두 생성',command=lambda:create_options(*rows[selected_parent()]) if selected_parent() in rows else None)
+        menu.add_separator()
+        menu.add_command(label='고급 설정…',command=advanced_settings)
+        def open_menu(event):
+            item=table.identify_row(event.y)
+            if item:table.selection_set(item);inspect()
+            menu.tk_popup(event.x_root,event.y_root)
+
+        ttk.Label(foot,text='대상 칸 클릭: 변경 / 새로 생성 · 오른쪽 클릭: 추가 설정',style='Note.TLabel').pack(side='left',pady=8)
         ttk.Button(foot,text='닫기',command=root.destroy).pack(side='right')
-        show_advanced=tk.BooleanVar(value=False)
-        ttk.Checkbutton(editor,text='고급 설정 (API 키 / JSON)',variable=show_advanced,command=lambda:advanced.pack(fill='x',pady=5) if show_advanced.get() else advanced.pack_forget()).pack(anchor='w')
-        table.bind('<<TreeviewSelect>>',inspect);table.bind('<Double-1>',edit_value);field_box.bind('<<ComboboxSelected>>',change_field)
+        ttk.Button(foot,text='저장',command=save).pack(side='right',padx=8)
+        table.bind('<<TreeviewSelect>>',inspect)
+        table.bind('<Button-1>',edit_target);table.bind('<Return>',edit_target);table.bind('<Button-3>',open_menu)
+        field_box.bind('<<ComboboxSelected>>',change_field)
         conversion.bind('<<ComboboxSelected>>',apply_selected);target_key.bind('<FocusOut>',apply_selected);values.bind('<FocusOut>',apply_selected)
         def scope_changed(event=None):
             if scope_box.current()<0:return

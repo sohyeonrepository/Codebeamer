@@ -40,16 +40,16 @@ class MappingUISmokeTests(unittest.TestCase):
                     tree=next(w for w in descendants(window) if isinstance(w,ttk.Treeview))
                     status=next(item for item in tree.get_children() if tree.item(item,'text').startswith('Status'))
                     tree.selection_set(status);window.update()
-                    button=next(w for w in descendants(window) if isinstance(w,ttk.Button) and w.cget('text')=='선택지 수정 / 없는 값 생성')
-                    button.invoke();window.update()
-                    dialog=next(w for w in window.winfo_children() if isinstance(w,tk.Toplevel))
-                    boxes=[w for w in descendants(dialog) if isinstance(w,ttk.Combobox)]
-                    boxes[0].current(1);boxes[0].event_generate('<<ComboboxSelected>>');window.update()
-                    if boxes[1].current()!=0:raise AssertionError('Missing option should default to creation')
-                    boxes[1].current(1)
-                    next(w for w in descendants(dialog) if isinstance(w,ttk.Button) and w.cget('text')=='적용').invoke()
-                    window.update()
-                    next(w for w in descendants(window) if isinstance(w,ttk.Button) and w.cget('text')=='매핑 저장').invoke()
+                    tree.item(status,open=True);window.update()
+                    child=tree.get_children(status)[1]
+                    x,y,width,height=tree.bbox(child,'target')
+                    tree.event_generate('<Button-1>',x=x+5,y=y+height//2);window.update()
+                    box=next(w for w in tree.winfo_children() if isinstance(w,ttk.Combobox))
+                    if box.current()!=0:raise AssertionError('Missing option should default to creation')
+                    box.current(1);box.event_generate('<<ComboboxSelected>>');window.update()
+                    buttons=[w.cget('text') for w in descendants(window) if isinstance(w,ttk.Button) and w.winfo_viewable()]
+                    if set(buttons)!={'저장','닫기'}:raise AssertionError('Redundant footer controls are still visible: '+str(buttons))
+                    next(w for w in descendants(window) if isinstance(w,ttk.Button) and w.cget('text')=='저장').invoke()
                 except Exception as exc:errors.append(exc)
                 finally:window.after(10,window.destroy)
         with tempfile.TemporaryDirectory() as directory:
