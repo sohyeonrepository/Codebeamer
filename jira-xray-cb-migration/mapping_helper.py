@@ -353,8 +353,13 @@ def main():
         ttk.Button(root, text='선택한 원본 필드의 매핑 삭제', command=remove).pack(fill='x')
         ttk.Button(root, text='누락 검사 후 로컬 매핑 저장 (서버 쓰기 없음)', command=save).pack(fill='x')
         if catalog.get('warnings'):
-            messagebox.showwarning('일부 조회 실패: 표시된 정보만 사용 가능', '\n'.join(catalog['warnings']))
-        status.set('조회 완료. 프로젝트 ' + str(len(catalog['projects'])) + '개 / 트래커 ' + str(len(catalog['targets'])) + '개')
+            summary.insert('1.0', '일부 조회 실패 — 조회된 필드만 표시합니다.\n' + '\n'.join(catalog['warnings']) + '\n')
+        if sources:
+            source_box.current(0)
+        if target_items:
+            target_box.current(0)
+        show()
+        status.set('조회 완료. 프로젝트 ' + str(len(catalog['projects'])) + '개 / 트래커 ' + str(len(catalog['targets'])) + '개 / 경고 ' + str(len(catalog.get('warnings', []))) + '건')
     def poll():
         try:
             catalog,error = results.get_nowait()
@@ -364,8 +369,11 @@ def main():
             status.set('조회 실패'); messagebox.showerror('조회 실패', error)
         else:
             try:
+                _diagnostics.record('매핑 화면 구성', 'start')
                 render(catalog)
                 _diagnostics.record('매핑 화면 구성', 'ok')
+                root.deiconify()
+                root.lift()
             except Exception as exc:
                 _diagnostics.record('매핑 화면 구성', 'error', error=exc)
                 status.set('화면 구성 실패: summary.txt 확인')
