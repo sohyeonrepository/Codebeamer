@@ -328,7 +328,7 @@ def selected_tracker(overlay, project, kind):
     return trackers.get(project['key'] + ':' + kind['id'], trackers.get(project['key'] + ':' + kind['name']))
 
 
-def suggest_values(samples, options):
+def suggest_values(samples, options, identity_key=None):
     """Exact unique display-name matches only; returned values still require review."""
     if not isinstance(options, list):
         return {}, []
@@ -338,7 +338,7 @@ def suggest_values(samples, options):
         if source is None:
             continue
         if isinstance(source, dict):
-            identity = str(source.get('accountId', source.get('name', source.get('id'))))
+            identity = str(source.get(identity_key)) if identity_key else str(source.get('accountId', source.get('name', source.get('id'))))
             label = source.get('name', source.get('value', source.get('displayName', '')))
         else:
             identity, label = str(source), str(source)
@@ -492,14 +492,14 @@ def visible_sources(kind, existing, all_fields=False):
     return result
 
 
-def source_choices(samples):
+def source_choices(samples, identity_key=None):
     choices = {}
     for sample in samples:
         for value in sample if isinstance(sample, list) else [sample]:
             if value is None:
                 continue
             if isinstance(value, dict):
-                identity = value.get('accountId', value.get('name', value.get('id')))
+                identity = value.get(identity_key) if identity_key else value.get('accountId', value.get('name', value.get('id')))
                 label = value.get('name', value.get('value', value.get('displayName', identity)))
             else:
                 identity, label = value, value
@@ -650,7 +650,8 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     body = deepcopy(expected)
     body['fields'].append(deepcopy(definition))
     body=prepare_configuration_permissions(cb,body)
-    journal[identity] = {'tracker': tracker, 'status': 'pending'}
+    journal[identity] = {'tracker': tracker, 'status': 'pending',
+                         'request':{'method':'POST','path':'/v3/tracker/configuration','body':deepcopy(body)}}
     def persist():
         temporary = journal_path.with_suffix(journal_path.suffix + '.tmp')
         temporary.write_text(json.dumps(journal, indent=2), encoding='utf-8')
@@ -659,7 +660,13 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     previous = cb.write
     try:
         cb.write = True
-        read_stage('Codebeamer 새 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
+        response = read_stage('Codebeamer 새 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
+        journal[identity]['post_response'] = response
+        persist()
+    except ApiError as exc:
+        journal[identity]['error'] = str(exc)
+        persist()
+        raise
     finally:
         cb.write = previous
     actual = read_stage('Codebeamer 생성 후 설정 확인', lambda: cb.configuration(tracker))
@@ -681,7 +688,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
             raise ApiError('기존 필드의 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
     if any(actual.get(key) != value for key,value in expected.items() if key != 'fields'):
         raise ApiError('기존 Tracker의 필드 외 설정 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
-    journal[identity] = {'tracker': tracker, 'status': 'done', 'field_id': field_identifier(created)}
+    journal[identity].update(status='done', field_id=field_identifier(created), readback=actual)
     persist()
     return created, actual
 

@@ -307,6 +307,40 @@ class WizardTests(unittest.TestCase):
             rewrite_description('!a.png!',[{'id':'1','filename':'a.png','content':'/one'},
                 {'id':'2','filename':'a.png','content':'/two'}],{'1':'https://cb/a','2':'https://cb/b'})
         with self.assertRaises(ApiError):rewrite_description('!missing.png!',[],{})
+    def test_components_creation_id_mapping_and_item_readback(self):
+        source={'id':'components','name':'Components','schema':{'type':'array','items':'component','system':'components'},
+                'hidden':False,'allowedValues':[{'id':'101','name':'ECU'},{'id':'102','name':'Diagnostics'}]}
+        self.source.definitions.append(source);self.source.configured.append(source)
+        self.source.rows[0]['fields']['components']=deepcopy(source['allowedValues'])
+        self.source.rows[1]['fields']['components']=[]
+        self.wizard.config['migration']['wizard']['field_types']['option']={
+            'type_name':'Choice','definition':{'typeId':20,'mandatory':False,
+                'multipleSelection':True,'options':[],'reference':None},
+            'binding':{'type':'ChoiceFieldValue','value_property':'values'}}
+        self.plan()
+        row=self.wizard.plan['scopes']['P:1']['rows']['components']
+        self.assertEqual(row['creation']['choices'],{'101':'ECU','102':'Diagnostics'})
+        self.assertTrue(row['creation']['multipleSelection'])
+        self.assertFalse(self.cb.mutations)
+        report=self.wizard.execute(True)
+        self.assertTrue(report['complete'],report)
+        actual=next(f for f in self.cb.definitions if f['label']=='Components')
+        self.assertTrue(actual['multipleSelection'])
+        self.assertEqual(self.cb.items[200]['jira_components'],[{'id':100},{'id':101}])
+        evidence=self.state.load('component-mapping','P:1')
+        self.assertEqual(evidence['components'],{'101':'ECU','102':'Diagnostics'})
+        self.assertEqual(evidence['option_mapping'],{'101':{'id':100},'102':{'id':101}})
+        self.assertEqual(evidence['field_id'],actual['id'])
+        self.assertTrue(self.wizard.execute(True)['complete'])
+        self.assertEqual(len([f for f in self.cb.definitions if f['label']=='Components']),1)
+
+    def test_components_duplicate_names_do_not_collapse_ids(self):
+        source={'id':'components','name':'Components','schema':{'type':'array','items':'component'},'hidden':False}
+        self.source.definitions.append(source);self.source.configured.append(source)
+        self.source.rows[0]['fields']['components']=[{'id':'1','name':'same'},{'id':'2','name':'same'}]
+        with self.assertRaisesRegex(ApiError,'서로 다른 ID'):self.plan()
+        self.assertFalse(self.cb.mutations)
+
     def test_multiselect_choice_creation_preserves_options_and_uses_real_ids(self):
         source={'id':'choices','name':'Choices','schema':{'type':'array','items':'option'},
                 'hidden':False,'allowedValues':[{'id':'a','value':'One'},{'id':'b','value':'Two'}]}

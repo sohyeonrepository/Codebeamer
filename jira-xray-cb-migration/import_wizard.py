@@ -256,7 +256,7 @@ def launch(wizard, initial_projects=None):
             kind, _ = semantic_type(entry['analysis']['fields'][source], True)
             if kind in ('option','status'):
                 options = target.get('options') or []
-                values = source_choices(entry['analysis']['values'].get(source, []) + entry['analysis']['fields'][source].get('allowedValues', []))
+                values = source_choices(entry['analysis']['values'].get(source, []) + entry['analysis']['fields'][source].get('allowedValues', []), 'id' if source == 'components' else None)
                 for identity, label in values.items():
                     ttk.Label(value_frame, text=label).pack(anchor='w')
                     choice = ttk.Combobox(value_frame, state='readonly', values=[str(o.get('name',o.get('label',''))) for o in options])
@@ -321,7 +321,7 @@ def launch(wizard, initial_projects=None):
             ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
         def save_creation():
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
-            originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]))
+            originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]), 'id' if source == 'components' else None)
             lines=[line.strip() for line in options.get('1.0','end').splitlines() if line.strip()]
             choices={}
             if type_box.get() in ('option','status'):

@@ -40,7 +40,7 @@ def semantic_type(field, jira=False):
         kind = schema.get('items') if multiple else kind
         return {'string': 'text', 'integer': 'number', 'number': 'number', 'boolean': 'boolean',
                 'date': 'date', 'datetime': 'datetime', 'option': 'option', 'priority': 'option',
-                'status': 'status', 'user': 'user', 'version': 'option'}.get(kind), multiple
+                'status': 'status', 'user': 'user', 'version': 'option', 'component': 'option'}.get(kind), multiple
     # Numeric type IDs are deployment-specific; require named server metadata.
     from clients.tracker_fields import normalize
     field = normalize(field)
@@ -114,6 +114,19 @@ def field_analysis(jira, project, issue_type):
                 risks.append({'field': key, 'reason': 'hidden-source-with-values'})
         else:
             visible[key] = field
+    if 'components' in visible:
+        components = {}
+        for sample in values.get('components', []) + visible['components'].get('allowedValues', []):
+            for component in sample if isinstance(sample,list) else [sample]:
+                if component is None:continue
+                if not isinstance(component,dict) or component.get('id') is None or not isinstance(component.get('name'),str):
+                    raise ApiError('Components 원본 ID/Name 응답이 불완전합니다.')
+                identity, name = str(component['id']), component['name']
+                if identity in components and components[identity] != name:
+                    raise ApiError('Components 동일 ID의 이름이 조회 중 변경됐습니다.')
+                components[identity] = name
+        if len(set(components.values())) != len(components):
+            raise ApiError('Components 이름이 같은 서로 다른 ID: Choice 옵션을 합치지 않도록 별도 검토가 필요합니다.')
     return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
             'configuration_status': configuration_status, 'createmeta_status': screen_status,
             'visibility_unknown': sorted(k for k, f in visible.items() if f['visibility'] == 'unknown'),
@@ -155,7 +168,7 @@ def proposals(analysis, targets, config, existing=None):
             canonical = label_tokens(source, definition) & label_tokens('', target) & {'name', 'description'}
             key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(fid))
             vals = list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', []))
-            mapping, unmatched = suggest_values(vals, target.get('options'))
+            mapping, unmatched = suggest_values(vals, target.get('options'), 'id' if source == 'components' else None)
             if kind == 'user':
                 mapping = deepcopy(config['migration'].get('user_mapping', {}))
             if kind == 'status':
@@ -164,9 +177,10 @@ def proposals(analysis, targets, config, existing=None):
                 if kind in ('option', 'status') and unmatched:
                     raise ValueError('대상에 없는 원본 Choice 값: 수동 매핑 또는 선택지 준비 필요')
                 spec = build_spec(source, target, kind, key, mapping)
+                if source == 'components': spec['source_identity'] = 'id'
                 from migration.fields import convert
                 for v in analysis['values'].get(source, []):
-                    convert(v, kind, mapping)
+                    convert(v, kind, mapping, 'id' if source == 'components' else None)
                 if str(fid) in claimed:
                     raise ValueError('이미 다른 원본에 연결된 대상')
                 if key in bindings: spec['binding'] = deepcopy(bindings[key])
@@ -177,7 +191,7 @@ def proposals(analysis, targets, config, existing=None):
             if kind is None or (multiple and kind not in ('option', 'status', 'user')):
                 entry.update(status='error', reason='지원하지 않는 원본 타입: 자동 변환하지 않음')
             else:
-                choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])))
+                choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])), 'id' if source == 'components' else None)
                 entry.update(status='create', mapping_mode='create', reason='Import 승인 후 생성', creation={
                     'label': definition.get('name', source), 'semantic_type': kind,
                     'multipleSelection': multiple, 'choices': choices})
@@ -361,9 +375,10 @@ class ImportWizard:
             if other != source and row.get('spec') and (row['spec']['field_id'] == target_id or row['spec']['target'] == target_key):
                 raise ApiError('Destination already mapped to another Jira field')
         spec = build_spec(source, target, kind, target_key, values)
+        if source == 'components': spec['source_identity'] = 'id'
         from migration.fields import convert
         for value in entry['analysis']['values'].get(source, []):
-            convert(value, kind, values)
+            convert(value, kind, values, 'id' if source == 'components' else None)
         entry['rows'][source].update(status='mapped', mapping_mode='manual', target=target,
                                      spec=spec, reason='수동 연결')
         binding = self.config['codebeamer'].get('field_bindings', {}).get(target_key)
@@ -497,23 +512,38 @@ class ImportWizard:
                 from clients.codebeamer_3007 import configuration_field_contract
                 expected = configuration_field_contract(self.cb,definition,tracker)
                 direct = False
-            if direct:
-                created, _ = create_dedicated_field(self.cb,tracker,definition,journal)
-            else:
-                created, _ = create_confirmed_field(self.cb,tracker,definition,expected,journal,approved=True)
+            self.state.save('field-creation', identity+'-request', {'tracker_id':tracker,
+                'definition':definition, 'method':'POST',
+                'path':'dedicated-field-contract' if direct else '/v3/tracker/configuration'})
+            try:
+                if direct:
+                    created, response = create_dedicated_field(self.cb,tracker,definition,journal)
+                else:
+                    created, response = create_confirmed_field(self.cb,tracker,definition,expected,journal,approved=True)
+                self.state.save('field-creation', identity+'-readback', {'field':created,'configuration':response})
+            except ApiError as exc:
+                self.state.save('field-creation', identity+'-failure', {'tracker_id':tracker,
+                    'stage':'definition-create-or-readback', 'error':str(exc), 'retry':'reconcile-before-repost'})
+                raise
+
         # Re-read the actual server-assigned ID and full metadata, never trust a proposed ID.
         actual = next((f for f in target_fields(self.cb, tracker) if field_identifier(f) == field_identifier(created)), None)
         if not actual or not compatible(proposal['semantic_type'], proposal['multipleSelection'], actual):
             raise ApiError('Created field readback type/multiplicity mismatch')
         if known and known[0] == 'done' and known[1]['id'] != field_identifier(actual):
             raise ApiError('Created field ID changed')
-        mapping, unmatched = suggest_values(entry_values(self.plan['scopes'][scope], source), actual.get('options'))
+        mapping, unmatched = suggest_values(entry_values(self.plan['scopes'][scope], source), actual.get('options'), 'id' if source == 'components' else None)
         if proposal['semantic_type'] in ('option', 'status') and unmatched:
             raise ApiError('Created Choice values do not cover the source')
         if proposal['semantic_type'] == 'user':
             mapping = deepcopy(self.config['migration'].get('user_mapping', {}))
         key = 'jira_' + source
         spec = build_spec(source, actual, proposal['semantic_type'], key, mapping)
+        if source == 'components':
+            spec['source_identity'] = 'id'
+            spec['source_components'] = source_choices(entry_values(self.plan['scopes'][scope], source), 'id')
+            self.state.save('component-mapping', scope, {'tracker_id':tracker, 'field_id':field_identifier(actual),
+                'components':spec['source_components'], 'option_mapping':mapping, 'multiple':proposal['multipleSelection']})
         # The discriminator/value member come from a deployment-verified template.
         binding = deepcopy(profile.get('binding'))
         if binding:

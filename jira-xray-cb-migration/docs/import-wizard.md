@@ -263,3 +263,23 @@ POST합니다. 재조회에서 신규 ID·타입·Choice 및 기존 필드/권�
 상태 폴더를 유지하면 다음 분석에서 생성된 필드를 재사용할 수 있습니다. 확인된 Item/FieldValue 계약이
 추가된 뒤에만 데이터 이관을 다시 승인하세요. 실제 고객 서버에서 Text/Choice/Integer 생성과 Item 값
 재조회는 이번 환경의 접속 정보가 없어 수행하지 않았습니다. 저장소 테스트 결과는 Mock 결과입니다.
+
+## Components 한 필드 검증
+
+Jira `/rest/api/2/field` 및 선택 Issue의 원본 응답에 있는
+`schema: {type: array, items: component}`를 다중 Choice로 해석합니다. 이름만으로 타입을 추측하지 않습니다.
+원본 Component ID/Name이 없거나 동일 ID의 이름이 달라지거나 서로 다른 ID의 이름이 같으면
+잘못 합치지 않도록 분석을 중단합니다. 선택 옵션은 실제 값과 CreateMeta allowedValues에서 구성합니다.
+
+STEP 3에서 Components 생성 설정의 다중 선택과 옵션을 확인하고 테스트 Issue 1건으로 범위를 제한한 뒤
+Import를 승인합니다. Configuration 생성 계약이 확인된 프로필은 기존 `create_confirmed_field()`를 호출합니다.
+생성 ID/옵션을 재조회하고 원본 Component ID를 CB 옵션 ID에 연결합니다. 문자열로 변환하지 않습니다.
+FieldValue 계약이 없으면 정의 생성 결과를 저장하고 값 이관은 미완료로 보고합니다.
+
+상태 폴더의 `component-mapping/`에 원본 ID→Name 및 원본 ID→CB Option ID와 Field ID를 기록합니다.
+`field-creation/`에는 생성 정의/재조회 결과/실패 단계를 보존합니다. Configuration 생성 journal에는 실제
+POST 경로·본문·반환값·최종 GET 결과가 포함됩니다. 인증 헤더/토큰/비밀번호는 포함하지 않습니다.
+원본 업무 데이터가 있으므로 이 파일들을 공개 저장소에 올리지 마세요. HTTP 상태는 기존 requests 감사 로그로 대조합니다.
+
+현재 자동 테스트는 Components 생성안→다중 Choice 생성→Item 값 변환→GET 비교와 재실행 중복 방지를
+모의 서버로 검증합니다. 실제 고객 CB 서버 접근 설정은 이 환경에 없으므로 실제 생성 성공은 미확인입니다.

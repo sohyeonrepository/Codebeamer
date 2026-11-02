@@ -1,7 +1,7 @@
 from clients.http import ApiError
 
 
-def convert(value, kind, mapping):
+def convert(value, kind, mapping, identity_key=None):
     if value is None:
         return None
     if kind == 'json':
@@ -27,8 +27,9 @@ def convert(value, kind, mapping):
         return value
     if kind in ('user', 'status', 'option', 'reference'):
         if isinstance(value, list):
-            return [convert(v, kind, mapping) for v in value]
+            return [convert(v, kind, mapping, identity_key) for v in value]
         identity = str(value.get('accountId', value.get('name', value.get('id')))) if isinstance(value, dict) else str(value)
+        if identity_key and isinstance(value,dict): identity = str(value.get(identity_key))
         if identity not in mapping:
             raise ApiError('Missing ' + kind + ' mapping: ' + identity)
         return mapping[identity]
@@ -41,7 +42,7 @@ def payload(fields, mappings, settings):
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
-        output[spec['target']] = convert(fields[source], spec['type'], spec.get('value_mapping', settings.get(group, {})))
+        output[spec['target']] = convert(fields[source], spec['type'], spec.get('value_mapping', settings.get(group, {})), spec.get('source_identity'))
     return output
 
 
