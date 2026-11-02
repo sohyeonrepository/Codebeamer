@@ -19,6 +19,16 @@ class JiraClient:
             raise ApiError('Project response lacks complete issueTypes')
         return detail['issueTypes']
 
+    def creation_fields(self, project, issue_type):
+        query = urllib.parse.urlencode({'projectKeys':project, 'issuetypeIds':str(issue_type),
+                                       'expand':'projects.issuetypes.fields'})
+        data = self.http.request('GET', '/rest/api/2/issue/createmeta?' + query)
+        projects = [p for p in data.get('projects', []) if p.get('key') == project]
+        types = [t for p in projects for t in p.get('issuetypes', []) if str(t.get('id')) == str(issue_type)]
+        if len(types) != 1 or not isinstance(types[0].get('fields'), dict):
+            raise ApiError('CreateMeta missing selected project/Issue Type fields')
+        return types[0]['fields']
+
     def configured_records(self, profile, context):
         """Read a deployment-specific paginated API, never guess plugin endpoints."""
         from clients.codebeamer_client import render, resolve

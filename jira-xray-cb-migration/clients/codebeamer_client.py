@@ -215,6 +215,9 @@ class CodebeamerClient:
         return result
 
     def fields(self, tracker):
+        if self.config.get('verified_reads'):
+            from clients.tracker_fields import read
+            return read(self, tracker)
         if 'fields' in self.config.get('operations', {}):
             return self.call('fields', {'trackerId': tracker})
         return self.http.request('GET', f'/v3/trackers/{segment(tracker)}/fields')

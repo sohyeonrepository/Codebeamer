@@ -42,6 +42,8 @@ def semantic_type(field, jira=False):
                 'date': 'date', 'datetime': 'datetime', 'option': 'option', 'priority': 'option',
                 'status': 'status', 'user': 'user', 'version': 'option'}.get(kind), multiple
     # Numeric type IDs are deployment-specific; require named server metadata.
+    from clients.tracker_fields import normalize
+    field = normalize(field)
     kind = field.get('typeName', field.get('type'))
     if isinstance(kind, dict):
         kind = kind.get('name')
@@ -64,11 +66,19 @@ def field_analysis(jira, project, issue_type):
     # Global field metadata and editmeta never establish configuration visibility.
     definitions = {f['id']: f for f in jira.fields()}
     managed = managed_fields(definitions.values(), jira.config.get('xray_run_field'))
-    fields = {}
+    try:
+        screen_fields = jira.creation_fields(project, issue_type['id'])
+        screen_status = 'available'
+    except ApiError:
+        screen_fields, screen_status = {}, 'unavailable'
+    fields = {key:dict(definitions.get(key, {}), **dict(value, id=key, visibility='unknown'))
+              for key, value in screen_fields.items()}
+    configured_ids = set()
     for f in configured:
         key = str(f['id'])
-        if key in fields:
+        if key in configured_ids:
             raise ApiError('Duplicate Field Configuration entry')
+        configured_ids.add(key)
         fields[key] = dict(definitions.get(key, {}), **f)
         fields[key]['visibility'] = ('hidden' if hidden(f) else 'visible') if any(
             type(f.get(flag)) is bool for flag in ('hidden', 'isHidden', 'visible')) else 'unknown'
@@ -86,7 +96,7 @@ def field_analysis(jira, project, issue_type):
             # A full Jira issue response often contains every global field as null.
             # Keep configured null fields, and add unconfigured fields only when
             # real values show they need attention. Configuration drives scope.
-            if key in fields or has_value(value) or configuration_status == 'unavailable':
+            if key in fields or has_value(value) or (configuration_status == 'unavailable' and screen_status == 'unavailable'):
                 fields.setdefault(key, dict(definitions.get(key, {'id': key}), visibility='unknown'))
             observations = values.setdefault(key, [])
             if value not in observations:
@@ -105,27 +115,19 @@ def field_analysis(jira, project, issue_type):
         else:
             visible[key] = field
     return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
-            'configuration_status': configuration_status,
+            'configuration_status': configuration_status, 'createmeta_status': screen_status,
             'visibility_unknown': sorted(k for k, f in visible.items() if f['visibility'] == 'unknown'),
             'configuration_count': len(configured), 'managed_fields': sorted(managed), 'complete': True}
 
 
 def target_fields(cb, tracker):
     from clients.codebeamer_client import CodebeamerClient
-    if isinstance(cb,CodebeamerClient) and cb.config.get('verified_reads'):
-        from clients.codebeamer_verified_reads import fields as read_fields,configuration as read_configuration
-        fields,configuration=read_fields(cb,tracker),read_configuration(cb,tracker)
-    else:
-        fields = cb.fields(tracker)
-        configuration = cb.configuration(tracker)
-    if not isinstance(fields, list) or not isinstance(configuration.get('fields'), list):
-        raise ApiError('Complete target fields and configuration are required')
+    from clients.tracker_fields import normalize, read
+    if isinstance(cb, CodebeamerClient):
+        return read(cb, tracker)
+    fields, configuration = cb.fields(tracker), cb.configuration(tracker)
     by_id = {str(field_identifier(f)): f for f in configuration['fields']}
-    # Configuration visibility wins over a shortened fields response.
-    merged = [dict(f, **by_id.get(str(field_identifier(f)), {})) for f in fields]
-    if any(not any(type(f.get(flag)) is bool for flag in ('hidden', 'isHidden', 'visible')) for f in merged):
-        raise ApiError('Target configuration must explicitly report field visibility')
-    return merged
+    return [normalize(dict(f, **by_id.get(str(field_identifier(f)), {}))) for f in fields]
 
 
 def proposals(analysis, targets, config, existing=None):
@@ -151,7 +153,7 @@ def proposals(analysis, targets, config, existing=None):
             fid = field_identifier(target)
             keys = [k for k, b in bindings.items() if b.get('fieldId') == fid]
             canonical = label_tokens(source, definition) & label_tokens('', target) & {'name', 'description'}
-            key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else '')
+            key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(fid))
             vals = list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', []))
             mapping, unmatched = suggest_values(vals, target.get('options'))
             if kind == 'user':
@@ -167,6 +169,7 @@ def proposals(analysis, targets, config, existing=None):
                     convert(v, kind, mapping)
                 if str(fid) in claimed:
                     raise ValueError('이미 다른 원본에 연결된 대상')
+                if key in bindings: spec['binding'] = deepcopy(bindings[key])
                 entry.update(status='mapped', mapping_mode='auto', spec=spec, target=target, reason='이름·타입 일치')
             except (ValueError, ApiError, TypeError) as exc:
                 entry.update(target=target, reason=str(exc))
@@ -210,7 +213,12 @@ class ImportWizard:
         if resolved:
             for section in ('project_mapping', 'tracker_mapping', 'field_mapping'):
                 self.config['migration'].setdefault(section, {}).update(resolved.get(section, {}))
-        self.plan = {'version': 1, 'projects': {}, 'scopes': {}, 'stages': []}
+        self.plan = state.load('wizard', 'plan') or {'version': 1, 'projects': {}, 'scopes': {}, 'stages': []}
+        for entry in self.plan['scopes'].values():
+            for row in entry.get('rows', {}).values():
+                if row.get('creation_profile'):
+                    self.config['migration'].setdefault('wizard', {}).setdefault('field_types', {}).setdefault(
+                        row['creation']['semantic_type'], deepcopy(row['creation_profile']))
 
     def stage(self, name, result):
         self.plan['stages'].append({'stage': name, 'result': result})
@@ -300,9 +308,20 @@ class ImportWizard:
                 raise ApiError('Configure wizard.tracker_template_id using a template Tracker inside the selected project')
             entry['template_tracker'] = tracker
         fields = target_fields(self.cb, tracker)
-        existing = self.config['migration'].get('field_mapping', {}).get(scope, {})
+        from clients.tracker_fields import binding
+        for field in fields:
+            derived = binding(getattr(self.cb, 'spec', None), field)
+            if derived:
+                key = 'cb_field_' + str(field_identifier(field))
+                self.config['codebeamer'].setdefault('field_bindings', {}).setdefault(key, derived)
+        existing = dict(self.config['migration'].get('field_mapping', {}).get(scope, {}))
+        old_rows = deepcopy(entry.get('rows', {}))
+        existing.update({k:r['spec'] for k,r in old_rows.items() if r.get('spec') and r.get('mapping_mode') == 'manual'})
         entry.update(analysis=analysis, target_fields=fields,
                      rows=proposals(analysis, fields, self.config, existing))
+        for source, row in old_rows.items():
+            if row.get('creation_saved') and source in entry['rows'] and entry['rows'][source]['status'] == 'create':
+                entry['rows'][source].update(creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')))
         entry['target_risks'] = [{'field': source, 'reason': 'hidden-target-with-source-values'}
             for source, definition in analysis['fields'].items()
             if any(has_value(v) for v in analysis['values'].get(source, []))
@@ -326,7 +345,47 @@ class ImportWizard:
             convert(value, kind, values)
         entry['rows'][source].update(status='mapped', mapping_mode='manual', target=target,
                                      spec=spec, reason='수동 연결')
+        binding = self.config['codebeamer'].get('field_bindings', {}).get(target_key)
+        if binding: spec['binding'] = deepcopy(binding)
         self.state.save('wizard', 'plan', self.plan)
+
+    def creation_profiles(self, scope):
+        """Read-only schema validation of templates observed in this Tracker."""
+        from mapping_helper import creation_templates
+        from clients.tracker_fields import binding
+        from clients.codebeamer_3007 import configuration_field_contract
+        entry = self.plan['scopes'][scope]
+        tracker = entry['tracker'] or entry.get('template_tracker')
+        profiles = deepcopy(self.config['migration'].get('wizard', {}).get('field_types', {}))
+        if getattr(self.cb, 'spec', None) is None:
+            self.cb.discover()
+        fields = target_fields(self.cb, tracker)
+        configuration = self.cb.configuration(tracker)
+        reasons = []
+        for template in creation_templates(configuration, fields):
+            definition = template['definition']
+            representative = next((f for f in fields if f.get('typeId') == definition['typeId']), None)
+            if not representative: continue
+            kind, _ = semantic_type(representative)
+            if not kind or not template['type_verified']: continue
+            candidate_binding = binding(getattr(self.cb, 'spec', None), representative)
+            if not candidate_binding:
+                reasons.append(template['name'] + ': writable FieldValue schema 미확인')
+                continue
+            try:
+                probe = dict(definition, label='Migration field contract check')
+                configuration_field_contract(self.cb, probe, tracker)
+            except ApiError as exc:
+                reasons.append(template['name'] + ': ' + str(exc))
+                continue
+            candidate_binding.pop('fieldId', None)
+            profiles.setdefault(kind, {'type_name':representative.get('typeName'),
+                                      'definition':definition, 'binding':candidate_binding})
+        self.config['migration'].setdefault('wizard', {})['field_types'] = profiles
+        entry['creation_profiles'] = deepcopy(profiles)
+        entry['creation_diagnostics'] = reasons
+        self.state.save('wizard', 'plan', self.plan)
+        return profiles
 
     def configure_creation(self, scope, source, label, semantic, multiple, choices):
         """Save a field proposal only. The actual server write remains in execute()."""
@@ -340,7 +399,7 @@ class ImportWizard:
         source_kind, source_multiple = semantic_type(entry['analysis']['fields'][source], True)
         if semantic != source_kind or bool(multiple) != bool(source_multiple):
             raise ApiError('Jira 원본 타입과 다중 선택 여부를 변경할 수 없습니다.')
-        profiles = self.config['migration'].get('wizard', {}).get('field_types', {})
+        profiles = entry.get('creation_profiles', self.config['migration'].get('wizard', {}).get('field_types', {}))
         if semantic not in profiles:
             raise ApiError('검증된 신규 필드 타입 설정이 없습니다: ' + semantic)
         options = {}
@@ -350,7 +409,7 @@ class ImportWizard:
             options = {str(k):str(v).strip() for k,v in choices.items()}
         elif choices:
             raise ApiError('Choice가 아닌 필드에는 선택 옵션을 설정할 수 없습니다.')
-        row.update(mapping_mode='create', reason='Import 승인 후 생성', creation={
+        row.update(mapping_mode='create', creation_saved=True, creation_profile=deepcopy(profiles[semantic]), reason='Import 승인 후 생성', creation={
             'label':label, 'semantic_type':semantic, 'multipleSelection':bool(multiple),
             'choices':options})
         self.state.save('wizard', 'plan', self.plan)
@@ -372,6 +431,8 @@ class ImportWizard:
                 if entry['analysis']['risks'] or entry.get('target_risks'):
                     errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
                 for source, row in entry['rows'].items():
+                    if row.get('target', {}).get('visibility_unknown'):
+                        errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
                     if row['status'] not in ('mapped', 'create'):
                         errors.append(scope + ':' + source + ': ' + row['reason'])
                 keys = [row['spec']['target'] for row in entry['rows'].values() if row.get('spec')]
@@ -382,7 +443,7 @@ class ImportWizard:
     def create_field(self, scope, source, row, tracker):
         from mapping_helper import create_dedicated_field, dedicated_field_contract, create_confirmed_field
         proposal = row['creation']
-        profile = self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
+        profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
         if not profile:
             raise ApiError('Configure a verified wizard.field_types template for ' + proposal['semantic_type'])
         definition = deepcopy(profile['definition'])
@@ -458,6 +519,16 @@ class ImportWizard:
             responses=api.get('responses',{})
             success=[value for code,value in responses.items() if str(code).startswith('2') and isinstance(value,dict)]
             if not success:raise ApiError('Item create success response schema missing')
+            from clients.tracker_fields import binding
+            for entry in self.plan['scopes'].values():
+                for row in entry.get('rows', {}).values():
+                    selected = row.get('spec')
+                    if not selected or not selected['target'].startswith('cb_field_'):continue
+                    target = row.get('target', {})
+                    confirmed = selected.get('binding') or binding(self.cb.spec, target)
+                    if not confirmed:
+                        raise ApiError('Field '+str(selected['field_id'])+': valueModel의 writable FieldValue schema 미확인')
+                    selected['binding'] = confirmed
             result={'openapi_source':self.cb.config.get('reused_successful_openapi',self.cb.config.get('discovered_swagger_url')),
                     'item_create':item,'item_get':readback,'request_properties':sorted(schema['properties'])}
             if any(row.get('status')=='create' for entry in self.plan['scopes'].values() for row in entry.get('rows',{}).values()):
@@ -599,6 +670,8 @@ class ImportWizard:
                 mapping = {}
                 actual_fields = target_fields(self.cb, tracker)
                 for source, row in entry['rows'].items():
+                    if row.get('target', {}).get('visibility_unknown'):
+                        errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
                     if row['status'] == 'create':
                         mapping[source] = self.create_field(scope, source, row, tracker)
                     else:

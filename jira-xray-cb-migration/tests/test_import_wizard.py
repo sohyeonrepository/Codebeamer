@@ -49,6 +49,7 @@ class Source:
         if path == '/binary': return b'abc'
         if path == '/rest/api/2/field': return deepcopy(self.definitions)
         if path == '/rest/api/2/project': return [{'key':'P'}]
+        if path.startswith('/rest/api/2/issue/createmeta?'): raise ApiError('HTTP 404')
         if path == '/rest/api/2/project/P': return {'key':'P','issueTypes':self.types}
         if path.startswith('/field-config/'):
             return deepcopy(self.configured)
@@ -389,6 +390,28 @@ class WizardTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError, '표시 상태 미확인'):
             self.wizard.execute(True, visibility_review=review)
 
+    def test_createmeta_scopes_null_fields_without_hiding_values(self):
+        original = self.source.request
+        def metadata(method, path, *args, **kwargs):
+            if path.startswith('/rest/api/2/issue/createmeta?'):
+                return {'projects':[{'key':'P','issuetypes':[{'id':'1','fields':{
+                    'empty':{'name':'Screen empty','schema':{'type':'string'}}}}]}]}
+            return original(method,path,*args,**kwargs)
+        self.source.request=metadata
+        analysis=field_analysis(JiraClient(self.source,{}),'P',self.source.types[0])
+        self.assertIn('empty',analysis['fields'])
+        self.assertIn('summary',analysis['fields'])
+        self.assertEqual(analysis['fields']['empty']['visibility'],'unknown')
+        self.assertEqual(analysis['createmeta_status'],'available')
+
+    def test_manual_selection_survives_restart_and_reanalysis(self):
+        self.plan()
+        self.wizard.manual_mapping('P:1','summary',1,'name',{})
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        self.assertEqual(restarted.plan['scopes']['P:1']['rows']['summary']['spec']['field_id'],1)
+        restarted.analyze('P:1')
+        self.assertEqual(restarted.plan['scopes']['P:1']['rows']['summary']['mapping_mode'],'manual')
+
     def test_new_field_mapping_survives_reanalysis_and_restart(self):
         self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
         self.plan()
@@ -500,7 +523,7 @@ class WizardUITests(unittest.TestCase):
                         combos[3].current(index)
                         button('선택 조합 분석').invoke()
                     combos[3].current(0); button('선택 조합 분석').invoke()
-                    self.assertEqual(tuple(trees[1]['columns']), ('cb','cb_type','status','jira','action'))
+                    self.assertEqual(tuple(trees[1]['displaycolumns']), ('jira','cb'))
                     self.assertIn('Codebeamer', trees[1].heading('cb')['text'])
                     self.assertIn('실제 필드명', trees[1].heading('jira')['text'])
                     self.assertEqual(len(trees[1].get_children()), 3)

@@ -42,7 +42,7 @@ def preflight(cb, settings, plan):
     for entry in plan['scopes'].values():
         for row in entry['rows'].values():
             if row['status'] == 'create':
-                profile = settings.get('wizard', {}).get('field_types', {}).get(row['creation']['semantic_type'])
+                profile = row.get('creation_profile') or settings.get('wizard', {}).get('field_types', {}).get(row['creation']['semantic_type'])
                 if not profile or not profile.get('definition') or not profile.get('binding'):
                     raise ApiError('Missing verified field creation template/binding for ' + row['source'])
                 # Dedicated field creation validates its schema again against the actual Tracker.

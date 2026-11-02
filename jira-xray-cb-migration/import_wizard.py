@@ -129,8 +129,8 @@ def launch(wizard, initial_projects=None):
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
     table = ttk.Treeview(table_frame, columns=('cb','cb_type','status','jira','action'),
-                         displaycolumns=('cb','cb_type','status','jira','action'),show='headings',selectmode='browse')
-    for column,text,width in (('cb','Codebeamer 필드',260),('cb_type','타입',90),('status','매핑 상태',120),
+                         displaycolumns=('jira','cb'),show='headings',selectmode='browse')
+    for column,text,width in (('cb','Codebeamer 대상 필드 ▾',420),('cb_type','타입',90),('status','매핑 상태',120),
                               ('jira','Jira 필드 (실제 필드명)',330),('action','작업',150)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
@@ -171,8 +171,9 @@ def launch(wizard, initial_projects=None):
             row_mode=mode(row);counts['all']+=1;counts[row_mode]=counts.get(row_mode,0)+1
             target = row.get('target', {})
             left = target.get('label', target.get('name', ''))
+            if left: left += ' (' + str(target.get('typeName', target.get('type', '타입 미확인'))) + ')'
             action='매핑 변경'
-            if row_mode=='create':left='-';action='＋ 신규 필드 생성'
+            if row_mode=='create':left='＋ 신규 필드 생성';action='＋ 신규 필드 생성'
             definition=entry['analysis']['fields'][source]
             actual_name=definition.get('name',source)
             right=actual_name+('  ('+source+')' if source.startswith('customfield_') else '')
@@ -192,11 +193,13 @@ def launch(wizard, initial_projects=None):
         labels={'all':'전체','auto':'자동 매핑','manual':'수동 매핑','create':'신규 생성','error':'오류','excluded':'제외'}
         for key,button in filter_buttons.items():button.configure(text=labels[key]+' ('+str(counts.get(key,0))+')')
         risks=entry['analysis']['risks']+entry.get('target_risks',[])
+        api_warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(entry.get('tracker') or entry.get('template_tracker')),{}).get('warnings',[])
         detail.set('조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
         warning.set(('⚠ Hidden 필드에 실제 값이 남아 있어 누락 위험 '+str(len(risks))+'건: '+
                      ', '.join(r['field'] for r in risks)) if risks else '')
         if entry['analysis'].get('visibility_unknown') or entry['analysis'].get('configuration_status') == 'unavailable':
             warning.set(warning.get()+' 표시 상태 미확인: Field Configuration을 확인하지 못한 필드는 수동 검토가 필요합니다.')
+        if api_warnings:warning.set(warning.get()+' · '+'; '.join(api_warnings))
         inspect()
     def analyze():
         if not scopes.get(): raise ValueError('Tracker ↔ Issue Type 조합을 선택하세요.')
@@ -228,7 +231,7 @@ def launch(wizard, initial_projects=None):
             if not manual_button.winfo_manager():manual_button.pack(side='left')
             manual_button.configure(state='disabled')
     table.bind('<<TreeviewSelect>>', inspect)
-    def edit(event=None):
+    def edit(event=None, selected_target=None):
         if not table.selection(): return
         scope = scopes.get(); entry = wizard.plan['scopes'][scope]
         source = scope_rows[table.selection()[0]]
@@ -258,13 +261,17 @@ def launch(wizard, initial_projects=None):
                     choice = ttk.Combobox(value_frame, state='readonly', values=[str(o.get('name',o.get('label',''))) for o in options])
                     choice.pack(fill='x'); choices.append((identity,choice,options))
         box.bind('<<ComboboxSelected>>', fill)
+        chosen = selected_target or entry['rows'][source].get('target')
+        if chosen:
+            index = next((i for i,f in enumerate(fields) if field_identifier(f)==field_identifier(chosen)), None)
+            if index is not None: box.current(index); fill()
         def accept():
             if box.current() < 0: raise ValueError('CB 필드를 선택하세요.')
             target = fields[box.current()]; fid = field_identifier(target)
             bindings = wizard.config['codebeamer'].get('field_bindings', {})
             keys = [k for k,b in bindings.items() if b.get('fieldId') == fid]
             canonical = label_tokens('', target) & {'name','description'}
-            key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else '')
+            key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(fid))
             kind, _ = semantic_type(entry['analysis']['fields'][source], True)
             mapping = dict(wizard.config['migration'].get('user_mapping' if kind == 'user' else 'status_mapping', {}))
             for identity, choice, options in choices:
@@ -281,7 +288,9 @@ def launch(wizard, initial_projects=None):
         if row.get('status')!='create':return
         definition=entry['analysis']['fields'][source]
         source_kind,source_multiple=semantic_type(definition,True)
-        profiles=wizard.config['migration'].get('wizard',{}).get('field_types',{})
+        profiles=wizard.creation_profiles(scope)
+        if not profiles:
+            raise ApiError('검증된 생성 타입이 없습니다. '+ '; '.join(entry.get('creation_diagnostics', [])))
         dialog=tk.Toplevel(root);dialog.title('신규 Codebeamer 필드 생성 설정');dialog.transient(root);dialog.grab_set()
         body=ttk.Frame(dialog,padding=18);body.pack(fill='both',expand=True)
         ttk.Label(body,text='신규 Codebeamer 필드 생성 설정',style='WizardTitle.TLabel').grid(row=0,column=0,columnspan=2,sticky='w',pady=(0,14))
@@ -317,15 +326,46 @@ def launch(wizard, initial_projects=None):
     manual_button.configure(command=lambda:run('수동 매핑',edit))
     create_button.configure(command=lambda:run('신규 필드 설정',create_field_dialog))
     def row_action(event):
-        region=table.identify_region(event.x,event.y);column=table.identify_column(event.x)
-        if region=='cell' and column=='#5':
-            iid=table.identify_row(event.y)
-            if iid:
-                table.selection_set(iid)
-                source=scope_rows[iid]
-                if source is not None:create_field_dialog() if wizard.plan['scopes'][scopes.get()]['rows'][source].get('status')=='create' else edit()
-        elif region=='cell':edit()
-    table.bind('<Double-1>',row_action)
+        if table.identify_region(event.x,event.y) != 'cell' or table.identify_column(event.x) != '#2':return
+        iid = table.identify_row(event.y)
+        if not iid:return
+        table.selection_set(iid)
+        source = scope_rows.get(iid)
+        if source is None:return
+        entry = wizard.plan['scopes'][scopes.get()]
+        kind, multiple = semantic_type(entry['analysis']['fields'][source], True)
+        fields = [f for f in entry['target_fields'] if not hidden(f) and compatible(kind,multiple,f)]
+        labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
+        can_create = entry['rows'][source].get('status') == 'create'
+        if can_create:labels.append('＋ 신규 필드 생성')
+        if not labels:
+            detail.set('호환 후보 없음: Jira '+str(kind)+' / 다중 선택 '+str(multiple)+
+                       '; CB 타입·valueModel·다중 선택 정보 또는 Hidden 여부를 확인하세요.')
+            return
+        bounds = table.bbox(iid, 'cb')
+        if not bounds:return
+        editor = ttk.Combobox(table,state='readonly',values=labels)
+        editor.place(x=bounds[0],y=bounds[1],width=bounds[2],height=bounds[3])
+        editor.focus_set()
+        def selected(event=None):
+            index=editor.current();editor.destroy()
+            if index < 0:return
+            if index == len(fields):run('신규 필드 설정',create_field_dialog);return
+            target=fields[index]
+            if kind in ('option','status','user'):
+                run('값 매핑',lambda:edit(selected_target=target));return
+            bindings=wizard.config['codebeamer'].get('field_bindings',{})
+            keys=[k for k,v in bindings.items() if v.get('fieldId')==field_identifier(target)]
+            canonical=label_tokens('',target)&{'name','description'}
+            key=keys[0] if len(keys)==1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(field_identifier(target)))
+            def save():
+                wizard.manual_mapping(scopes.get(),source,field_identifier(target),key,{})
+                display_scope()
+            run('매핑 저장',save)
+        editor.bind('<<ComboboxSelected>>',selected)
+        editor.bind('<Escape>',lambda event:editor.destroy())
+        editor.bind('<FocusOut>',lambda event:editor.destroy() if editor.winfo_exists() else None)
+    table.bind('<ButtonRelease-1>',row_action)
     def import_now():
         errors = wizard.errors()
         if errors: raise ApiError('\n'.join(errors))

@@ -1,3 +1,31 @@
+# STEP 3 Field API 연결 업데이트
+
+STEP 3은 Jira 필드명 / Codebeamer 대상 두 컬럼입니다. CB 대상 셀을 클릭하면 실제 Field ID와
+이름·타입이 있는 호환 후보 드롭다운이 열립니다. 일반 필드는 선택 즉시 저장하고 Choice는 값 대응을
+확인한 뒤 저장합니다. 매핑 상태·작업 컬럼은 표시하지 않습니다. 매핑과 신규 생성 설정은 상태 폴더에
+저장하며 같은 환경/상태 폴더로 재실행하면 복원합니다.
+
+선택한 Tracker만 `GET /v3/trackers/{trackerId}/fields`, 각 ID의 `.../fields/{fieldId}`,
+`GET /v3/tracker/{trackerId}/configuration`으로 조회합니다. `name`, `type`, `hidden`, `valueModel`,
+`multipleValues`, `options`, `referenceType` 원본을 보관하고 기존 엔진 형식과 병합합니다.
+예를 들어 `OptionChoiceField`는 Choice, `multipleValues`는 다중 선택 여부로 해석합니다.
+상세 조회 실패 시 필드명은 유지하고 HTTP 오류를 표시합니다. Hidden이 불명확한 CB 필드로 실제 Import는 차단합니다.
+
+Jira CreateMeta는 선택 프로젝트와 Issue Type으로 제한합니다. 화면 필드와 실제 값이 있는 추가 필드를
+포함합니다. CreateMeta가 불가능하면 기존 Issue 필드 조회로 대체합니다. 어느 경우에도 CreateMeta를
+Hidden 판정 근거로 사용하지 않습니다.
+
+신규 생성 팝업은 서버의 Configuration과 Field Detail에서 타입 후보를 얻고 기존 생성 계약 검증 함수를
+재사용합니다. `wizard.field_types`가 비어 있어도 확인 가능한 템플릿을 제공합니다. 다만 numeric typeId,
+권한, 생성 schema 또는 writable FieldValue 모델이 확인되지 않은 타입은 활성화하지 않고 원인을 표시합니다.
+`valueModel` 문자열만으로 쓰기 형식을 단정하지 않습니다. 서버 schema의 discriminator 및 value/values
+속성이 확인되어야 자동 binding을 사용합니다. 설정 저장은 로컬에서만 수행하고 실제 POST는 Import 승인 후 실행합니다.
+
+이번 테스트는 사용자가 제공한 문서 응답 형식을 fixture로 사용했으며 실제 고객 서버 응답을 수집한 것은 아닙니다.
+실제 Field 생성·재조회 및 Item 값 적용은 승인된 고객 테스트 서버에서 추가 확인이 필요합니다.
+
+---
+
 # Jira → Codebeamer Import Wizard
 
 ```sh
@@ -10,13 +38,13 @@ Python 3.10+와 Tkinter를 사용합니다. 기존 `mapping_helper.py`, CLI, Run
 ## 화면과 승인 경계
 
 1. **STEP 2**: 프로젝트 조회 → Jira와 기존 CB 프로젝트 선택 → Issue Type / Tracker 조회 → 유형마다 기존 Tracker 또는 신규 Tracker 이름 연결. Issue가 없는 유형도 전체 목록에 포함됩니다. 여러 Jira 프로젝트도 차례로 설정할 수 있습니다.
-2. **STEP 3**: 저장한 Tracker ↔ Issue Type 조합 선택 → 분석. 왼쪽 CB / 오른쪽 Jira의 두 컬럼이며, 선택한 행의 상태·사유는 하단에 표시됩니다. 두 번 클릭하면 대상 및 Choice 값을 수동 연결합니다. 신규 필드는 생성안으로만 표시됩니다.
+2. **STEP 3**: 저장한 Tracker ↔ Issue Type 조합 선택 → 분석. 왼쪽 Jira / 오른쪽 CB 대상의 두 컬럼이며, 선택한 행의 사유는 하단에 표시됩니다. CB 셀을 클릭하면 대상 드롭다운을 열고 Choice 값은 추가로 대응시킵니다. 신규 필드는 생성안으로만 표시됩니다.
 3. **Import…**: 명시적 승인 후에만 쓰기를 켭니다. 분석 이후 변경이 있으면 재분석을 요구합니다. API와 원본 데이터를 사전 확인한 뒤 Tracker/Field를 준비하고 기존 Engine으로 전달합니다. 결과 탭에서 실제 조회·검증·오류를 확인합니다. 종료 시 쓰기 권한은 다시 꺼집니다.
 
 조합 매핑은 `state_dir/wizard/`에 저장됩니다. 실제 Field ID를 반영한 `resolved-mapping`은 재시작 시 자동으로 읽습니다. 프로젝트 변경은 그 프로젝트의 이전 조합을 무효화합니다. 다른 소스/대상 URL에는 같은 상태 디렉터리를 사용할 수 없습니다. 기존 데이터 삭제와 DELETE 요청은 허용하지 않습니다.
 
 STEP 3 화면은 선택한 `Jira Issue Type → Codebeamer Tracker` 조합 하나만 분석하고 표시합니다. 왼쪽은
-Codebeamer 필드, 오른쪽은 Jira API의 실제 필드명이며 custom field는 실제 이름을 먼저 표시하고 ID를 함께
+Jira API의 실제 필드명, 오른쪽은 Codebeamer 대상 필드이며 custom field는 실제 이름을 먼저 표시하고 ID를 함께
 표시합니다. 기존 필드는 Jira/CB 메타데이터로 타입 호환성을 검사하므로 사용자가 Field Type을 선택하지 않습니다.
 자동 매핑·수동 매핑·신규 생성·제외 상태와 검색/필터를 제공합니다. Jira Hidden 필드는 `제외`에 표시하고,
 실제 값이 남아 있으면 별도 누락 위험으로 표시하여 Import를 차단합니다.
