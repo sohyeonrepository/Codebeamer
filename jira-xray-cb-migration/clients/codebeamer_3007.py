@@ -15,14 +15,41 @@ def project_tracker_list(cb):
             return current
     candidates = [{'method':'GET','path':path} for path,methods in cb.spec['paths'].items()
                   if full_list(path) and isinstance(methods.get('get'),dict)]
+    if not candidates:
+        typed = [p for p,m in cb.spec['paths'].items() if re.fullmatch(r'(?:/v3)?/projects/\{(?:projectId|id)\}/trackers/types/\{typeId\}/?',p) and isinstance(m.get('get'),dict)]
+        types = [p for p,m in cb.spec['paths'].items() if re.fullmatch(r'(?:/v3)?/trackers/types/?',p) and isinstance(m.get('get'),dict)]
+        if len(typed) == len(types) == 1:
+            operations['tracker_types_get'] = {'method':'GET','path':types[0]}
+            operations['trackers_get'] = {'method':'GET','path':typed[0], 'aggregate_types':True}
+            return cb.operation('trackers_get')
+        available = ', '.join(p for p,m in cb.spec['paths'].items() if 'tracker' in p.lower() and 'get' in m)
+        raise ApiError('Tracker 목록 조회에 필요한 전체 목록 GET 또는 Tracker Type 목록 GET + 유형별 GET을 Swagger에서 확인하지 못했습니다. typeId를 임의로 지정하지 않습니다. 발견된 Tracker GET 경로: '+available)
     if len(candidates) != 1:
-        raise ApiError('Tracker 전체 목록 GET을 Swagger에서 하나로 확인할 수 없습니다. 유형별 /types/{typeId} API에는 실제 Tracker Type 목록 조회가 추가로 필요합니다. typeId를 임의로 지정하지 않습니다.')
+        raise ApiError('Tracker 전체 목록 GET 경로가 여러 개입니다: '+', '.join(c['path'] for c in candidates))
     selected = candidates[0]
     if configured:
         for key in ('response_path','response_fields'):
             if key in configured:selected[key] = configured[key]
     operations['trackers_get'] = selected
     return cb.operation('trackers_get')
+
+
+def typed_project_trackers(cb, params):
+    """Read real type IDs and merge complete lists; never return partial success."""
+    def rows(value, label):
+        if not isinstance(value,list) or any(not isinstance(r,dict) or type(r.get('id')) is not int for r in value):
+            raise ApiError(label+' 응답은 실제 정수 id가 있는 전체 배열이어야 합니다. 응답 형식 또는 페이지 처리를 확인하세요.')
+        return value
+    types = rows(cb.call('tracker_types_get'), 'Tracker Type GET')
+    merged = {}
+    for type_id in dict.fromkeys(t['id'] for t in types):
+        try:
+            trackers = rows(cb.call('trackers_get',dict(params,typeId=type_id)), '유형별 Tracker GET')
+        except ApiError as exc:
+            raise ApiError('Tracker typeId='+str(type_id)+' 조회 실패; 부분 목록은 표시하지 않습니다: '+str(exc)) from exc
+        for tracker in trackers:
+            merged.setdefault(tracker['id'],tracker)
+    return list(merged.values())
 
 # Product documentation supplied for this integration. Request shapes still come
 # from the connected server; presence here is not a claim of live verification.

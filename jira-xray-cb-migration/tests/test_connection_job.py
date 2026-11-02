@@ -136,3 +136,32 @@ class TrackerDiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError,'typeId'):
             project_tracker_list(cb)
         self.assertNotIn('trackers_get',cb.config['operations'])
+
+    def typed_client(self, prefix=''):
+        from clients.codebeamer_client import CodebeamerClient
+        from clients.codebeamer_3007 import project_tracker_list
+        from unittest.mock import Mock
+        cb=CodebeamerClient(Mock(),{'operations':{}})
+        cb.spec={'paths':{prefix+'/trackers/types':{'get':{}},prefix+'/projects/{id}/trackers/types/{typeId}':{'get':{}}}}
+        project_tracker_list(cb)
+        return cb
+
+    def test_types_are_read_and_trackers_deduplicated_using_selected_project(self):
+        for prefix in ('','/v3'):
+            cb=self.typed_client(prefix)
+            cb.http.request.side_effect=[[{'id':7},{'id':9},{'id':7}], [{'id':21,'name':'A'}], [{'id':21,'name':'A'},{'id':22,'name':'B'}]]
+            self.assertEqual([r['id'] for r in cb.call('trackers_get',{'projectId':123})],[21,22])
+            self.assertEqual([(c.args[0],c.args[1]) for c in cb.http.request.call_args_list], [('GET',prefix+'/trackers/types'),('GET',prefix+'/projects/123/trackers/types/7'),('GET',prefix+'/projects/123/trackers/types/9')])
+
+    def test_partial_type_failure_is_not_success(self):
+        cb=self.typed_client()
+        cb.http.request.side_effect=[[{'id':7},{'id':9}],[{'id':21}],ApiError('HTTP 403')]
+        with self.assertRaisesRegex(ApiError,'typeId=9.*HTTP 403'):
+            cb.call('trackers_get',{'projectId':123})
+
+    def test_unknown_type_response_does_not_invent_ids(self):
+        cb=self.typed_client()
+        cb.http.request.return_value={'items':[{'id':7}],'total':10}
+        with self.assertRaisesRegex(ApiError,'Tracker Type GET'):
+            cb.call('trackers_get',{'projectId':123})
+        self.assertEqual(cb.http.request.call_count,1)

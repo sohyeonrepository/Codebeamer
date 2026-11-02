@@ -71,6 +71,9 @@ class CodebeamerClient:
     def call(self, name, params=None, data=None, raw=False, headers=None):
         operation_name = name
         op = self.operation(name)
+        if name == 'trackers_get' and op.get('aggregate_types') and 'typeId' not in (params or {}):
+            from clients.codebeamer_3007 import typed_project_trackers
+            return typed_project_trackers(self, params or {})
         method = op['method'].upper()
         if method == 'DELETE':
             raise ApiError('Migration never deletes existing target data')
