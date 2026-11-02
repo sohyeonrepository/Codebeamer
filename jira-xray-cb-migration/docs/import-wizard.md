@@ -283,3 +283,36 @@ POST 경로·본문·반환값·최종 GET 결과가 포함됩니다. 인증 헤
 
 현재 자동 테스트는 Components 생성안→다중 Choice 생성→Item 값 변환→GET 비교와 재실행 중복 방지를
 모의 서버로 검증합니다. 실제 고객 CB 서버 접근 설정은 이 환경에 없으므로 실제 생성 성공은 미확인입니다.
+
+## STEP 3-2 Association 매핑
+
+STEP 3에는 `필드 매핑`과 `Association 매핑` 탭이 있습니다. 관계 탭의 `관계 유형 조회 (GET)`은
+Jira `/rest/api/2/issueLinkType`의 issueLinkTypes 전체 배열과 CB `/v3/associations/types` 전체 배열을
+읽습니다. ID/name과 Jira inward/outward가 누락되거나 부분 응답이면 성공 처리하지 않습니다.
+이름이 정확히 일치하는 유일한 CB 유형을 자동 선택하되, CB 방향 라벨도 제공되면 일치해야 합니다.
+사용자는 대상 유형과 방향 반전을 변경하고 저장할 수 있습니다. 새로운 CB Association Type을 생성하지 않습니다.
+
+Jira `A blocks B`의 inward 표기는 원래 outward 방향으로 정규화합니다. 반전 체크는 그 후 한 번 적용합니다.
+모든 Item ID가 확보된 뒤 기존 `preservation.associations` → `record` 경로로 생성/재조회합니다.
+`association_create`는 실제 서버의 POST `/v3/associations` schema 및 body adapter와 연결해야 합니다.
+`association_lookup/get`에는 원본 Link ID 정확 일치와 관계 양쪽 ID/typeId를 검증하는 정규화가 필요합니다.
+POST 경로만 안다고 요청 JSON/lookup 계약을 검증했다고 주장하지 않습니다. 설정이 없으면 명확히 실패합니다.
+
+관계 설정은 `wizard/relation-mapping`에, 조회 근거는 `wizard/relation-catalog`에 저장합니다.
+Import 직전에 유형 목록을 재조회해 삭제된 유형이나 변경된 Jira 방향 라벨을 검사합니다.
+원본 Link Type/방향/대상은 Legacy JSON과 `source-relations`에 보존하며, 대상 Item 미생성·미매핑·재조회
+실패를 완료로 처리하지 않습니다. 기존 정수형 association_types 설정도 호환됩니다.
+
+Reference 방식은 소유 Tracker ID, Reference Field ID, 대상 Tracker ID를 지정합니다.
+서버별로 검증된 `reference_field_get`, `reference_values_get`, `reference_values_update` 작업이 필요합니다.
+이름은 내부 adapter 이름이며 새로 추측한 API 경로가 아닙니다. 실제 Swagger GET/PUT 또는 PATCH에 연결하세요.
+필드 메타데이터는 `{id,hidden:false,multiple:boolean,targetTrackerIds:[...]}`로,
+현재 값은 `{fieldId,values:[{id:ItemID},...]}`로 정규화해야 합니다.
+필드 쓰기 본문은 실제 FieldValue 계약으로 변환하도록 adapter를 설정해야 합니다.
+소유/대상 Item의 실제 Tracker와 방향을 확인하고 기존 참조를 유지하며, 단일 참조가 이미 차 있으면 덮어쓰지 않습니다.
+참조를 추가한 뒤 전체 값을 재조회하고 동일 관계를 재실행해도 추가하지 않습니다.
+
+공식 참조: https://support.ptc.com/help/codebeamer/r3.0/en/codebeamer/user_guide/ug_relation_type_mapping.html
+이번 환경에서 이 문서 조회는 프록시 HTTP 403으로 차단되어 본문을 독립 확인하지 못했습니다.
+고객 서버 접속 정보도 없어 Association/Reference 실서버 생성은 수행하지 않았습니다.
+자동 테스트는 방향 반전·inward/outward 중복 방지·재실행/저장 복원·참조 보존·Tracker 불일치 차단을 검증합니다.

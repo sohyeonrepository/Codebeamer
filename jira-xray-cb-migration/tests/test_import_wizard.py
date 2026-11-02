@@ -307,6 +307,32 @@ class WizardTests(unittest.TestCase):
             rewrite_description('!a.png!',[{'id':'1','filename':'a.png','content':'/one'},
                 {'id':'2','filename':'a.png','content':'/two'}],{'1':'https://cb/a','2':'https://cb/b'})
         with self.assertRaises(ApiError):rewrite_description('!missing.png!',[],{})
+    def test_relation_catalog_save_restore_reverse_and_dedup(self):
+        original=self.source.request
+        link_type={'id':'blocks','name':'Blocks','outward':'blocks','inward':'is blocked by'}
+        def read(method,path,*args,**kwargs):
+            if path=='/rest/api/2/issueLinkType':return {'issueLinkTypes':[deepcopy(link_type)]}
+            return original(method,path,*args,**kwargs)
+        self.source.request=read
+        self.cb.http.request=lambda method,path: [{'id':7,'name':'Blocks'},{'id':8,'name':'Other'}]
+        self.wizard.config['migration']['wizard']['association_types']={}
+        catalog=self.wizard.relation_catalog()
+        self.assertEqual(catalog['jira'][0]['inward'],'is blocked by')
+        self.assertEqual(self.wizard.config['migration']['wizard']['association_types']['blocks']['type_id'],7)
+        self.wizard.save_relation_mapping('blocks',{'type_id':8,'reverse':True})
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        self.assertEqual(restarted.config['migration']['wizard']['association_types']['blocks']['type_id'],8)
+        self.plan()
+        report=self.wizard.execute(True)
+        self.assertTrue(report['complete'],report)
+        links=[r for r in self.cb.records.values() if r['kind']=='association']
+        self.assertEqual(len(links),1)
+        self.assertEqual(links[0]['data']['typeId'],8)
+        self.assertEqual((links[0]['data']['fromItemId'],links[0]['data']['toItemId']),(201,200))
+        self.assertTrue(self.wizard.execute(True)['complete'])
+        self.assertEqual(sum(r['kind']=='association' for r in self.cb.records.values()),1)
+        with self.assertRaises(ApiError):self.wizard.save_relation_mapping('blocks',{'type_id':999})
+
     def test_components_creation_id_mapping_and_item_readback(self):
         source={'id':'components','name':'Components','schema':{'type':'array','items':'component','system':'components'},
                 'hidden':False,'allowedValues':[{'id':'101','name':'ECU'},{'id':'102','name':'Diagnostics'}]}

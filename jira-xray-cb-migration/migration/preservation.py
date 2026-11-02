@@ -220,13 +220,17 @@ def associations(cb, state, bundles, settings):
             if identity in seen:
                 continue
             seen.add(identity)
+            from migration.relation_mapping import normalize
+            state.save('source-relations',identity,{'issue':issue['key'],'link':link})
+            mapping = normalize(settings.get('wizard',{}).get('association_types',{}).get(str(link['type']['id'])))
+            if mapping['reverse']:source_id,target_id=target_id,source_id
             source, target = state.get('item:' + source_id), state.get('item:' + target_id)
             if not source or not target or source[0] != 'done' or target[0] != 'done':
                 raise ApiError('Association target pending; original relation remains in legacy archive')
-            mapping = settings.get('wizard', {}).get('association_types', {})
-            type_id = mapping.get(str(link['type']['id']))
-            if type(type_id) is not int or type_id <= 0:
-                raise ApiError('Missing verified CB Association type for Jira link type ' + str(link['type']['id']))
+            if mapping['mode']=='reference':
+                from migration.relation_mapping import write_reference
+                write_reference(cb,state,identity,source[1]['id'],target[1]['id'],mapping)
+                continue
             body = {'fromItemId': source[1]['id'], 'toItemId': target[1]['id'],
-                    'typeId': type_id}
+                    'typeId': mapping['type_id']}
             record(cb, state, 'association', identity, body, {'itemId': source[1]['id']})

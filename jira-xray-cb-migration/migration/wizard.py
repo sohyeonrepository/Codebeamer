@@ -227,6 +227,9 @@ class ImportWizard:
         if resolved:
             for section in ('project_mapping', 'tracker_mapping', 'field_mapping'):
                 self.config['migration'].setdefault(section, {}).update(resolved.get(section, {}))
+        saved_relations = state.load('wizard','relation-mapping')
+        if saved_relations is not None:
+            self.config['migration'].setdefault('wizard',{})['association_types'] = saved_relations
         self.plan = state.load('wizard', 'plan') or {'version': 1, 'projects': {}, 'scopes': {}, 'stages': []}
         for entry in self.plan['scopes'].values():
             for row in entry.get('rows', {}).values():
@@ -343,6 +346,40 @@ class ImportWizard:
         self.stage('fields:' + scope, {'source': len(analysis['fields']), 'target': len(fields),
                                       'issues': analysis['issue_count'], 'risks': analysis['risks'] + entry['target_risks']})
         return entry
+
+    def relation_catalog(self):
+        from migration.relation_mapping import catalogs
+        catalog = catalogs(self.jira,self.cb)
+        mappings = self.config['migration'].setdefault('wizard',{}).setdefault('association_types',{})
+        for link in catalog['jira']:
+            key=str(link['id'])
+            matches=[t for t in catalog['codebeamer'] if t['name'].strip().casefold()==link['name'].strip().casefold()]
+            if key not in mappings and len(matches)==1:
+                # When direction metadata is supplied, conflicting labels require manual review.
+                target=matches[0]
+                if all(k not in target or target[k]==link[k] for k in ('inward','outward')):
+                    mappings[key]={'mode':'association','type_id':target['id'],'reverse':False,'source_type':deepcopy(link)}
+        self.state.save('wizard','relation-catalog',catalog)
+        self.state.save('wizard','relation-mapping',mappings)
+        return catalog
+
+    def save_relation_mapping(self, source_id, mapping):
+        from migration.relation_mapping import normalize
+        catalog=self.state.load('wizard','relation-catalog')
+        if not catalog:raise ApiError('관계 유형을 먼저 조회하세요.')
+        source=next((t for t in catalog['jira'] if str(t['id'])==str(source_id)),None)
+        if source is None:raise ApiError('Unknown Jira Link Type')
+        selected=normalize(mapping)
+        if selected['mode']=='association' and selected['type_id'] not in [t['id'] for t in catalog['codebeamer']]:
+            raise ApiError('Unknown CB Association Type')
+        if selected['mode']=='reference':
+            from migration.relation_mapping import verify_reference
+            verify_reference(self.cb,selected)
+        selected['source_type']=deepcopy(source)
+        mappings=self.config['migration'].setdefault('wizard',{}).setdefault('association_types',{})
+        mappings[str(source_id)]=selected
+        self.state.save('wizard','relation-mapping',mappings)
+        return selected
 
     def mapping_candidates(self, scope, source):
         entry = self.plan['scopes'][scope]
@@ -647,6 +684,17 @@ class ImportWizard:
             if checked_tracker and target_fields(self.cb, checked_tracker) != entry['target_fields']:
                 raise ApiError('Target configuration changed; analyze again: ' + scope)
         from migration.preservation import preflight
+        if self.state.load('wizard','relation-catalog'):
+            from migration.relation_mapping import catalogs, normalize
+            current_relations=catalogs(jira,self.cb)
+            actual_types={t['id'] for t in current_relations['codebeamer']}
+            source_types={str(t['id']):t for t in current_relations['jira']}
+            for key,value in settings.get('wizard',{}).get('association_types',{}).items():
+                selected=normalize(value)
+                if key not in source_types or (selected.get('source_type') and selected['source_type']!=source_types[key]):
+                    raise ApiError('Jira Link Type changed; review Association mapping: '+key)
+                if selected['mode']=='association' and selected['type_id'] not in actual_types:
+                    raise ApiError('CB Association Type no longer exists: '+key)
         preflight(self.cb, settings, self.plan)
         # Collect every selected bundle (including R4J) before any target write.
         bundles = {}
@@ -682,8 +730,9 @@ class ImportWizard:
                             raise ApiError('Single-Issue live test cannot create Associations to other Items; choose an isolated test Issue or use a separately approved multi-Item scope')
                 for link in issue['fields'].get('issuelinks', []):
                     target_type = settings['wizard'].get('association_types', {}).get(str(link['type']['id']))
-                    if type(target_type) is not int or target_type <= 0:
-                        raise ApiError('Configure wizard.association_types for Jira link type ' + str(link['type']['id']))
+                    from migration.relation_mapping import normalize, verify_reference
+                    relation = normalize(target_type)
+                    if relation['mode']=='reference':verify_reference(self.cb,relation)
                 bundles[issue['key']] = issue
         original_bundle = jira.bundle
         jira.bundle = lambda key: deepcopy(bundles[key]) if key in bundles else original_bundle(key)
