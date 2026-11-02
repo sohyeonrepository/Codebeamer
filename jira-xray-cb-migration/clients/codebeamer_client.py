@@ -69,6 +69,7 @@ class CodebeamerClient:
         return op
 
     def call(self, name, params=None, data=None, raw=False, headers=None):
+        operation_name = name
         op = self.operation(name)
         method = op['method'].upper()
         if method == 'DELETE':
@@ -77,12 +78,16 @@ class CodebeamerClient:
             raise ApiError('Write refused in dry-run')
         context = dict(params or {}, payload=data)
         path_params = dict(params or {})
+        # Bind a generic {id} only for a project-scoped Tracker-list GET.
+        if method == 'GET' and operation_name == 'trackers_get' and re.search(r'/projects/\{id\}/trackers(?:/|$)',op['path']):
+            if 'id' not in path_params and 'projectId' in path_params:
+                path_params['id'] = path_params['projectId']
         for name, template in op.get('path_parameters', {}).items():
             path_params[name] = render(template, context)
         try:
             path = re.sub(r'\{([^}]+)\}', lambda m: segment(path_params[m[1]]), op['path'])
-        except KeyError:
-            raise ApiError('Missing path parameter for configured operation') from None
+        except KeyError as exc:
+            raise ApiError('Missing path parameter for ' + operation_name + ': ' + str(exc.args[0]) + '; path: ' + op['path']) from None
         if op.get('query'):
             query = {k: render(v, context) for k, v in op['query'].items()}
             path += '?' + urllib.parse.urlencode(query, doseq=True)

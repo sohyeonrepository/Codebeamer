@@ -352,7 +352,13 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
     projects=ttk.Combobox(root,state='readonly',width=80);projects.pack(padx=12,pady=10)
     trackers=ttk.Combobox(root,state='readonly',width=80);trackers.pack(padx=12,pady=10)
     status=tk.StringVar(value='테스트용 기존 프로젝트와 Tracker를 선택하세요. 아직 쓰기를 수행하지 않습니다.')
-    ttk.Label(root,textvariable=status,wraplength=650).pack(padx=12,pady=10)
+    message=ttk.Entry(root,textvariable=status,state='readonly',width=95)
+    message.pack(fill='x',padx=12,pady=(10,4))
+    message.bind('<Control-a>',lambda event:(message.selection_range(0,tk.END),'break')[-1])
+    def copy_message():
+        root.clipboard_clear()
+        root.clipboard_append(status.get())
+    ttk.Button(root,text='오류 복사',command=copy_message).pack(anchor='w',padx=12,pady=(0,8))
     selected={}
     def read_operation(cb,name,ids):
         if name not in cb.config.setdefault('operations',{}):

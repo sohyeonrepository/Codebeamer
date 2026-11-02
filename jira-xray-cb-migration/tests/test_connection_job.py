@@ -80,8 +80,11 @@ class ConnectionWindowTests(unittest.TestCase):
                 except Exception as exc:errors.append(exc);window.destroy()
             def verify(window):
                 try:
-                    labels=[window.getvar(w.cget('textvariable')) for w in descendants(window) if isinstance(w,ttk.Label) and w.cget('textvariable')]
+                    labels=[window.getvar(w.cget('textvariable')) for w in descendants(window) if isinstance(w,(ttk.Label,ttk.Entry)) and w.cget('textvariable')]
                     if not any('취소됨' in s for s in labels):raise AssertionError('Cancellation message missing')
+                    copy_button=next(w for w in descendants(window) if isinstance(w,ttk.Button) and w.cget('text')=='오류 복사')
+                    copy_button.invoke()
+                    if '취소됨' not in window.clipboard_get():raise AssertionError('Status copy failed')
                     for w in descendants(window):
                         if isinstance(w,ttk.Combobox) and w.cget('values'):raise AssertionError('Cancelled late list was applied')
                 except Exception as exc:errors.append(exc)
@@ -90,3 +93,25 @@ class ConnectionWindowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory,patch.object(tk,'Tk',Window),patch('clients.codebeamer_client.CodebeamerClient',SlowCB):
             launch_live_setup(config,directory)
         self.assertEqual(errors,[])
+
+
+class TrackerPathTests(unittest.TestCase):
+    def client(self,path):
+        from clients.codebeamer_client import CodebeamerClient
+        http=type('HTTP',(),{'request':lambda self,*a,**k: []})()
+        client=CodebeamerClient(http,{'operations':{'trackers_get':{'method':'GET','path':path}}})
+        client.spec={'paths':{path:{'get':{}}}}
+        return client
+
+    def test_generic_project_id_is_bound_for_tracker_list(self):
+        cb=self.client('/v3/projects/{id}/trackers')
+        with patch.object(cb.http,'request',return_value=[]) as request:
+            cb.call('trackers_get',{'projectId':123})
+        self.assertEqual(request.call_args.args[1],'/v3/projects/123/trackers')
+
+    def test_other_missing_parameter_is_named_and_no_request_is_sent(self):
+        cb=self.client('/v3/projects/{projectId}/trackers/{trackerTypeId}')
+        with patch.object(cb.http,'request') as request:
+            with self.assertRaisesRegex(ApiError,'trackers_get: trackerTypeId'):
+                cb.call('trackers_get',{'projectId':123})
+        request.assert_not_called()
