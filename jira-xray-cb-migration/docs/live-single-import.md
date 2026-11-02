@@ -155,7 +155,10 @@ Tracker Configuration 생성은 기존 Wizard에서 실제 템플릿을 GET하�
 1. **사전 조회 / 요청 확인**을 누릅니다. Summary → Name과 Description → Description을 기본으로 준비합니다.
 2. 왼쪽 CB 필드와 오른쪽 Jira 필드를 선택하고 실제 원본 값 타입을 지정한 뒤 **매핑 저장**을 누릅니다.
    문자열·숫자·Boolean·날짜만 이 제한 테스트에서 지원합니다. 사용자/Choice/참조 및 Xray 테이블을 기본 타입으로 바꾸지 않습니다.
-   CB 필드는 실제 Tracker 필드와 생성 요청 스키마 또는 기존 `field_bindings`에서 확인된 것만 표시합니다.
+   CB의 보이는 실제 Tracker 필드는 모두 표시합니다. Name·Description 같은 기본 속성, 기존 `field_bindings`, 또는
+   서버별 `migration.wizard.field_types.<type>.binding`이 확인된 필드는 매핑할 수 있습니다. `설정 필요`로 표시된
+   custom field는 실제 FieldValue discriminator/value property가 확인되지 않은 상태이므로 선택해도 사전 조회에서
+   차단합니다. 해당 서버에서 검증한 binding을 설정해야 하며 임의 타입으로 변환하지 않습니다.
    Jira 후보는 선택한 Issue 응답에 포함된 필드이며 null 값도 유지합니다. Field Configuration adapter가 있으면
    Hidden 필드를 제외하고 남아 있는 값을 위험으로 보고합니다. 없으면 `source_visibility`에 미확인이라고 표시합니다.
 3. 사전 조회를 다시 실행합니다. `field_mapping`, `unmapped_source_fields`, `attachment_inventory`,

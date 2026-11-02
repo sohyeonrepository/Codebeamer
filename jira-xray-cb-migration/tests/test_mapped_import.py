@@ -41,7 +41,8 @@ class MappedImportTests(unittest.TestCase):
             if method=='GET':
                 if path=='/projects/1':return {'id':1}
                 if path=='/trackers/2':return {'id':2,'project':{'id':1}}
-                if path=='/trackers/2/fields':return [{'id':1,'name':'Name'},{'id':2,'name':'Description'},{'id':3,'name':'Estimated Hours'}]
+                if path=='/trackers/2/fields':return [{'id':1,'name':'Name'},{'id':2,'name':'Description'},{'id':3,'name':'Estimated Hours'},
+                                                       {'id':4,'name':'Unknown Custom','type':'Mystery','multipleSelection':False}]
                 if path=='/items/77':return deepcopy(self.item)
                 if path=='/items/77/attachments':return [{'id':88,'name':'image.png','size':len(self.binary)}] if self.uploaded else []
                 if path=='/items/77/attachments/88/content':return b'corrupt' if self.corrupt else self.binary
@@ -63,6 +64,30 @@ class MappedImportTests(unittest.TestCase):
         self.config={'jira':{'url':'https://jira.test'},'codebeamer':{'url':'https://cb.test'},'single_import':{
             'mapped_attachments':True,'field_mapping':{'summary':{'target':'name','type':'text'},'description':{'target':'description','type':'text'},'estimate':{'target':'estimatedHours','type':'number'}}}}
         self.test=SingleImport(self.jira,self.cb,self.state,self.config,'DEMO-1',1,2)
+
+    def test_all_visible_tracker_fields_are_listed_and_verified_type_template_enables_custom_mapping(self):
+        from mapped_import import targets
+        self.cb.spec={'paths':self.paths}
+        fields=[{'id':1,'name':'Name'}, {'id':90,'name':'Business Value','type':'Integer','multipleSelection':False},
+                {'id':91,'name':'Unknown Custom','type':'Mystery','multipleSelection':False},
+                {'id':92,'name':'Hidden Custom','type':'Text','multipleSelection':False,'hidden':True}]
+        shown=targets(self.test,fields)
+        self.assertIn('name',shown)
+        self.assertIn('unbound_90',shown)
+        self.assertIn('unbound_91',shown)
+        self.assertNotIn('unbound_92',shown)
+        self.config.setdefault('migration',{}).setdefault('wizard',{})['field_types']={
+            'number':{'binding':{'type':'IntegerFieldValue','value_property':'value'}}}
+        self.test.config=self.config
+        shown=targets(self.test,fields)
+        self.assertTrue(shown['cb_field_90']['binding_ready'])
+        self.assertEqual(self.cb.config['field_bindings']['cb_field_90'],
+                         {'fieldId':90,'type':'IntegerFieldValue','value_property':'value'})
+        self.assertFalse(shown['unbound_91']['binding_ready'])
+
+    def test_unbound_visible_custom_field_gives_explicit_blocker(self):
+        self.test.profile['field_mapping']['estimate']['target']='unbound_4'
+        self.assertTrue(any('FieldValue binding' in b['reason'] for b in self.test.prepare()['blockers']))
 
     def test_approval_mapping_upload_inline_hash_and_resume(self):
         report=self.test.prepare()

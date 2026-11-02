@@ -8,7 +8,7 @@ from mapping_helper import request_schema, schema_object, field_identifier
 from migration.fields import payload
 from migration.attachments import transfer
 from migration.preservation import rewrite_description
-from migration.wizard import hidden
+from migration.wizard import hidden, semantic_type
 
 
 def bind_attachment_api(cb):
@@ -79,7 +79,22 @@ def targets(test, fields):
         if not keys:
             keys = [k for k in properties if normalize(k) == normalize(label) and k not in {'id','tracker','project','parent','children','attachments','comments','associations','customFields'}]
         if len(keys) == 1:
-            result[keys[0]] = {'id':fid,'label':label}
+            result[keys[0]] = {'id':fid,'label':label,'binding_ready':True}
+            continue
+        kind, multiple = semantic_type(field)
+        profile = test.config.get('migration',{}).get('wizard',{}).get('field_types',{}).get(kind,{}) if kind else {}
+        binding = profile.get('binding')
+        key = 'cb_field_' + str(fid)
+        if fid is not None and isinstance(binding,dict) and isinstance(binding.get('type'),str) and binding.get('value_property'):
+            actual = deepcopy(binding);actual['fieldId']=fid
+            test.cb.config.setdefault('field_bindings',{})[key]=actual
+            result[key] = {'id':fid,'label':label,'binding_ready':True,'semantic_type':kind,
+                           'multipleSelection':multiple,'binding_source':'migration.wizard.field_types.'+kind}
+        else:
+            # Show the real Tracker field even when it cannot safely be written yet.
+            result['unbound_' + str(fid)] = {'id':fid,'label':label,'binding_ready':False,
+                'semantic_type':kind,'multipleSelection':multiple,
+                'reason':'Codebeamer FieldValue binding이 없습니다. config의 migration.wizard.field_types.'+str(kind)+'.binding 또는 codebeamer.field_bindings가 필요합니다.'}
     return result
 
 
@@ -109,6 +124,8 @@ def prepare(test, body, fields):
         target = spec.get('target')
         if source in hidden_sources or source in {'attachment','comment','issuelinks','worklog'} or target not in available:
             raise ApiError('매핑 대상 필드가 없거나 Hidden/미지원입니다: '+source+' → '+str(target))
+        if not available[target].get('binding_ready'):
+            raise ApiError(available[target]['label']+': '+available[target]['reason'])
         if available[target]['id'] in used:
             raise ApiError('동일 CB 필드에 중복 매핑할 수 없습니다.')
         used.add(available[target]['id'])
@@ -276,7 +293,7 @@ def launch(previous, parent):
         try:
             available=targets(test,test.report.get('readback',{}).get('fields') or [])
             target_keys[:]=list(available)
-            cb_box.configure(values=[available[k]['label']+' / '+k for k in target_keys])
+            cb_box.configure(values=[available[k]['label']+' / '+k+(' / 설정 필요' if not available[k].get('binding_ready') else '') for k in target_keys])
         except (ApiError,KeyError,TypeError): pass
     def invalidate():
         test.report['complete']=False
