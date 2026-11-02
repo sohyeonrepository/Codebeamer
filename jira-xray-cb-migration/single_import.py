@@ -361,6 +361,9 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
     ttk.Button(root,text='오류 복사',command=copy_message).pack(anchor='w',padx=12,pady=(0,8))
     selected={}
     def read_operation(cb,name,ids):
+        if name == 'trackers_get':
+            from clients.codebeamer_3007 import project_tracker_list
+            return project_tracker_list(cb)
         if name not in cb.config.setdefault('operations',{}):
             matches=[{'method':'GET','path':p} for p,methods in cb.spec['paths'].items()
                      for m,o in methods.items() if m.lower()=='get' and isinstance(o,dict) and o.get('operationId') in ids]

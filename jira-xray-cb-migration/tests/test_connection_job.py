@@ -115,3 +115,24 @@ class TrackerPathTests(unittest.TestCase):
             with self.assertRaisesRegex(ApiError,'trackers_get: trackerTypeId'):
                 cb.call('trackers_get',{'projectId':123})
         request.assert_not_called()
+
+
+class TrackerDiscoveryTests(unittest.TestCase):
+    def test_typed_operation_id_is_replaced_with_actual_complete_list(self):
+        from clients.codebeamer_client import CodebeamerClient
+        from clients.codebeamer_3007 import project_tracker_list
+        typed='/projects/{projectId}/trackers/types/{typeId}'
+        full='/projects/{projectId}/trackers'
+        cb=CodebeamerClient(None,{'operations':{'trackers_get':{'method':'GET','path':typed}}})
+        cb.spec={'paths':{typed:{'get':{'operationId':'getTrackers'}},full:{'get':{'operationId':'differentServerName'}}}}
+        self.assertEqual(project_tracker_list(cb)['path'],full)
+
+    def test_type_id_is_not_invented_if_full_list_is_missing(self):
+        from clients.codebeamer_client import CodebeamerClient
+        from clients.codebeamer_3007 import project_tracker_list
+        path='/projects/{projectId}/trackers/types/{typeId}'
+        cb=CodebeamerClient(None,{'operations':{}})
+        cb.spec={'paths':{path:{'get':{'operationId':'getTrackers'}}}}
+        with self.assertRaisesRegex(ApiError,'typeId'):
+            project_tracker_list(cb)
+        self.assertNotIn('trackers_get',cb.config['operations'])

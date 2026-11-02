@@ -1,5 +1,28 @@
 """Bind user-supplied Codebeamer 3.0 API routes only when present in server Swagger."""
 from clients.http import ApiError
+import re
+
+
+def project_tracker_list(cb):
+    """Choose a complete project list by route shape, not operationId alone."""
+    operations = cb.config.setdefault('operations',{})
+    configured = operations.get('trackers_get')
+    def full_list(path):
+        return bool(re.search(r'/projects/\{(?:projectId|id)\}/trackers/?$',path)) and set(re.findall(r'\{([^}]+)\}',path)) <= {'projectId','id'}
+    if configured:
+        current = cb.operation('trackers_get')
+        if current['method'].upper() == 'GET' and full_list(current['path']):
+            return current
+    candidates = [{'method':'GET','path':path} for path,methods in cb.spec['paths'].items()
+                  if full_list(path) and isinstance(methods.get('get'),dict)]
+    if len(candidates) != 1:
+        raise ApiError('Tracker 전체 목록 GET을 Swagger에서 하나로 확인할 수 없습니다. 유형별 /types/{typeId} API에는 실제 Tracker Type 목록 조회가 추가로 필요합니다. typeId를 임의로 지정하지 않습니다.')
+    selected = candidates[0]
+    if configured:
+        for key in ('response_path','response_fields'):
+            if key in configured:selected[key] = configured[key]
+    operations['trackers_get'] = selected
+    return cb.operation('trackers_get')
 
 # Product documentation supplied for this integration. Request shapes still come
 # from the connected server; presence here is not a claim of live verification.
@@ -30,6 +53,10 @@ def bind(cb):
         status[name] = {'documented_method':method,'documented_path':path,'present_in_server_swagger':present}
     if 'fields' not in operations and 'tracker_configuration_get' in operations:
         operations['fields'] = dict(operations['tracker_configuration_get'],response_path='fields')
+    try:
+        project_tracker_list(cb)
+    except ApiError:
+        pass  # Report this capability when the user requests Tracker discovery.
     cb.config['verified_3007_routes'] = status
     return status
 
