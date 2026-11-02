@@ -176,6 +176,7 @@ def launch(wizard, initial_projects=None):
             definition=entry['analysis']['fields'][source]
             actual_name=definition.get('name',source)
             right=actual_name+('  ('+source+')' if source.startswith('customfield_') else '')
+            if definition.get('visibility') == 'unknown':right += ' · 표시 상태 미확인'
             cb_kind,_=semantic_type(target) if target else (None,None)
             if active_filter.get() not in ('all',row_mode):continue
             if query and query not in (left+' '+right+' '+str(cb_kind)).casefold():continue
@@ -194,6 +195,8 @@ def launch(wizard, initial_projects=None):
         detail.set('조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
         warning.set(('⚠ Hidden 필드에 실제 값이 남아 있어 누락 위험 '+str(len(risks))+'건: '+
                      ', '.join(r['field'] for r in risks)) if risks else '')
+        if entry['analysis'].get('visibility_unknown') or entry['analysis'].get('configuration_status') == 'unavailable':
+            warning.set(warning.get()+' 표시 상태 미확인: Field Configuration을 확인하지 못한 필드는 수동 검토가 필요합니다.')
         inspect()
     def analyze():
         if not scopes.get(): raise ValueError('Tracker ↔ Issue Type 조합을 선택하세요.')
@@ -326,10 +329,15 @@ def launch(wizard, initial_projects=None):
     def import_now():
         errors = wizard.errors()
         if errors: raise ApiError('\n'.join(errors))
+        review = wizard.visibility_review()
+        if review and not messagebox.askyesno('표시 상태 미확인 · 범위 검토',
+                '다음 조합의 Hidden 여부 또는 전체 필드 범위를 확인하지 못했습니다: '+', '.join(review)+
+                '\n현재 조회된 필드와 값을 검토했으며 조회되지 않은 필드의 누락 가능성을 확인하고 계속하시겠습니까?'):
+            return
         wizard.ensure_write_contracts()
         if not messagebox.askyesno('Import 승인', '선택한 기존 프로젝트에 Tracker, Field, Item 및 관련 데이터를 실제로 생성합니다. Import를 승인하시겠습니까?'):
             return
-        report = wizard.execute(approved=True)
+        report = wizard.execute(approved=True, visibility_review=review)
         show_evidence(report); tabs.select(step4)
         if not report['complete']: status.set('Import 미완료: 오류·누락·보존 결과를 확인한 후 재시도하세요.')
     footer=ttk.Frame(step3);footer.pack(fill='x',pady=(8,0))

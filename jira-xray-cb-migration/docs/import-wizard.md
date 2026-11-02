@@ -63,9 +63,24 @@ Item/Field/Attachment/Comment/Association/History 계약을 구체적으로 표�
 
 ## 사용 필드 판정
 
-`editmeta`는 Field Configuration과 다릅니다. Wizard는 **실제 배포 환경에서 확인된 Field Configuration 읽기 API**를 요구하며, 없으면 분석 오류를 표시합니다. 각 필드의 `id`와 `hidden`/`isHidden`/`visible` 중 하나의 명시적 boolean이 필요합니다. 이름·스키마는 글로벌 필드 정의와 병합합니다.
+`editmeta`와 `/rest/api/2/field`는 Field Configuration의 Hidden 여부를 증명하지 않습니다.
+`jira.field_configuration`이 설정되어 있으면 선택한 프로젝트·Issue Type으로 기존 전수 조회 adapter를 실행합니다.
+명시적인 `hidden`/`isHidden`/`visible` boolean이 있는 필드만 Hidden/Visible로 판정합니다.
 
-Issue를 유형별로 전수 조회합니다. Field Configuration에 포함된 필드는 모두 null이어도 유지합니다. 설정 범위 밖의 전역 null 필드는 표시하지 않고, 실제 값이 있으면 매핑 대상으로 추가합니다. 표본을 전수 수집으로 간주하지 않습니다. Hidden 원본에 값이 있거나 숨긴 CB 후보와 원본 값이 대응하면 별도 누락 위험으로 보고하고 Import를 중단합니다. 숨긴 CB 필드는 기본 후보에서 제외합니다.
+설정이 없거나 API 호출이 실패해도 STEP 3은 표시됩니다. 기존 `/rest/api/2/field`에서 이름·ID·타입을,
+선택한 Issue Type의 Issue API에서 실제 값을 조회합니다. 설정이 없을 때는 Issue 응답에 나타난 null 필드도
+유지합니다. 전역 필드 목록 전체를 그대로 출력하지는 않습니다. Issue에 나타나지 않는 필드까지 발견했다고
+주장하지 않습니다. 조회 설정 밖에서 실제 값이 발견된 필드도 `표시 상태 미확인`으로 표시합니다.
+
+Hidden이 확인된 필드만 기본 목록에서 제외하며, 값이 있으면 누락 위험으로 Import를 차단합니다.
+미확인 필드는 매핑 검토가 가능하고 Import 전에 현재 분석 범위·누락 가능성에 대한 별도 확인을 요구합니다.
+이 확인은 해당 분석 결과에 한정되며 Import 직전 재조회가 달라지면 재분석을 요구합니다.
+
+Jira Data Center 버전/플러그인별 Field Configuration REST 지원은 배포 문서로 확인해야 합니다.
+이번 작업에서 공식 9.12 REST 문서(`https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/`) 접근은
+환경 프록시의 HTTP 403으로 차단되어 지원 endpoint를 추가 확정하지 못했습니다.
+Cloud의 `/rest/api/3/fieldconfiguration`을 DC 기본 API로 가정하거나 비공개 endpoint를 탐색하지 않습니다.
+검증된 DC/플러그인 GET 계약이 있는 경우 아래 adapter를 설정하면 자동 조회하고, 없으면 수동 검토를 사용합니다.
 
 이름/표준 별칭(Summary → Name, Assignee → Assigned to 등), 확인된 타입 이름, 다중 선택 여부와 값 변환이 모두 맞을 때만 자동 연결합니다. 숫자 typeId만으로 타입을 추정하지 않습니다. 같은 CB 필드를 두 Jira 필드에 연결하지 않습니다. 알 수 없는 타입·사용자 ID·API binding은 수동 확인/설정 오류로 남깁니다. Table/미지원 배열을 Text 등으로 자동 변환하지 않습니다.
 

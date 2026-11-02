@@ -222,8 +222,11 @@ class WizardTests(unittest.TestCase):
         fields=[dict(f,typeName='Integer') if f['id']==1 else f for f in self.cb.definitions]
         self.assertNotEqual(proposals(a,fields,self.config)['summary']['status'],'mapped')
     def test_configuration_adapter_is_required_instead_of_editmeta_guess(self):
-        with self.assertRaisesRegex(ApiError,'Field Configuration'):
-            field_analysis(JiraClient(self.source,{}),'P',self.source.types[0])
+        analysis = field_analysis(JiraClient(self.source,{}),'P',self.source.types[0])
+        self.assertEqual(analysis['configuration_status'], 'unavailable')
+        self.assertEqual(analysis['fields']['summary']['visibility'], 'unknown')
+        self.assertIn('empty', analysis['fields'])
+        self.assertFalse(self.cb.mutations)
     def test_full_import_preserves_history_comments_binary_and_directed_link(self):
         self.plan()
         report=self.wizard.execute(True)
@@ -354,8 +357,37 @@ class WizardTests(unittest.TestCase):
 
     def test_source_visibility_unknown_is_not_assumed_visible(self):
         self.source.configured[0].pop('hidden')
-        with self.assertRaisesRegex(ApiError,'visibility'):self.plan()
+        self.plan()
+        self.assertEqual(self.wizard.plan['scopes']['P:1']['analysis']['fields']['summary']['visibility'], 'unknown')
+        with self.assertRaisesRegex(ApiError,'표시 상태 미확인'):self.wizard.execute(True)
         self.assertFalse(self.cb.mutations)
+
+    def test_unavailable_configuration_keeps_actual_values_and_nulls(self):
+        original = self.source.request
+        def failing(method, path, *args, **kwargs):
+            if path.startswith('/field-config/'):
+                raise ApiError('HTTP 403')
+            return original(method, path, *args, **kwargs)
+        self.source.request = failing
+        analysis = field_analysis(JiraClient(self.source, self.jira_config), 'P', self.source.types[0])
+        self.assertEqual(analysis['configuration_status'], 'unavailable')
+        self.assertIn('summary', analysis['fields'])
+        self.assertIn('empty', analysis['fields'])
+        self.assertEqual(analysis['excluded'], [])
+        self.assertTrue(all(f['visibility'] == 'unknown' for f in analysis['fields'].values()))
+        self.assertFalse(self.cb.mutations)
+
+    def test_unknown_visibility_review_is_bound_to_current_analysis(self):
+        self.source.configured[0].pop('hidden')
+        self.plan()
+        review = deepcopy(self.wizard.visibility_review())
+        with self.assertRaisesRegex(ApiError, '표시 상태 미확인'):
+            self.wizard.execute(True)
+        self.assertFalse(self.cb.mutations)
+        self.assertTrue(self.wizard.execute(True, visibility_review=review)['complete'])
+        review['P:1']['issue_count'] += 1
+        with self.assertRaisesRegex(ApiError, '표시 상태 미확인'):
+            self.wizard.execute(True, visibility_review=review)
 
     def test_new_field_mapping_survives_reanalysis_and_restart(self):
         self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]

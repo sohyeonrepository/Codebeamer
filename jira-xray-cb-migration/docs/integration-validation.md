@@ -18,7 +18,7 @@
 | Jira/CB 프로젝트 조회 | 구현 완료 | 통과 | 이전 빌드에서 사용자 확인 | 성공 기준 커밋 `e1e694b`의 GET 흐름을 `codebeamer_verified_reads.projects/project`로 재사용한다. 현재 변경본은 고객망 재확인이 필요하다. |
 | CB Tracker/Field 조회 | 구현 완료 | 통과 | 이전 빌드에서 사용자 확인 | `codebeamer_verified_reads.trackers/tracker/fields`와 `CodebeamerClient.fields/configuration`을 사용하며 Swagger 실패와 분리했다. |
 | Issue Type별 Tracker 매핑/신규 Tracker 계획 | 구현 완료 | 통과 | 신규 생성 미검증 | 실제 생성은 승인 후에만 수행하며 전체 Configuration 계약과 생성 ID/프로젝트 소속을 재조회한다. |
-| 실제 Jira 필드명, Hidden 분석, 조합별 매핑 | 구현 완료 | 통과 | 미검증 | Field Configuration 또는 검증된 visibility adapter가 없으면 Hidden을 추측하지 않고 차단한다. |
+| 실제 Jira 필드명, Hidden 분석, 조합별 매핑 | 구현 완료 | 통과 | 미검증 | Field Configuration이 없거나 실패하면 표시 상태 미확인으로 매핑을 표시하고 Import 전 현재 분석 범위 검토를 요구한다. |
 | 자동/수동/신규 Field 매핑 | 구현 완료 | 통과 | 신규 생성 미검증 | 신규 Field/Choice는 전체 설정 보존, 실제 schema 검증, ID 재조회가 필요하다. |
 | Item 생성/필드 재조회 | 구현 완료 | 통과 | 이전 빌드에서 Item 1건 사용자 확인 | 사용자가 Summary/Description과 Item 생성을 확인했다. 현재 변경본 및 다른 필드 타입은 고객망 재검증이 필요하다. |
 | Attachment 및 Description 이미지 | 구현 완료 | 통과 | 미검증 | 파일명/크기/SHA-256/재다운로드와 Description 링크를 검증한다. 실제 multipart 계약이 필요하다. |

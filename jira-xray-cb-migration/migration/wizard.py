@@ -53,9 +53,15 @@ def semantic_type(field, jira=False):
 
 def field_analysis(jira, project, issue_type):
     profile = jira.config.get('field_configuration')
-    if not profile:
-        raise ApiError('Configure jira.field_configuration: editmeta does not prove Field Configuration visibility')
-    configured = jira.configured_records(profile, {'projectKey': project, 'issueTypeId': str(issue_type['id'])})
+    configured = []
+    configuration_status = 'unavailable'
+    if profile:
+        try:
+            configured = jira.configured_records(profile, {'projectKey': project, 'issueTypeId': str(issue_type['id'])})
+            configuration_status = 'available'
+        except ApiError:
+            configuration_status = 'unavailable'
+    # Global field metadata and editmeta never establish configuration visibility.
     definitions = {f['id']: f for f in jira.fields()}
     managed = managed_fields(definitions.values(), jira.config.get('xray_run_field'))
     fields = {}
@@ -63,9 +69,9 @@ def field_analysis(jira, project, issue_type):
         key = str(f['id'])
         if key in fields:
             raise ApiError('Duplicate Field Configuration entry')
-        if not any(type(f.get(flag)) is bool for flag in ('hidden', 'isHidden', 'visible')):
-            raise ApiError('Field Configuration must explicitly report field visibility: ' + key)
         fields[key] = dict(definitions.get(key, {}), **f)
+        fields[key]['visibility'] = ('hidden' if hidden(f) else 'visible') if any(
+            type(f.get(flag)) is bool for flag in ('hidden', 'isHidden', 'visible')) else 'unknown'
     # Complete type-specific scan, including nulls; never use a capped sample as coverage.
     reader = JiraClient(jira.http, dict(jira.config, execution_issue_types=[str(issue_type['id'])]))
     values = {}
@@ -80,8 +86,8 @@ def field_analysis(jira, project, issue_type):
             # A full Jira issue response often contains every global field as null.
             # Keep configured null fields, and add unconfigured fields only when
             # real values show they need attention. Configuration drives scope.
-            if key in fields or has_value(value):
-                fields.setdefault(key, definitions.get(key, {'id': key}))
+            if key in fields or has_value(value) or configuration_status == 'unavailable':
+                fields.setdefault(key, dict(definitions.get(key, {'id': key}), visibility='unknown'))
             observations = values.setdefault(key, [])
             if value not in observations:
                 observations.append(value)
@@ -91,7 +97,7 @@ def field_analysis(jira, project, issue_type):
     for key, field in fields.items():
         if key in SPECIAL | CONTEXT | managed:
             continue
-        if hidden(field):
+        if field['visibility'] == 'hidden':
             remaining = any(has_value(v) for v in values.get(key, []))
             excluded.append({'field':key,'name':field.get('name',key),'has_value':remaining})
             if remaining:
@@ -99,6 +105,8 @@ def field_analysis(jira, project, issue_type):
         else:
             visible[key] = field
     return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
+            'configuration_status': configuration_status,
+            'visibility_unknown': sorted(k for k, f in visible.items() if f['visibility'] == 'unknown'),
             'configuration_count': len(configured), 'managed_fields': sorted(managed), 'complete': True}
 
 
@@ -465,10 +473,17 @@ class ImportWizard:
         self.state.save('wizard','write-contracts',result)
         return result
 
-    def execute(self, approved=False):
+    def visibility_review(self):
+        return {scope: entry['analysis'] for scope, entry in self.plan['scopes'].items()
+                if entry.get('analysis', {}).get('visibility_unknown') or
+                entry.get('analysis', {}).get('configuration_status') == 'unavailable'}
+
+    def execute(self, approved=False, visibility_review=None):
         self.cb.write = False
         if approved is not True:
             raise ApiError('Explicit Import approval is required')
+        if self.visibility_review() and visibility_review != self.visibility_review():
+            raise ApiError('표시 상태 미확인: 현재 분석 범위와 누락 가능성을 검토하고 명시적으로 확인하세요.')
         self.ensure_write_contracts()
         errors = self.errors()
         if self.config['jira'].get('single_issue_key') and (len(self.plan['scopes']) != 1 or len(self.plan['projects']) != 1):
@@ -541,6 +556,8 @@ class ImportWizard:
                 bundles[issue['key']] = issue
         original_bundle = jira.bundle
         jira.bundle = lambda key: deepcopy(bundles[key]) if key in bundles else original_bundle(key)
+        if visibility_review:
+            self.state.save('wizard', 'visibility-review', visibility_review)
         self.cb.write = True
         try:
             for scope, entry in self.plan['scopes'].items():

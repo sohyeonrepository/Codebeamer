@@ -16,7 +16,7 @@
 | Swagger/API | 정의 조회 실패·잘못된 문서, 미설정/중복 operationId, 실제 정의에 없는 메서드/경로, GET 계약 불일치, 누락 경로 변수·본문·응답 adapter | 해당 서버 Swagger JSON, 실제 operation과 요청/응답 계약 |
 | 프로젝트/Tracker 목록 | 전체 배열이 아님, 실제 ID/프로젝트 소속 불일치 | `projects_get/project_get/trackers_get/tracker_get`, 전수 목록 adapter |
 | STEP 2 | 프로젝트/유형/Tracker 미선택, 프로젝트 밖 Tracker, 새 이름 누락, 일부 유형 미분석, 실제 Issue 0건 | 프로젝트 전체 Issue Type, 선택 프로젝트의 실제 Tracker 목록과 매핑 |
-| Field Configuration | API 미설정, 중복 필드 ID, visibility 미확인, 유형 필터 무시, 전수 조회/페이지 metadata 불완전 | `jira.field_configuration`, 실제 hidden boolean, Jira 검색 권한·전수 페이지 계약 |
+| Field Configuration | 중복 필드 ID, 유형 필터 무시, Issue 전수 조회/페이지 metadata 불완전; API 미설정/실패 및 visibility 미확인은 검토 확인 필요 | `jira.field_configuration`, 실제 hidden boolean, Jira 검색 권한·전수 페이지 계약 |
 | CB 필드 | 전체 필드/설정 배열 또는 Hidden 메타데이터 없음 | `fields`, `tracker_configuration_get` 또는 지원된 기존 경로의 실제 응답 |
 | 매핑 | Hidden 원본 값/숨긴 대상 대응 위험, 미지원 타입/배열, 이름 모호·타입/다중 선택 충돌, 대상 중복·payload 키 중복, API key/binding 없음, 선택지·사용자 변환 누락 | `field_mapping`, 실제 타입 메타데이터/FieldValue binding, `user_mapping/status_mapping/value_mapping` |
 | 상태/변경 | 다른 URL에 바인딩된 state, 분석 이후 원본/대상 변경 | 같은 환경 전용 state, 재분석 |
