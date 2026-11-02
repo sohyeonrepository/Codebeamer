@@ -13,6 +13,35 @@ from migration.wizard import ImportWizard, field_identifier, semantic_type, hidd
 from mapping_helper import label_tokens, source_choices
 
 
+def relation_tracker_rows(plan):
+    """Keep actual selected-project catalog entries; never infer Tracker IDs."""
+    result={}
+    for project in plan.get('projects',{}).values():
+        for tracker in project.get('trackers',[]):
+            result.setdefault(tracker['id'],tracker)
+    return list(result.values())
+
+
+def reference_field_rows(fields):
+    """Retain actual Reference definitions, including hidden/unverified diagnostics."""
+    return [field for field in fields if semantic_type(field)[0]=='reference' or field.get('reference') is not None]
+
+
+def relation_display(saved, catalog, references):
+    if not saved:return '', '', ''
+    from migration.relation_mapping import normalize
+    value=normalize(saved)
+    mode=value['mode']
+    if mode=='association':
+        label=next((t['name']+' · ID '+str(t['id']) for t in catalog['codebeamer'] if t['id']==value['type_id']),
+                   'Association ID '+str(value['type_id'])+' (목록 미확인)')
+    elif mode=='reference_create':label=value['creation']['label']+' (신규 생성 예정)'
+    else:
+        field=next((f for f in references.get(value['tracker_id'],[]) if field_identifier(f)==value['field_id']),{})
+        label=field.get('label',field.get('name','Reference'))+' · ID '+str(value['field_id'])
+    return label, 'Reference' if mode.startswith('reference') else 'Association', '반전' if value['reverse'] else '유지'
+
+
 def launch(wizard, initial_projects=None):
     import tkinter as tk
     from tkinter import ttk, messagebox
@@ -109,7 +138,7 @@ def launch(wizard, initial_projects=None):
     step3=ttk.Frame(mapping_tabs,padding=4)
     association_tab=ttk.Frame(mapping_tabs,padding=8)
     mapping_tabs.add(step3,text='필드 매핑')
-    mapping_tabs.add(association_tab,text='Association 매핑')
+    mapping_tabs.add(association_tab,text='관계 매핑')
     title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
     ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
     ttk.Label(title,text='선택한 조합의 Jira 필드를 Codebeamer 필드와 매핑합니다.',style='WizardSub.TLabel').pack(anchor='w')
@@ -392,69 +421,193 @@ def launch(wizard, initial_projects=None):
     ttk.Label(footer,text='필드는 Import 승인 후 실제 Codebeamer에 생성됩니다.',style='WizardSub.TLabel').pack(side='left')
     ttk.Button(footer,text='다음 (Import 승인)  ›',command=lambda:run('Import',import_now)).pack(side='right')
     relation_rows={}
-    relation_table=ttk.Treeview(association_tab,columns=('source','direction','target','reverse'),show='headings')
-    for column,label in (('source','Jira Link Type'),('direction','outward / inward'),('target','CB 대상'),('reverse','방향 반전')):
-        relation_table.heading(column,text=label)
-    relation_table.pack(fill='both',expand=True,pady=8)
     relation_catalog=[None]
-    relation_mode=tk.StringVar(value='association')
+    reference_catalog={}
+    relation_trackers=[]
+    reference_fields=[]
+    relation_list=ttk.Frame(association_tab);relation_list.pack(fill='both',expand=True,pady=8)
+    relation_table=ttk.Treeview(relation_list,columns=('source','direction','mode','target','reverse'),show='headings',selectmode='browse')
+    for column,label,width in (('source','Jira Link Type',170),('direction','Outward / Inward',250),
+                               ('mode','CB 매핑 방식',140),('target','CB 대상',300),('reverse','방향',80)):
+        relation_table.heading(column,text=label);relation_table.column(column,width=width,anchor='w')
+    relation_scroll=ttk.Scrollbar(relation_list,orient='vertical',command=relation_table.yview)
+    relation_table.configure(yscrollcommand=relation_scroll.set)
+    relation_scroll.pack(side='right',fill='y');relation_table.pack(side='left',fill='both',expand=True)
+    relation_mode=tk.StringVar(value='')
     relation_reverse=tk.BooleanVar()
-    relation_target=ttk.Combobox(association_tab,state='readonly',width=60)
-    relation_target.pack(anchor='w')
-    ttk.Combobox(association_tab,state='readonly',textvariable=relation_mode,values=['association','reference']).pack(anchor='w',pady=4)
-    ttk.Checkbutton(association_tab,text='정규화된 outward 방향 반전 (inward는 자동으로 방향 정규화)',variable=relation_reverse).pack(anchor='w')
-    reference_inputs={}
-    for key,label in (('tracker_id','Reference 필드 소유 Tracker ID'),('field_id','Reference Field ID'),('target_tracker_id','참조 대상 Tracker ID')):
-        frame=ttk.Frame(association_tab);frame.pack(anchor='w')
-        ttk.Label(frame,text=label,width=32).pack(side='left')
-        reference_inputs[key]=tk.StringVar()
-        ttk.Entry(frame,textvariable=reference_inputs[key],width=20).pack(side='left')
-    ttk.Label(association_tab,text='Reference 방식은 서버에서 확인된 필드 조회·값 조회·쓰기 API 설정과 대상 Tracker 검증이 필요합니다.',wraplength=1000).pack(anchor='w',pady=5)
-    def display_relations():
+    selectors=ttk.Frame(association_tab);selectors.pack(fill='x',pady=4)
+    ttk.Label(selectors,text='CB 매핑 방식').grid(row=0,column=0,sticky='w')
+    mode_box=ttk.Combobox(selectors,state='readonly',textvariable=relation_mode,values=['association','reference'],width=20)
+    mode_box.grid(row=0,column=1,sticky='w',padx=6)
+    ttk.Label(selectors,text='Association Type').grid(row=0,column=2,sticky='w')
+    relation_target=ttk.Combobox(selectors,state='readonly',width=45)
+    relation_target.grid(row=0,column=3,sticky='ew',padx=6)
+    ttk.Label(selectors,text='Reference 소유 Tracker').grid(row=1,column=0,sticky='w')
+    reference_owner=ttk.Combobox(selectors,state='readonly',width=35)
+    reference_owner.grid(row=1,column=1,sticky='ew',padx=6,pady=4)
+    ttk.Label(selectors,text='참조 대상 Tracker').grid(row=1,column=2,sticky='w')
+    reference_destination=ttk.Combobox(selectors,state='readonly',width=45)
+    reference_destination.grid(row=1,column=3,sticky='ew',padx=6,pady=4)
+    ttk.Label(selectors,text='Reference Field').grid(row=2,column=0,sticky='w')
+    reference_target=ttk.Combobox(selectors,state='readonly',width=80)
+    reference_target.grid(row=2,column=1,columnspan=3,sticky='ew',padx=6,pady=4)
+    selectors.columnconfigure(3,weight=1)
+    ttk.Checkbutton(association_tab,text='방향 반전: 정규화된 Jira outward → inward를 반대로 적용',variable=relation_reverse).pack(anchor='w')
+    reference_info=tk.StringVar(value='미매핑 관계는 빈칸으로 유지하며 Import 결과에서 제외 건수와 원본을 확인할 수 있습니다.')
+    ttk.Label(association_tab,textvariable=reference_info,wraplength=1040).pack(anchor='w',pady=4)
+    detail_panel=ttk.Frame(association_tab);detail_panel.pack(fill='x')
+    reference_detail=tk.Text(detail_panel,height=4,wrap='word',state='disabled')
+    detail_scroll=ttk.Scrollbar(detail_panel,orient='vertical',command=reference_detail.yview)
+    reference_detail.configure(yscrollcommand=detail_scroll.set)
+    detail_scroll.pack(side='right',fill='y');reference_detail.pack(side='left',fill='x',expand=True)
+    def set_reference_detail(value):
+        reference_detail.configure(state='normal');reference_detail.delete('1.0','end')
+        reference_detail.insert('end',json.dumps(value,ensure_ascii=False,indent=2));reference_detail.configure(state='disabled')
+    def refresh_relation_trackers():
+        selected_owner=relation_trackers[reference_owner.current()]['id'] if 0<=reference_owner.current()<len(relation_trackers) else None
+        selected_destination=relation_trackers[reference_destination.current()]['id'] if 0<=reference_destination.current()<len(relation_trackers) else None
+        relation_trackers[:]=relation_tracker_rows(wizard.plan)
+        labels=[tracker.get('name',str(tracker['id']))+' · ID '+str(tracker['id']) for tracker in relation_trackers]
+        for box,selected in ((reference_owner,selected_owner),(reference_destination,selected_destination)):
+            box.configure(values=labels);box.set('')
+            index=next((i for i,t in enumerate(relation_trackers) if t['id']==selected),None)
+            if index is not None:box.current(index)
+    def selected_relation_id():
+        selection=relation_table.selection()
+        if not selection or selection[0] not in relation_rows:raise ApiError('Jira Link Type을 선택하세요.')
+        return relation_rows[selection[0]]
+    def display_relations(select_id=None):
         catalog=relation_catalog[0]
         if not catalog:return
         relation_table.delete(*relation_table.get_children());relation_rows.clear()
-        from migration.relation_mapping import normalize
         mappings=wizard.config['migration'].get('wizard',{}).get('association_types',{})
         for index,link in enumerate(catalog['jira']):
-            key=str(link['id']);saved=mappings.get(key);label='선택 필요';reverse=False
-            if saved:
-                value=normalize(saved);reverse=value['reverse']
-                label=next((t['name']+' · ID '+str(t['id']) for t in catalog['codebeamer'] if t['id']==value.get('type_id')),'Reference Field '+str(value.get('field_id')))
+            key=str(link['id']);saved=mappings.get(key)
+            label,mode,direction=relation_display(saved,catalog,reference_catalog)
             iid=str(index);relation_rows[iid]=key
-            relation_table.insert('','end',iid=iid,values=(link['name'],link['outward']+' / '+link['inward'],label,str(reverse)))
+            relation_table.insert('','end',iid=iid,values=(link['name']+' · ID '+key,
+                link['outward']+' / '+link['inward'],mode,label,direction))
+            if key==select_id:relation_table.selection_set(iid)
+    def load_reference_fields(selected_id=None,refresh=False):
+        if reference_owner.current()<0:raise ApiError('Reference 필드가 속한 실제 Tracker를 선택하세요.')
+        tracker=relation_trackers[reference_owner.current()]['id']
+        reference_fields.clear();reference_target.configure(values=[]);reference_target.set('');set_reference_detail({})
+        reference_info.set('Tracker '+str(tracker)+'의 Reference 필드를 조회합니다.')
+        if refresh or tracker not in reference_catalog:
+            from migration.wizard import target_fields
+            reference_catalog[tracker]=reference_field_rows(target_fields(wizard.cb,tracker))
+        reference_fields[:]=reference_catalog[tracker]
+        labels=[field.get('label',field.get('name',str(field_identifier(field))))+' · ID '+str(field_identifier(field))+
+                ' · '+str(field.get('typeName',field.get('type','타입 미확인')))+
+                (' · Hidden' if hidden(field) else '') for field in reference_fields]
+        reference_target.configure(values=labels);reference_target.set('')
+        index=next((i for i,f in enumerate(reference_fields) if field_identifier(f)==selected_id),None)
+        if index is not None:reference_target.current(index)
+        warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(tracker),{}).get('warnings',[])
+        reference_info.set('Tracker '+str(tracker)+'의 실제 Reference 후보 '+str(len(reference_fields))+'개'+
+            (' · '+ '; '.join(warnings) if warnings else '')+
+            (' · Reference 타입/참조 정의를 가진 필드가 없습니다. 새 필드 설정 또는 상세 API 응답을 확인하세요.' if not reference_fields else ''))
+        mappings=wizard.config['migration'].get('wizard',{}).get('association_types',{})
+        for iid,key in relation_rows.items():
+            label,_,_=relation_display(mappings.get(key),relation_catalog[0],reference_catalog)
+            relation_table.set(iid,'target',label)
+        inspect_reference()
+    def inspect_reference(event=None):
+        index=reference_target.current()
+        set_reference_detail(reference_fields[index] if 0<=index<len(reference_fields) else {})
+    reference_target.bind('<<ComboboxSelected>>',inspect_reference)
+    reference_owner.bind('<<ComboboxSelected>>',lambda event:run('Reference Field 조회',lambda:load_reference_fields(refresh=True)))
     def load_relations():
+        selected=relation_rows.get(relation_table.selection()[0]) if relation_table.selection() else None
         relation_catalog[0]=wizard.relation_catalog()
         relation_target.configure(values=[t['name']+' · ID '+str(t['id']) for t in relation_catalog[0]['codebeamer']])
-        display_relations()
+        refresh_relation_trackers();display_relations(selected)
     def select_relation(event=None):
-        if not relation_table.selection():return
+        if not relation_table.selection() or relation_table.selection()[0] not in relation_rows:return
         from migration.relation_mapping import normalize
-        saved=wizard.config['migration'].get('wizard',{}).get('association_types',{}).get(relation_rows[relation_table.selection()[0]])
-        relation_target.set('');relation_reverse.set(False);relation_mode.set('association')
-        for value in reference_inputs.values():value.set('')
+        saved=wizard.config['migration'].get('wizard',{}).get('association_types',{}).get(selected_relation_id())
+        relation_target.set('');relation_reverse.set(False);relation_mode.set('')
+        refresh_relation_trackers();reference_owner.set('');reference_destination.set('');reference_target.set('');reference_target.configure(values=[])
+        reference_fields.clear();set_reference_detail({})
         if not saved:return
-        value=normalize(saved);relation_mode.set(value['mode']);relation_reverse.set(value['reverse'])
-        for key,variable in reference_inputs.items():variable.set(str(value.get(key,'')))
-        index=next((i for i,t in enumerate(relation_catalog[0]['codebeamer']) if t['id']==value.get('type_id')),None)
-        if index is not None:relation_target.current(index)
+        value=normalize(saved);relation_mode.set('reference' if value['mode']=='reference_create' else value['mode']);relation_reverse.set(value['reverse'])
+        for box,key in ((reference_owner,'tracker_id'),(reference_destination,'target_tracker_id')):
+            index=next((i for i,t in enumerate(relation_trackers) if t['id']==value.get(key)),None)
+            if index is not None:box.current(index)
+        if value['mode']=='association':
+            index=next((i for i,t in enumerate(relation_catalog[0]['codebeamer']) if t['id']==value.get('type_id')),None)
+            if index is not None:relation_target.current(index)
+        elif value['mode']=='reference' and reference_owner.current()>=0:
+            run('Reference Field 조회',lambda:load_reference_fields(value.get('field_id')))
+        elif value['mode']=='reference_create':
+            reference_info.set(value['creation']['label']+' (신규 Reference 생성 예정) · Import 승인 후 생성 계약을 검증합니다.')
+            set_reference_detail(value)
     relation_table.bind('<<TreeviewSelect>>',select_relation)
     def save_relation():
-        if not relation_table.selection():raise ApiError('Jira Link Type을 선택하세요.')
+        source_id=selected_relation_id()
         value={'mode':relation_mode.get(),'reverse':relation_reverse.get()}
         if value['mode']=='association':
             if relation_target.current()<0:raise ApiError('CB Association Type을 선택하세요.')
             value['type_id']=relation_catalog[0]['codebeamer'][relation_target.current()]['id']
-        else:value.update({key:int(variable.get()) for key,variable in reference_inputs.items()})
-        wizard.save_relation_mapping(relation_rows[relation_table.selection()[0]],value)
-        display_relations()
-    ttk.Button(association_tab,text='관계 유형 조회 (GET)',command=lambda:run('관계 유형 조회',load_relations)).pack(side='left',pady=8)
-    ttk.Button(association_tab,text='관계 매핑 저장',command=lambda:run('관계 매핑 저장',save_relation)).pack(side='left',padx=8)
+        elif value['mode']=='reference':
+            if reference_owner.current()<0 or reference_destination.current()<0 or reference_target.current()<0:
+                raise ApiError('Reference 소유 Tracker·실제 필드·참조 대상 Tracker를 선택하세요.')
+            value.update(tracker_id=relation_trackers[reference_owner.current()]['id'],
+                         field_id=field_identifier(reference_fields[reference_target.current()]),
+                         target_tracker_id=relation_trackers[reference_destination.current()]['id'])
+        else:raise ApiError('Association 또는 Reference 방식을 직접 선택하세요.')
+        wizard.save_relation_mapping(source_id,value);display_relations(source_id)
+    def clear_relation():
+        source_id=selected_relation_id();wizard.save_relation_mapping(source_id,None);display_relations(source_id)
+        select_relation()
+    def create_relation_reference():
+        source_id=selected_relation_id()
+        if reference_owner.current()<0 or reference_destination.current()<0:
+            raise ApiError('Reference 소유 Tracker와 참조 대상 Tracker를 먼저 선택하세요.')
+        owner=relation_trackers[reference_owner.current()]['id'];destination=relation_trackers[reference_destination.current()]['id']
+        saved=wizard.config['migration'].get('wizard',{}).get('association_types',{}).get(source_id,{})
+        saved_creation=saved.get('creation',{}) if isinstance(saved,dict) else {}
+        dialog=tk.Toplevel(root);dialog.title('신규 Reference 필드 생성 설정');dialog.transient(root);dialog.grab_set()
+        panel=ttk.Frame(dialog,padding=16);panel.pack(fill='both',expand=True)
+        ttk.Label(panel,text='필드 소유 Tracker '+str(owner)+' → 참조 대상 Tracker '+str(destination)).pack(anchor='w')
+        name=tk.StringVar(value=saved_creation.get('label',''))
+        ttk.Label(panel,text='신규 필드 이름').pack(anchor='w',pady=(10,2))
+        ttk.Entry(panel,textvariable=name,width=48).pack(fill='x')
+        multiple=tk.BooleanVar(value=saved_creation.get('multipleSelection',False))
+        ttk.Checkbutton(panel,text='다중 Reference',variable=multiple).pack(anchor='w',pady=8)
+        ttk.Label(panel,text='설정만 저장합니다. 실제 생성은 Import 승인 후 실행합니다.\n검증된 Reference 생성 템플릿·서버 계약이 필요하며 기존 설정/권한을 보존합니다.',wraplength=420).pack(anchor='w')
+        dialog_error=tk.StringVar()
+        ttk.Label(panel,textvariable=dialog_error,foreground='#ad2222',wraplength=420).pack(fill='x',pady=6)
+        def save():
+            try:
+                wizard.save_relation_reference_creation(source_id,owner,name.get().strip(),destination,multiple.get(),relation_reverse.get())
+            except Exception as exc:
+                dialog_error.set(str(exc) if isinstance(exc,(ApiError,ValueError)) else type(exc).__name__)
+                raise
+            display_relations(source_id);dialog.destroy()
+        ttk.Button(panel,text='오류 복사',command=lambda:(dialog.clipboard_clear(),dialog.clipboard_append(dialog_error.get()))).pack(side='left',pady=(12,0))
+        ttk.Button(panel,text='생성 설정 저장',command=lambda:run('Reference 생성 설정',save)).pack(side='right',pady=(12,0))
+        ttk.Button(panel,text='취소',command=dialog.destroy).pack(side='right',padx=6,pady=(12,0))
+    controls=ttk.Frame(association_tab);controls.pack(fill='x',pady=8)
+    ttk.Button(controls,text='관계 유형 조회 (GET)',command=lambda:run('관계 유형 조회',load_relations)).pack(side='left')
+    ttk.Button(controls,text='Reference 필드 새로 조회',command=lambda:run('Reference Field 조회',lambda:load_reference_fields(refresh=True))).pack(side='left',padx=4)
+    ttk.Button(controls,text='＋ 신규 Reference 필드',command=lambda:run('Reference 생성 설정',create_relation_reference)).pack(side='left',padx=4)
+    ttk.Button(controls,text='관계 매핑 저장',command=lambda:run('관계 매핑 저장',save_relation)).pack(side='left',padx=4)
+    ttk.Button(controls,text='매핑 해제 (제외)',command=lambda:run('관계 매핑 해제',clear_relation)).pack(side='left',padx=4)
+    ttk.Button(controls,text='오류 복사',command=lambda:(root.clipboard_clear(),root.clipboard_append(status.get()))).pack(side='right')
     saved_catalog=wizard.state.load('wizard','relation-catalog')
     if saved_catalog:
         relation_catalog[0]=saved_catalog
         relation_target.configure(values=[t['name']+' · ID '+str(t['id']) for t in saved_catalog['codebeamer']])
-        display_relations()
+        refresh_relation_trackers();display_relations()
+    relation_loaded=[False]
+    def relation_tab_opened(event=None):
+        if mapping_tabs.select()!=str(association_tab):return
+        refresh_relation_trackers()
+        if not relation_loaded[0]:
+            relation_loaded[0]=True
+            run('관계 유형 조회',load_relations)
+    mapping_tabs.bind('<<NotebookTabChanged>>',relation_tab_opened)
     root.mainloop()
 
 

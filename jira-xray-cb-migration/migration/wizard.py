@@ -374,14 +374,6 @@ class ImportWizard:
         from migration.relation_mapping import catalogs
         catalog = catalogs(self.jira,self.cb)
         mappings = self.config['migration'].setdefault('wizard',{}).setdefault('association_types',{})
-        for link in catalog['jira']:
-            key=str(link['id'])
-            matches=[t for t in catalog['codebeamer'] if t['name'].strip().casefold()==link['name'].strip().casefold()]
-            if key not in mappings and len(matches)==1:
-                # When direction metadata is supplied, conflicting labels require manual review.
-                target=matches[0]
-                if all(k not in target or target[k]==link[k] for k in ('inward','outward')):
-                    mappings[key]={'mode':'association','type_id':target['id'],'reverse':False,'source_type':deepcopy(link)}
         self.state.save('wizard','relation-catalog',catalog)
         self.state.save('wizard','relation-mapping',mappings)
         return catalog
@@ -392,6 +384,11 @@ class ImportWizard:
         if not catalog:raise ApiError('관계 유형을 먼저 조회하세요.')
         source=next((t for t in catalog['jira'] if str(t['id'])==str(source_id)),None)
         if source is None:raise ApiError('Unknown Jira Link Type')
+        if mapping is None:
+            mappings=self.config['migration'].setdefault('wizard',{}).setdefault('association_types',{})
+            mappings.pop(str(source_id),None)
+            self.state.save('wizard','relation-mapping',mappings)
+            return None
         selected=normalize(mapping)
         if selected['mode']=='association' and selected['type_id'] not in [t['id'] for t in catalog['codebeamer']]:
             raise ApiError('Unknown CB Association Type')
@@ -403,6 +400,35 @@ class ImportWizard:
         mappings[str(source_id)]=selected
         self.state.save('wizard','relation-mapping',mappings)
         return selected
+
+    def save_relation_reference_creation(self, source_id, tracker_id, label, target_tracker_id, multiple, reverse):
+        from clients.codebeamer_client import render
+        from clients.codebeamer_3007 import configuration_field_contract
+        from migration.relation_mapping import normalize
+        catalog=self.state.load('wizard','relation-catalog') or {}
+        source=next((t for t in catalog.get('jira',[]) if str(t['id'])==str(source_id)),None)
+        if source is None:raise ApiError('관계 유형을 먼저 조회하세요.')
+        allowed={t['id'] for project in self.plan['projects'].values() for t in project['trackers']}
+        if tracker_id not in allowed or target_tracker_id not in allowed:
+            raise ApiError('선택한 프로젝트의 실제 Tracker를 선택하세요.')
+        if not isinstance(label,str) or not label.strip():raise ApiError('신규 Reference 필드 이름이 필요합니다.')
+        if type(multiple) is not bool or type(reverse) is not bool:raise ApiError('단일/다중 및 방향 설정이 필요합니다.')
+        profile=deepcopy(self.config['migration'].get('wizard',{}).get('field_types',{}).get('reference',{}))
+        if not isinstance(profile.get('reference_template'),dict) or not profile.get('definition'):
+            raise ApiError('신규 Reference 생성에는 검증된 field_types.reference.definition/reference_template이 필요합니다. 서버 참조 설정을 추측하지 않습니다.')
+        definition=deepcopy(profile['definition'])
+        if any(key in definition for key in ('id','fieldId','referenceId')):raise ApiError('새 Reference Field ID는 서버가 부여해야 합니다.')
+        definition.update(label=label.strip(),multipleSelection=multiple,
+            reference=render(profile['reference_template'],{'targetTrackerId':target_tracker_id}))
+        if self.cb.spec is None:self.cb.discover()
+        configuration_field_contract(self.cb,definition,tracker_id)
+        mapping={'mode':'reference_create','tracker_id':tracker_id,'target_tracker_id':target_tracker_id,
+                 'reverse':reverse,'source_type':deepcopy(source),
+                 'creation':{'label':label.strip(),'multipleSelection':multiple,'definition':definition}}
+        normalize(mapping)
+        self.config['migration'].setdefault('wizard',{}).setdefault('association_types',{})[str(source_id)]=mapping
+        self.state.save('wizard','relation-mapping',self.config['migration']['wizard']['association_types'])
+        return mapping
 
     def mapping_candidates(self, scope, source):
         entry = self.plan['scopes'][scope]
@@ -815,17 +841,6 @@ class ImportWizard:
                     raise ApiError('Target configuration changed; analyze again: ' + scope)
 
         from migration.preservation import preflight
-        if self.state.load('wizard','relation-catalog'):
-            from migration.relation_mapping import catalogs, normalize
-            current_relations=catalogs(jira,self.cb)
-            actual_types={t['id'] for t in current_relations['codebeamer']}
-            source_types={str(t['id']):t for t in current_relations['jira']}
-            for key,value in settings.get('wizard',{}).get('association_types',{}).items():
-                selected=normalize(value)
-                if key not in source_types or (selected.get('source_type') and selected['source_type']!=source_types[key]):
-                    raise ApiError('Jira Link Type changed; review Association mapping: '+key)
-                if selected['mode']=='association' and selected['type_id'] not in actual_types:
-                    raise ApiError('CB Association Type no longer exists: '+key)
         preflight(self.cb, settings, self.plan)
         # Collect every selected bundle (including R4J) before any target write.
         bundles = {}
@@ -852,18 +867,8 @@ class ImportWizard:
                 rewrite_description(issue['fields'].get('description'), files,
                                     {str(a['id']): 'https://target.invalid/' + str(a['id']) for a in files})
                 runs[issue['key']] = xray.runs(issue, run_field)
-                if config['jira'].get('single_issue_key'):
-                    if runs[issue['key']]:
-                        raise ApiError('Single-Issue live test cannot write Xray Runs into a separately configured Tracker; dedicated Run/dependency scope is required')
-                    for link in issue['fields'].get('issuelinks',[]):
-                        other = link.get('inwardIssue') or link.get('outwardIssue')
-                        if not other or str(other.get('id')) != str(issue['id']):
-                            raise ApiError('Single-Issue live test cannot create Associations to other Items; choose an isolated test Issue or use a separately approved multi-Item scope')
-                for link in issue['fields'].get('issuelinks', []):
-                    target_type = settings['wizard'].get('association_types', {}).get(str(link['type']['id']))
-                    from migration.relation_mapping import normalize, verify_reference
-                    relation = normalize(target_type)
-                    if relation['mode']=='reference':verify_reference(self.cb,relation)
+                if config['jira'].get('single_issue_key') and runs[issue['key']]:
+                    raise ApiError('Single-Issue live test cannot write Xray Runs into a separately configured Tracker; dedicated Run/dependency scope is required')
                 bundles[issue['key']] = issue
         from migration.relation_mapping import issue_references, verify_reference
         identities={identity:issue for issue in bundles.values() for identity in (str(issue['id']),issue['key'])}
@@ -979,6 +984,7 @@ class ImportWizard:
             xray.runs = lambda issue, field: deepcopy(runs[issue['key']])
             report = Engine(jira, xray, self.cb,
                             self.state, settings, True).migrate()
+            self.config['migration']['wizard']['association_types']=deepcopy(settings['wizard'].get('association_types',{}))
             for scope,entry in self.plan['scopes'].items():
                 for source,row in entry['rows'].items():
                     if row.get('creation_stage') and report.get('complete'):

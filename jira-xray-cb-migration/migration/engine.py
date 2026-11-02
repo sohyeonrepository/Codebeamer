@@ -238,7 +238,10 @@ class Engine:
         if self.wizard:
             from migration.preservation import associations
             try:
-                associations(self.cb, self.state, bundles, self.settings)
+                relation_report=associations(self.cb, self.state, bundles, self.settings)
+                self.report['relations']=relation_report
+                for relation in relation_report['relations']:
+                    if relation['status']=='failed':self.error('relation:'+relation['jira_link_id'],ApiError(relation['error']))
                 from migration.relation_mapping import picker_references
                 picker_references(self.cb,self.state,bundles,self.settings)
             except (ApiError, KeyError, ValueError) as exc:

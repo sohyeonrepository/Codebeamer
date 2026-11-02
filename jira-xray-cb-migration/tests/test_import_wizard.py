@@ -387,7 +387,7 @@ class WizardTests(unittest.TestCase):
         self.wizard.config['migration']['wizard']['association_types']={}
         catalog=self.wizard.relation_catalog()
         self.assertEqual(catalog['jira'][0]['inward'],'is blocked by')
-        self.assertEqual(self.wizard.config['migration']['wizard']['association_types']['blocks']['type_id'],7)
+        self.assertEqual(self.wizard.config['migration']['wizard']['association_types'],{})
         self.wizard.save_relation_mapping('blocks',{'type_id':8,'reverse':True})
         restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
         self.assertEqual(restarted.config['migration']['wizard']['association_types']['blocks']['type_id'],8)

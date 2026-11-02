@@ -16,8 +16,7 @@ from validation.compare_fields import compare_fields
 def preflight(cb, settings, plan):
     required = ['project_get', 'tracker_get', 'trackers_get', 'item_create', 'item_get', 'item_update', 'lookup',
                 'attachment_upload', 'attachment_get', 'attachment_lookup', 'attachment_metadata_get', 'attachment_url_get',
-                'comment_lookup', 'comment_create', 'comment_get',
-                'association_lookup', 'association_create', 'association_get']
+                'comment_lookup', 'comment_create', 'comment_get']
     if any(e.get('new_tracker') for e in plan['scopes'].values()):
         required.extend(['tracker_create', 'tracker_lookup'])
         op = cb.operation('tracker_create')
@@ -207,30 +206,5 @@ def attachments(cb, state, source_http, issue, item_id, mapping, settings):
 
 
 def associations(cb, state, bundles, settings):
-    # Both incoming and outgoing representations normalize to the same directed edge.
-    seen = set()
-    for _, issue in bundles:
-        for link in issue['fields'].get('issuelinks', []):
-            inward = 'inwardIssue' in link
-            other = link.get('inwardIssue') if inward else link.get('outwardIssue')
-            if not other:
-                raise ApiError('Linked Issue lacks direction/target')
-            source_id, target_id = (str(other['id']), str(issue['id'])) if inward else (str(issue['id']), str(other['id']))
-            identity = str(link['id'])
-            if identity in seen:
-                continue
-            seen.add(identity)
-            from migration.relation_mapping import normalize
-            state.save('source-relations',identity,{'issue':issue['key'],'link':link})
-            mapping = normalize(settings.get('wizard',{}).get('association_types',{}).get(str(link['type']['id'])))
-            if mapping['reverse']:source_id,target_id=target_id,source_id
-            source, target = state.get('item:' + source_id), state.get('item:' + target_id)
-            if not source or not target or source[0] != 'done' or target[0] != 'done':
-                raise ApiError('Association target pending; original relation remains in legacy archive')
-            if mapping['mode']=='reference':
-                from migration.relation_mapping import write_reference
-                write_reference(cb,state,identity,source[1]['id'],target[1]['id'],mapping)
-                continue
-            body = {'fromItemId': source[1]['id'], 'toItemId': target[1]['id'],
-                    'typeId': mapping['type_id']}
-            record(cb, state, 'association', identity, body, {'itemId': source[1]['id']})
+    from migration.relation_mapping import migrate_relations
+    return migrate_relations(cb,state,bundles,settings)

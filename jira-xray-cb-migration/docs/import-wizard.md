@@ -230,7 +230,7 @@ Swagger의 유일한 Field 전용 생성 API를 기존 helper로 검증합니다
 
 - **Attachment**: 파일명·크기와 재다운로드 SHA-256을 대조합니다. Jira Wiki의 `!filename!`, 원본 첨부 URL 및 `/secure/attachment/{id}/...`를 CB URL로 변환해 Description을 재조회합니다. 같은 이름의 모호한 첨부, 인벤토리에 없는 이미지, 미지원 structured rich text는 오류입니다. 외부 출처의 이미지를 임의로 다운로드하지 않습니다.
 - **Comment**: 전체 본문을 CB Comment에 생성합니다. 정규화 payload는 `{body}`입니다. 원본 작성자·작성일·수정일을 포함한 전체 원본은 Item에 연결된 JSON archive에도 보존합니다. Native 작성자/시각을 복원했다고 표시하지 않습니다.
-- **Linked Issue**: 모든 Item ID가 준비된 뒤 Association을 생성합니다. `wizard.association_types`로 Jira Link Type ID → 실제 CB Association Type ID를 명시합니다. 정규화 payload는 `fromItemId/toItemId/typeId`입니다. inward 관계는 양 끝을 반전하며 같은 Jira link ID는 한 번 처리합니다. 원본 타입의 ID/이름/inward/outward와 표현할 수 없는 정보는 JSON에 보존합니다. 범위 밖 대상이나 타입 미설정은 미완료/오류로 보고합니다.
+- **Linked Issue**: 모든 Item ID가 준비된 뒤 Association을 생성합니다. `wizard.association_types`로 Jira Link Type ID → 실제 CB Association Type ID를 명시합니다. 정규화 payload는 `fromItemId/toItemId/typeId`입니다. inward 관계는 양 끝을 반전하며 같은 Jira link ID는 한 번 처리합니다. 원본 타입의 ID/이름/inward/outward와 표현할 수 없는 정보는 JSON에 보존합니다. 선택하지 않은 타입은 제외 건수로 보고합니다. 선택한 관계의 범위 밖 대상은 명시적 Item 매핑이 없으면 오류로 보고합니다.
 - **History / R4J**: 각 CB Item에 `jira-legacy-<sourceId>-<hash>.json`을 첨부합니다. CB Item의 첨부에서 별도로 조회할 수 있는 **Legacy History**이며, CB가 생성한 Native History와 구분합니다. Jira History의 변경 전후 값·작성자·시각·필드, 댓글, 관계, 원본 필드 및 R4J Revision/Baseline을 저장합니다. 바이너리 및 JSON 전체 일치와 History/변경/R4J 건수를 검증합니다. `report.json`의 `legacy_history`에 비교 건수를 기록합니다. Native 작성자·시각 복원 플래그는 false입니다.
 
 Wizard는 Legacy 보존을 기본으로 합니다. 기존 `history_replay.py`는 `wizard.native_replay: true`일 때 재사용하며 기존 scalar adapter가 필요합니다. 이때도 Native 작성자·시간 복원은 미검증으로 보고합니다. Legacy History는 별도의 웹 뷰어나 CB 플러그인이 아니라 Item 첨부 JSON으로 제공됩니다.
@@ -301,12 +301,12 @@ POST 경로·본문·반환값·최종 GET 결과가 포함됩니다. 인증 헤
 현재 자동 테스트는 Components 생성안→다중 Choice 생성→Item 값 변환→GET 비교와 재실행 중복 방지를
 모의 서버로 검증합니다. 실제 고객 CB 서버 접근 설정은 이 환경에 없으므로 실제 생성 성공은 미확인입니다.
 
-## STEP 3-2 Association 매핑
+## STEP 3-2 관계 매핑
 
-STEP 3에는 `필드 매핑`과 `Association 매핑` 탭이 있습니다. 관계 탭의 `관계 유형 조회 (GET)`은
+STEP 3에는 `필드 매핑`과 `관계 매핑` 탭이 있습니다. 관계 탭의 `관계 유형 조회 (GET)`은
 Jira `/rest/api/2/issueLinkType`의 issueLinkTypes 전체 배열과 CB `/v3/associations/types` 전체 배열을
 읽습니다. ID/name과 Jira inward/outward가 누락되거나 부분 응답이면 성공 처리하지 않습니다.
-이름이 정확히 일치하는 유일한 CB 유형을 자동 선택하되, CB 방향 라벨도 제공되면 일치해야 합니다.
+이름이 같아도 자동 선택하지 않습니다. 매핑하지 않은 대상은 빈칸으로 유지합니다.
 사용자는 대상 유형과 방향 반전을 변경하고 저장할 수 있습니다. 새로운 CB Association Type을 생성하지 않습니다.
 
 Jira `A blocks B`의 inward 표기는 원래 outward 방향으로 정규화합니다. 반전 체크는 그 후 한 번 적용합니다.
@@ -316,7 +316,7 @@ Jira `A blocks B`의 inward 표기는 원래 outward 방향으로 정규화합�
 POST 경로만 안다고 요청 JSON/lookup 계약을 검증했다고 주장하지 않습니다. 설정이 없으면 명확히 실패합니다.
 
 관계 설정은 `wizard/relation-mapping`에, 조회 근거는 `wizard/relation-catalog`에 저장합니다.
-Import 직전에 유형 목록을 재조회해 삭제된 유형이나 변경된 Jira 방향 라벨을 검사합니다.
+관계 처리 시 실제 Association 유형과 원본 링크의 저장된 방향 메타데이터를 검사합니다.
 원본 Link Type/방향/대상은 Legacy JSON과 `source-relations`에 보존하며, 대상 Item 미생성·미매핑·재조회
 실패를 완료로 처리하지 않습니다. 기존 정수형 association_types 설정도 호환됩니다.
 
@@ -397,3 +397,30 @@ Configuration schema 및 기존 설정 보존 계약을 재확인합니다. 확�
 실제 Reference 값 쓰기에는 앞 절의 reference_field_get/values_get/values_update adapter가 필요합니다.
 참조 대상 Tracker·방향·단일/다중을 확인하며 기존 참조를 보존합니다. 이번 환경에서는 고객 서버에 접근하지
 못해 실제 Reference 생성/값 이관과 Association 생성은 미검증입니다. 자동 테스트 결과만으로 실서버 성공을 주장하지 않습니다.
+
+
+## 관계 범위 처리 검증 (2026-11-03)
+
+사용자가 선택한 Link Type ID만 처리합니다. 양쪽 Issue에서 수집한 같은 Link ID는 하나로
+정규화하며, 방향이 모순되면 오류를 기록합니다. 한 관계가 실패해도 다른 관계 처리는 계속합니다.
+`report.json`의 `relations`에는 source/selected/verified/excluded/failed 및 개별 ID·방향·오류가
+기록됩니다. `source = verified + excluded + failed`를 확인합니다. 원본은 source-relations와
+Item Legacy JSON에도 보존합니다. 제외는 성공 생성 건수에 포함하지 않습니다.
+
+범위 밖 Issue는 `migration.wizard.external_item_mapping`에 실제 Jira ID 또는 Key를 키로,
+CB Item 정수 ID를 값으로 명시한 경우에만 사용합니다. 대상 Item GET으로 ID를 검증합니다.
+빈 Item을 임의로 생성하지 않습니다. 외부 Item을 Reference 소유자로 선택하면 그 Item의
+참조값을 수정하므로 승인한 테스트 범위의 Item만 지정하세요.
+
+Reference 후보는 선택한 프로젝트의 실제 Tracker 필드에서 조회합니다. 소유 Tracker와 대상
+Tracker를 실제 Item GET 결과와 대조합니다. 단일 필드에 여러 대상이 선택되면 값 쓰기 전에
+해당 관계 모두 실패 처리합니다. 기존 다중 참조는 보존하며 추가 후 재조회합니다.
+신규 Reference는 기존 Configuration 생성 helper를 사용하며 Import 승인 후에만 생성합니다.
+생성 후 실제 Field ID를 저장하고, 응답 유실 시 저장한 원본 Configuration과 서버 결과를
+비교하여 중복 POST를 방지합니다. 정의 생성 계약과 Reference 값 쓰기 계약은 별도입니다.
+
+전체 자동 회귀 테스트: 229개 실행, 223개 통과, 6개 건너뜀. 모의 HTTP/API 검증이며
+실제 Tk 화면 상호작용은 DISPLAY 부재로 실행하지 못했습니다. 고객 Jira/Codebeamer 접속
+설정이 없어 실제 Association POST, Reference 생성/값 쓰기와 서버 재조회는 미검증입니다.
+서버별 association_lookup/create/get 및 reference_* 계약이 없으면 해당 관계를 실패로
+보고합니다. 이번 변경은 관계 범위에 한정하며 Choice·필드 부분 Import 개선은 별도 작업입니다.
