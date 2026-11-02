@@ -227,7 +227,7 @@ class SwaggerEditorDiscoveryTests(unittest.TestCase):
             if isinstance(value,Exception):raise value
             if value is None:raise ApiError('GET request failed: HTTP 404')
             if isinstance(value,bytes):return value
-            return json.dumps(value).encode()
+            return json.dumps(value).encode() if raw else value
 
     def test_cb_api_base_reads_editor_link_and_actual_same_origin_json(self):
         from clients.codebeamer_client import CodebeamerClient
@@ -237,8 +237,17 @@ class SwaggerEditorDiscoveryTests(unittest.TestCase):
         cb=CodebeamerClient(http,{'operations':{}});cb.discover()
         self.assertEqual(cb.spec,spec)
         self.assertEqual(cb.config['discovered_swagger_url'],'https://cb.test/cb/v3/swagger/openapi.json')
-        editor_index=next(i for i,c in enumerate(http.calls) if c[1].endswith('/editor.spr'))
-        self.assertTrue(all('/cb/' in c[1] and '/cb/api/' not in c[1] for c in http.calls[:editor_index+1]))
+        self.assertTrue(any(c[1].endswith('/cb/v3/swagger/editor.spr') for c in http.calls))
+
+    def test_successful_build_legacy_v2_discovery_sequence_is_preserved(self):
+        from clients.codebeamer_client import CodebeamerClient
+        spec={'swagger':'2.0','paths':{'/projects':{'get':{}}}}
+        http=self.HTTP({'/cb/api/v2/api-docs':spec})
+        cb=CodebeamerClient(http,{'operations':{}});cb.discover()
+        self.assertEqual(cb.spec,spec)
+        self.assertEqual(cb.config['discovered_swagger_url'],'https://cb.test/cb/api/v2/api-docs')
+        self.assertEqual([urllib.parse.urlsplit(c[1]).path for c in http.calls[:2]],
+                         ['/cb/api/v3/api-docs','/cb/api/v2/api-docs'])
 
     def test_supplied_editor_url_and_embedded_openapi_are_supported(self):
         from clients.codebeamer_client import CodebeamerClient
@@ -256,6 +265,24 @@ class SwaggerEditorDiscoveryTests(unittest.TestCase):
                             {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
         cb.discover();self.assertEqual(cb.config['discovered_swagger_url'],'https://cb.test/cb/contracts/v3')
 
+    def test_editor_external_initializer_script_is_read_to_find_spec(self):
+        from clients.codebeamer_client import CodebeamerClient
+        spec={'swagger':'2.0','paths':{'/v3/items':{'get':{}}}}
+        page=b'<script src="/cb/v3/swagger/swagger-initializer.js"></script>'
+        script=b'window.onload=function(){SwaggerUIBundle({url:"/cb/contracts/openapi"})}'
+        cb=CodebeamerClient(self.HTTP({'/cb/v3/swagger/editor.spr':page,
+            '/cb/v3/swagger/swagger-initializer.js':script,'/cb/contracts/openapi':spec}),
+            {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        cb.discover();self.assertEqual(cb.spec,spec)
+
+    def test_html_escaped_embedded_spec_is_supported(self):
+        from clients.codebeamer_client import CodebeamerClient
+        spec={'openapi':'3.0.0','paths':{'/v3/items':{'get':{}}}}
+        escaped=__import__('html').escape(json.dumps(spec)).encode()
+        cb=CodebeamerClient(self.HTTP({'/cb/v3/swagger/editor.spr':b'<textarea>'+escaped+b'</textarea>'}),
+            {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        cb.discover();self.assertEqual(cb.spec,spec)
+
     def test_cross_origin_or_linkless_html_fails_without_following_it(self):
         from clients.codebeamer_client import CodebeamerClient
         page=b'<script>SwaggerUIBundle({url:"https://evil.test/openapi.json"})</script>'
@@ -264,6 +291,14 @@ class SwaggerEditorDiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError,'HTML did not expose'):
             cb.discover()
         self.assertFalse(any('evil.test' in call[1] for call in http.calls))
+
+    def test_login_html_is_reported_as_authentication_problem(self):
+        from clients.codebeamer_client import CodebeamerClient
+        page=b'<html><form action="login"><input type="password"></form></html>'
+        cb=CodebeamerClient(self.HTTP({'/cb/v3/swagger/editor.spr':page}),
+                            {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        with self.assertRaisesRegex(ApiError,'login page.*Basic credentials'):
+            cb.discover()
 
     def test_invalid_swagger_file_has_controlled_error(self):
         from clients.codebeamer_client import CodebeamerClient

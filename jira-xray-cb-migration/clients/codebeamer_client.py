@@ -23,7 +23,11 @@ class CodebeamerClient:
             else:
                 self.spec,self.config['discovered_swagger_url'] = self._discover_from_urls([location])
         else:
-            self.spec,self.config['discovered_swagger_url'] = self._discover_from_urls(self._swagger_candidates())
+            legacy=self._legacy_discover()
+            if legacy:
+                self.spec,self.config['discovered_swagger_url']=legacy
+            else:
+                self.spec,self.config['discovered_swagger_url'] = self._discover_from_urls(self._swagger_candidates())
         if not isinstance(self.spec,dict) or not isinstance(self.spec.get('paths'), dict):
             raise ApiError('Not an OpenAPI/Swagger document')
         if self.config.get('profile') == '3.0.0.7':
@@ -32,6 +36,17 @@ class CodebeamerClient:
         return [{'path': p, 'method': m.upper(), 'operationId': op.get('operationId')}
                 for p, methods in self.spec['paths'].items() for m, op in methods.items()
                 if m.lower() in ('get', 'post', 'put', 'patch', 'delete')]
+
+    def _legacy_discover(self):
+        """Preserve the exact discovery sequence used by the successful live-import build."""
+        base=urllib.parse.urlsplit(self.http.base)
+        parents=[base.path.rstrip('/'),base.path.rstrip('/').rsplit('/',1)[0]]
+        for parent in dict.fromkeys(parents):
+            for suffix in ('/v3/api-docs','/v2/api-docs','/swagger.json','/api-docs'):
+                candidate=urllib.parse.urlunsplit((base.scheme,base.netloc,parent+suffix,'',''))
+                try:spec=self.http.request('GET',candidate)
+                except (ApiError,ValueError):continue
+                if isinstance(spec,dict) and isinstance(spec.get('paths'),dict):return spec,candidate
 
     def _swagger_candidates(self):
         """Cover CB context roots such as /cb and REST bases such as /cb/api."""
@@ -46,7 +61,7 @@ class CodebeamerClient:
         urls=[]
         for root in dict.fromkeys(roots):
             for suffix in ('/v3/swagger/api-docs','/v3/openapi.json','/v3/swagger.json','/v3/api-docs',
-                           '/v3/swagger/editor.spr','/swagger.json','/api-docs'):
+                           '/v3/swagger/editor.spr','/v2/api-docs','/swagger.json','/api-docs'):
                 urls.append(urllib.parse.urlunsplit((base.scheme,base.netloc,root+suffix,'','')))
         return list(dict.fromkeys(urls))
 
@@ -78,27 +93,34 @@ class CodebeamerClient:
                     if links:
                         queue.extend(link for link in links if link not in seen)
                     else:
-                        failures.append(urllib.parse.urlsplit(candidate).path+': HTML did not expose an OpenAPI JSON URL')
+                        lower=text.casefold()
+                        reason=('HTML appears to be a login page; the supplied Basic credentials did not authorize Swagger UI'
+                                if '<form' in lower and ('password' in lower or 'login' in lower or 'sign in' in lower)
+                                else 'HTML did not expose an OpenAPI JSON URL or initializer script')
+                        failures.append(urllib.parse.urlsplit(candidate).path+': '+reason)
                     continue
             if isinstance(document.get('paths'),dict):return document,candidate
             failures.append(urllib.parse.urlsplit(candidate).path+': JSON has no paths object')
-        tail='; '.join(failures[-4:]) if failures else 'no readable response'
+        important=[f for f in failures if 'editor.spr' in f or 'HTTP 401' in f or 'HTTP 403' in f or 'HTML' in f]
+        summary=list(dict.fromkeys(important[-6:]+failures[-4:]))
+        tail='; '.join(summary) if summary else 'no readable response'
         raise ApiError('Swagger discovery failed. Tried '+', '.join(attempted)+'; '+tail+
                        '; no target write attempted. The Swagger UI may be used as input only when it exposes a same-server JSON definition.')
 
     @staticmethod
     def _embedded_spec(text):
         decoder=json.JSONDecoder()
-        for marker in ('{"openapi"','{"swagger"'):
-            start=0
-            while True:
-                index=text.find(marker,start)
-                if index<0:break
-                try:
-                    value,_=decoder.raw_decode(text[index:])
-                    if isinstance(value,dict) and isinstance(value.get('paths'),dict):return value
-                except ValueError:pass
-                start=index+1
+        for content in (text,html.unescape(text)):
+            for marker in ('{"openapi"','{"swagger"'):
+                start=0
+                while True:
+                    index=content.find(marker,start)
+                    if index<0:break
+                    try:
+                        value,_=decoder.raw_decode(content[index:])
+                        if isinstance(value,dict) and isinstance(value.get('paths'),dict):return value
+                    except ValueError:pass
+                    start=index+1
 
     @staticmethod
     def _swagger_links(text,page,base):
@@ -108,7 +130,7 @@ class CodebeamerClient:
                   r'["\']([^"\'<>\s]*(?:openapi|swagger|api-docs)[^"\'<>\s]*)["\']')
         for match in (match for pattern in patterns for match in re.finditer(pattern,decoded,re.I)):
             value=match.group(1).replace('\\/','/')
-            if value.lower().endswith(('.js','.css','.png','.svg')) or 'editor.spr' in value.lower():continue
+            if value.lower().endswith(('.css','.png','.svg','.ico','.map')) or 'editor.spr' in value.lower():continue
             url=urllib.parse.urljoin(page,value)
             parsed=urllib.parse.urlsplit(url)
             if (parsed.scheme,parsed.netloc)==(base.scheme,base.netloc) and not parsed.username and not parsed.password:
