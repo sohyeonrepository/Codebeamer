@@ -165,3 +165,27 @@ class TrackerDiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError,'Tracker Type GET'):
             cb.call('trackers_get',{'projectId':123})
         self.assertEqual(cb.http.request.call_count,1)
+
+    def test_duplicate_version_paths_select_v3_independent_of_order(self):
+        from clients.codebeamer_3007 import project_tracker_list
+        from clients.codebeamer_client import CodebeamerClient
+        paths=['/projects/{projectId}/trackers','/v3/projects/{projectId}/trackers']
+        for ordered in (paths,paths[::-1]):
+            cb=CodebeamerClient(None,{'operations':{}})
+            cb.spec={'paths':{p:{'get':{}} for p in ordered}}
+            self.assertEqual(project_tracker_list(cb)['path'],paths[1])
+
+    def test_typed_discovery_also_prefers_v3_aliases(self):
+        from clients.codebeamer_3007 import project_tracker_list
+        cb=self.typed_client()
+        cb.spec['paths'].update({'/v3'+p:definition for p,definition in list(cb.spec['paths'].items())})
+        self.assertEqual(project_tracker_list(cb)['path'],'/v3/projects/{id}/trackers/types/{typeId}')
+        self.assertEqual(cb.operation('tracker_types_get')['path'],'/v3/trackers/types')
+
+    def test_unrelated_prefix_remains_ambiguous(self):
+        from clients.codebeamer_3007 import project_tracker_list
+        cb=self.typed_client()
+        cb.config['operations'] = {}
+        cb.spec={'paths':{p:{'get':{}} for p in ('/other/projects/{projectId}/trackers','/v3/projects/{projectId}/trackers')}}
+        with self.assertRaisesRegex(ApiError,'여러 개'):
+            project_tracker_list(cb)

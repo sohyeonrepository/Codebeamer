@@ -3,6 +3,12 @@ from clients.http import ApiError
 import re
 
 
+def prefer_v3_aliases(paths):
+    """Collapse only exact version-prefix aliases, keeping unrelated routes distinct."""
+    available = set(paths)
+    return [path for path in paths if path.startswith('/v3/') or '/v3'+path not in available]
+
+
 def project_tracker_list(cb):
     """Choose a complete project list by route shape, not operationId alone."""
     operations = cb.config.setdefault('operations',{})
@@ -15,9 +21,12 @@ def project_tracker_list(cb):
             return current
     candidates = [{'method':'GET','path':path} for path,methods in cb.spec['paths'].items()
                   if full_list(path) and isinstance(methods.get('get'),dict)]
+    preferred = prefer_v3_aliases([c['path'] for c in candidates])
+    candidates = [c for c in candidates if c['path'] in preferred]
     if not candidates:
         typed = [p for p,m in cb.spec['paths'].items() if re.fullmatch(r'(?:/v3)?/projects/\{(?:projectId|id)\}/trackers/types/\{typeId\}/?',p) and isinstance(m.get('get'),dict)]
         types = [p for p,m in cb.spec['paths'].items() if re.fullmatch(r'(?:/v3)?/trackers/types/?',p) and isinstance(m.get('get'),dict)]
+        typed, types = prefer_v3_aliases(typed), prefer_v3_aliases(types)
         if len(typed) == len(types) == 1:
             operations['tracker_types_get'] = {'method':'GET','path':types[0]}
             operations['trackers_get'] = {'method':'GET','path':typed[0], 'aggregate_types':True}
