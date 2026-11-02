@@ -105,6 +105,13 @@ def prepare(test, body, fields):
         test.report['inline_description'] = saved_inline[1]
     test.report['ancillary_features'] = {'status':'not-tested', 'reason':'Comment/Association/History/R4J/Xray 전체 이관은 이 제한 테스트의 검증 범위가 아닙니다.'}
     available = targets(test,fields)
+    definitions = test.jira.fields()
+    if not isinstance(definitions,list) or any(not isinstance(f,dict) or not isinstance(f.get('id'),str) for f in definitions):
+        raise ApiError('Jira 전체 필드 목록은 id와 이름이 있는 배열이어야 합니다.')
+    if len({f['id'] for f in definitions}) != len(definitions):
+        raise ApiError('Jira 필드 목록에 중복 ID가 있습니다.')
+    labels = {f['id']:f.get('name',f['id']) for f in definitions}
+    test.report['jira_field_names'] = {key:labels.get(key,key) for key in test.issue['fields']}
     mapping = test.profile.get('field_mapping',{})
     jira_config = getattr(test.jira,'config',{})
     visibility = jira_config.get('field_configuration')
@@ -289,7 +296,8 @@ def launch(previous, parent):
             mapping.insert('', 'end',iid=source,values=(spec['target'],source,spec['type']))
         if hasattr(test,'issue'):
             source_keys[:] = [k for k in test.issue['fields'] if k not in {'attachment','comment','issuelinks','worklog','project','issuetype'} and k not in test.report.get('hidden_sources',[])]
-            jira_box.configure(values=source_keys)
+            labels=test.report.get('jira_field_names',{})
+            jira_box.configure(values=[str(labels.get(key,key))+' / '+key for key in source_keys])
         try:
             available=targets(test,test.report.get('readback',{}).get('fields') or [])
             target_keys[:]=list(available)

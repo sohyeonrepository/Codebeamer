@@ -9,7 +9,7 @@ from clients.http import Http, ApiError
 from clients.jira_client import JiraClient
 from clients.codebeamer_client import CodebeamerClient
 from migration.state import State
-from migration.wizard import ImportWizard, field_identifier, semantic_type, hidden
+from migration.wizard import ImportWizard, field_identifier, semantic_type, hidden, compatible
 from mapping_helper import label_tokens, source_choices
 
 
@@ -93,56 +93,147 @@ def launch(wizard):
         types.set(iid, 'tracker', tracker_box.get() if tracker else '신규: ' + new_name.get())
         scopes.configure(values=list(wizard.plan['scopes']))
     ttk.Button(step2, text='이 Issue Type의 Tracker 매핑 저장', command=lambda: run('Tracker 매핑 저장', map_tracker)).pack(anchor='w', pady=8)
-    ttk.Label(step3, text='왼쪽은 선택한 CB Tracker, 오른쪽은 선택한 Jira Issue Type입니다. 행을 두 번 클릭하면 수동 연결합니다.').pack(anchor='w')
-    scopes = ttk.Combobox(step3, state='readonly', width=55)
-    scopes.pack(anchor='w', pady=8)
+    style=ttk.Style(root)
+    style.configure('WizardTitle.TLabel',font=('',17,'bold'))
+    style.configure('WizardSub.TLabel',foreground='#485568')
+    style.configure('Auto.TLabel',foreground='#16743b')
+    style.configure('Manual.TLabel',foreground='#075fc9')
+    style.configure('Create.TLabel',foreground='#aa5700')
+    title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
+    ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
+    ttk.Label(title,text='선택한 조합의 Jira 필드를 Codebeamer 필드와 매핑합니다.',style='WizardSub.TLabel').pack(anchor='w')
+    target_bar=ttk.LabelFrame(step3,text='대상 조합',padding=8);target_bar.pack(fill='x')
+    scopes = ttk.Combobox(target_bar, state='readonly', width=42)
+    scopes.pack(side='left',padx=(0,8))
+    scope_title=tk.StringVar(value='Jira Issue Type → CB Tracker')
+    ttk.Label(target_bar,textvariable=scope_title).pack(side='left',padx=8)
     single_key = tk.StringVar()
-    ttk.Label(step3,text='실서버 테스트 범위: Jira Issue 키 1개 (기존 테스트 Tracker에 먼저 매핑)').pack(anchor='w')
-    ttk.Entry(step3,textvariable=single_key,width=35).pack(anchor='w')
+    ttk.Label(target_bar,text='Jira Issue 1건 테스트').pack(side='left',padx=(20,4))
+    ttk.Entry(target_bar,textvariable=single_key,width=18).pack(side='left')
     def bound_issue():
         scope = wizard.limit_to_issue(single_key.get().strip())
         scopes.configure(values=[scope]);scopes.set(scope)
         table.delete(*table.get_children())
-    ttk.Button(step3,text='이 Issue 1건으로 전체 Import 범위 제한',command=lambda:run('1건 범위 설정',bound_issue)).pack(anchor='w',pady=6)
-    table = ttk.Treeview(step3, columns=('cb','jira'), displaycolumns=('cb','jira'), show='headings', selectmode='browse')
-    table.heading('cb', text='Codebeamer Tracker 필드')
-    table.heading('jira', text='Jira Issue Type 필드')
-    table.column('cb', width=470); table.column('jira', width=470)
-    table.pack(fill='both', expand=True)
+    ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
+    ttk.Button(target_bar,text='선택 조합 분석',command=lambda:run('필드 분석',analyze)).pack(side='right')
+    tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
+    active_filter=tk.StringVar(value='all')
+    filter_buttons={}
+    search=tk.StringVar()
+    ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
+    search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
+    table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
+    table = ttk.Treeview(table_frame, columns=('cb','cb_type','status','jira','action'),
+                         displaycolumns=('cb','cb_type','status','jira','action'),show='headings',selectmode='browse')
+    for column,text,width in (('cb','Codebeamer 필드',260),('cb_type','타입',90),('status','매핑 상태',120),
+                              ('jira','Jira 필드 (실제 필드명)',330),('action','작업',150)):
+        table.heading(column,text=text);table.column(column,width=width,anchor='w')
+    scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
+    table.configure(yscrollcommand=scrollbar.set)
+    table.pack(side='left',fill='both',expand=True);scrollbar.pack(side='right',fill='y')
+    table.tag_configure('auto',foreground='#16743b')
+    table.tag_configure('manual',foreground='#075fc9')
+    table.tag_configure('create',foreground='#aa5700')
+    table.tag_configure('error',foreground='#ad2222')
+    action_bar=ttk.Frame(step3);action_bar.pack(fill='x',pady=6)
+    manual_button=ttk.Button(action_bar,text='선택 필드 매핑 변경')
+    create_button=ttk.Button(action_bar,text='＋ 신규 필드 생성')
+    manual_button.pack(side='left')
     detail = tk.StringVar(value='Attachment · Comment · Linked Issue · History · R4J는 별도로 자동 이관합니다.')
-    ttk.Label(step3, textvariable=detail, wraplength=1050).pack(anchor='w', pady=8)
+    ttk.Label(step3,textvariable=detail,wraplength=1050).pack(anchor='w',pady=4)
+    warning=tk.StringVar()
+    ttk.Label(step3,textvariable=warning,foreground='#ad5b00',wraplength=1050).pack(anchor='w')
+    def mode(row):
+        if row.get('status')=='create':return 'create'
+        if row.get('status')=='error':return 'error'
+        if row.get('status')=='mapped':return row.get('mapping_mode') or ('auto' if row.get('reason')=='이름·타입 일치' else 'manual')
+        return 'manual'
+    def scope_names(entry):
+        tracker=entry.get('new_tracker')
+        if not tracker:
+            tracker=next((t.get('name',str(t['id'])) for t in wizard.plan['projects'][entry['project']]['trackers']
+                          if t['id']==entry.get('tracker')),'미선택')
+        return entry['type'].get('name',str(entry['type']['id']))+'  →  '+tracker
     def display_scope():
+        if not scopes.get() or scopes.get() not in wizard.plan['scopes']:
+            table.delete(*table.get_children());return
         entry = wizard.plan['scopes'][scopes.get()]
+        scope_title.set(scope_names(entry))
         scope_rows.clear(); table.delete(*table.get_children())
+        counts={'all':0,'auto':0,'manual':0,'create':0,'error':0,'excluded':len(entry['analysis'].get('excluded',[]))}
+        query=search.get().strip().casefold()
         for index, (source, row) in enumerate(entry.get('rows', {}).items()):
-            iid = 'field-' + str(index); scope_rows[iid] = source
+            row_mode=mode(row);counts['all']+=1;counts[row_mode]=counts.get(row_mode,0)+1
             target = row.get('target', {})
             left = target.get('label', target.get('name', ''))
-            if row['status'] == 'create': left = '＋ 신규 필드 생성안: ' + row['creation']['label']
-            right = entry['analysis']['fields'][source].get('name', source)
-            table.insert('', 'end', iid=iid, values=(left or '수동 연결 필요', right), tags=(row['status'],))
-        table.tag_configure('mapped', foreground='#17734b')
-        table.tag_configure('error', foreground='#ad2222')
-        detail.set('조회 Issue ' + str(entry['analysis']['issue_count']) + '건 · Hidden 값 누락 위험 ' + str(len(entry['analysis']['risks']) + len(entry.get('target_risks', []))) + '건')
+            action='매핑 변경'
+            if row_mode=='create':left='-';action='＋ 신규 필드 생성'
+            definition=entry['analysis']['fields'][source]
+            actual_name=definition.get('name',source)
+            right=actual_name+('  ('+source+')' if source.startswith('customfield_') else '')
+            cb_kind,_=semantic_type(target) if target else (None,None)
+            if active_filter.get() not in ('all',row_mode):continue
+            if query and query not in (left+' '+right+' '+str(cb_kind)).casefold():continue
+            iid='field-'+str(index);scope_rows[iid]=source
+            status_text={'auto':'✓ 자동 매핑','manual':'✎ 수동 매핑','create':'＋ 신규 생성 필요','error':'! 매핑 오류'}[row_mode]
+            table.insert('', 'end',iid=iid,values=(left or '수동 연결 필요',cb_kind or '-',status_text,right,action),tags=(row_mode,))
+        if active_filter.get()=='excluded':
+            for index,item in enumerate(entry['analysis'].get('excluded',[])):
+                right=item['name']+('  ('+item['field']+')' if item['field'].startswith('customfield_') else '')
+                if query and query not in right.casefold():continue
+                iid='excluded-'+str(index);scope_rows[iid]=None
+                table.insert('','end',iid=iid,values=('-', '-', '제외 (Jira Hidden)',right,'-'),tags=('error' if item['has_value'] else 'manual',))
+        labels={'all':'전체','auto':'자동 매핑','manual':'수동 매핑','create':'신규 생성','error':'오류','excluded':'제외'}
+        for key,button in filter_buttons.items():button.configure(text=labels[key]+' ('+str(counts.get(key,0))+')')
+        risks=entry['analysis']['risks']+entry.get('target_risks',[])
+        detail.set('조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
+        warning.set(('⚠ Hidden 필드에 실제 값이 남아 있어 누락 위험 '+str(len(risks))+'건: '+
+                     ', '.join(r['field'] for r in risks)) if risks else '')
+        inspect()
     def analyze():
         if not scopes.get(): raise ValueError('Tracker ↔ Issue Type 조합을 선택하세요.')
-        wizard.analyze(scopes.get()); display_scope()
-    ttk.Button(step3, text='선택 조합 분석', command=lambda: run('필드 분석', analyze)).pack(anchor='w')
-    scopes.bind('<<ComboboxSelected>>', lambda event: table.delete(*table.get_children()))
+        result=wizard.analyze(scopes.get());display_scope();return result
+    for key in ('all','auto','manual','create','excluded','error'):
+        button=ttk.Button(tools,text=key,command=lambda k=key:(active_filter.set(k),display_scope()))
+        button.pack(side='left',padx=(0,4));filter_buttons[key]=button
+    scopes.bind('<<ComboboxSelected>>',lambda event:display_scope())
+    search.trace_add('write',lambda *_:display_scope())
     def inspect(event=None):
         if table.selection():
-            row = wizard.plan['scopes'][scopes.get()]['rows'][scope_rows[table.selection()[0]]]
-            detail.set(row['status'] + ' · ' + row['reason'])
+            source=scope_rows[table.selection()[0]]
+            if source is None:
+                detail.set('Jira Hidden 필드는 기본 매핑에서 제외됩니다.')
+                create_button.pack_forget();manual_button.configure(state='disabled')
+                return
+            row = wizard.plan['scopes'][scopes.get()]['rows'][source]
+            detail.set(row.get('reason',''))
+            if row.get('status')=='create':
+                manual_button.pack_forget()
+                if not create_button.winfo_manager():create_button.pack(side='left')
+                create_button.configure(state='normal')
+            else:
+                create_button.pack_forget()
+                if not manual_button.winfo_manager():manual_button.pack(side='left')
+                manual_button.configure(state='normal')
+        else:
+            create_button.pack_forget()
+            if not manual_button.winfo_manager():manual_button.pack(side='left')
+            manual_button.configure(state='disabled')
     table.bind('<<TreeviewSelect>>', inspect)
     def edit(event=None):
         if not table.selection(): return
         scope = scopes.get(); entry = wizard.plan['scopes'][scope]
         source = scope_rows[table.selection()[0]]
-        fields = [f for f in entry['target_fields'] if not hidden(f)]
+        if source is None:return
+        source_kind,source_multiple=semantic_type(entry['analysis']['fields'][source],True)
+        fields = [f for f in entry['target_fields'] if not hidden(f) and compatible(source_kind,source_multiple,f)]
+        if not fields:raise ValueError('호환되는 기존 Codebeamer 필드가 없습니다. 신규 필드 생성을 사용하세요.')
         dialog = tk.Toplevel(root); dialog.title('필드 수동 연결')
-        ttk.Label(dialog, text=entry['analysis']['fields'][source].get('name',source)).pack(padx=12, pady=8)
+        dialog.transient(root);dialog.grab_set()
+        ttk.Label(dialog,text='Jira 필드: '+entry['analysis']['fields'][source].get('name',source),style='WizardTitle.TLabel').pack(padx=18,pady=12)
+        ttk.Label(dialog,text='호환되는 기존 Codebeamer 필드').pack(anchor='w',padx=18)
         box = ttk.Combobox(dialog, state='readonly', width=55, values=[f.get('label',f.get('name','')) for f in fields])
-        box.pack(padx=12)
+        box.pack(padx=18,pady=6)
         value_frame = ttk.Frame(dialog); value_frame.pack(fill='both', padx=12, pady=12)
         choices = []
         def fill(event=None):
@@ -173,8 +264,60 @@ def launch(wizard):
                 mapping[identity] = {'id': options[choice.current()]['id']}
             wizard.manual_mapping(scope,source,fid,key,mapping)
             display_scope(); dialog.destroy()
-        ttk.Button(dialog, text='연결 저장', command=lambda: run('수동 연결', accept)).pack(pady=12)
-    table.bind('<Double-1>', edit)
+        ttk.Button(dialog,text='매핑 저장',command=lambda:run('수동 연결',accept)).pack(pady=12)
+    def create_field_dialog(event=None):
+        if not table.selection():return
+        scope=scopes.get();entry=wizard.plan['scopes'][scope];source=scope_rows[table.selection()[0]]
+        if source is None:return
+        row=entry['rows'][source]
+        if row.get('status')!='create':return
+        definition=entry['analysis']['fields'][source]
+        source_kind,source_multiple=semantic_type(definition,True)
+        profiles=wizard.config['migration'].get('wizard',{}).get('field_types',{})
+        dialog=tk.Toplevel(root);dialog.title('신규 Codebeamer 필드 생성 설정');dialog.transient(root);dialog.grab_set()
+        body=ttk.Frame(dialog,padding=18);body.pack(fill='both',expand=True)
+        ttk.Label(body,text='신규 Codebeamer 필드 생성 설정',style='WizardTitle.TLabel').grid(row=0,column=0,columnspan=2,sticky='w',pady=(0,14))
+        ttk.Label(body,text='필드 이름 *').grid(row=1,column=0,sticky='w',pady=5)
+        name=tk.StringVar(value=row['creation'].get('label',definition.get('name',source)))
+        ttk.Entry(body,textvariable=name,width=38).grid(row=1,column=1,sticky='ew',pady=5)
+        ttk.Label(body,text='필드 타입 *').grid(row=2,column=0,sticky='w',pady=5)
+        type_names=list(profiles)
+        type_box=ttk.Combobox(body,state='readonly',values=type_names,width=35);type_box.grid(row=2,column=1,sticky='ew',pady=5)
+        if source_kind in type_names:type_box.set(source_kind)
+        multiple=tk.BooleanVar(value=bool(source_multiple))
+        ttk.Checkbutton(body,text='다중 선택',variable=multiple,state='disabled').grid(row=3,column=1,sticky='w')
+        ttk.Label(body,text='선택 옵션 (한 줄에 하나)').grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
+        options=tk.Text(body,width=48,height=7)
+        initial=list(dict.fromkeys(row['creation'].get('choices',{}).values()))
+        options.insert('1.0','\n'.join(initial));options.grid(row=5,column=0,columnspan=2,sticky='nsew')
+        if source_kind not in ('option','status'):options.configure(state='disabled')
+        body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
+        def save_creation():
+            if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
+            originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]))
+            lines=[line.strip() for line in options.get('1.0','end').splitlines() if line.strip()]
+            choices={}
+            if type_box.get() in ('option','status'):
+                if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
+                choices={identity:lines[index] for index,identity in enumerate(originals)}
+                choices.update({'manual:'+str(index):value for index,value in enumerate(lines[len(originals):],start=len(originals))})
+            wizard.configure_creation(scope,source,name.get(),type_box.get(),multiple.get(),choices)
+            display_scope();dialog.destroy()
+        footer=ttk.Frame(body);footer.grid(row=6,column=0,columnspan=2,sticky='e',pady=(14,0))
+        ttk.Button(footer,text='취소',command=dialog.destroy).pack(side='left',padx=4)
+        ttk.Button(footer,text='생성 설정 저장',command=lambda:run('신규 필드 설정 저장',save_creation)).pack(side='left')
+    manual_button.configure(command=lambda:run('수동 매핑',edit))
+    create_button.configure(command=lambda:run('신규 필드 설정',create_field_dialog))
+    def row_action(event):
+        region=table.identify_region(event.x,event.y);column=table.identify_column(event.x)
+        if region=='cell' and column=='#5':
+            iid=table.identify_row(event.y)
+            if iid:
+                table.selection_set(iid)
+                source=scope_rows[iid]
+                if source is not None:create_field_dialog() if wizard.plan['scopes'][scopes.get()]['rows'][source].get('status')=='create' else edit()
+        elif region=='cell':edit()
+    table.bind('<Double-1>',row_action)
     def import_now():
         errors = wizard.errors()
         if errors: raise ApiError('\n'.join(errors))
@@ -183,7 +326,9 @@ def launch(wizard):
         report = wizard.execute(approved=True)
         show_evidence(report); tabs.select(step4)
         if not report['complete']: status.set('Import 미완료: 오류·누락·보존 결과를 확인한 후 재시도하세요.')
-    ttk.Button(step3, text='Import…', command=lambda: run('Import', import_now)).pack(anchor='e', pady=8)
+    footer=ttk.Frame(step3);footer.pack(fill='x',pady=(8,0))
+    ttk.Label(footer,text='필드는 Import 승인 후 실제 Codebeamer에 생성됩니다.',style='WizardSub.TLabel').pack(side='left')
+    ttk.Button(footer,text='다음 (Import 승인)  ›',command=lambda:run('Import',import_now)).pack(side='right')
     root.mainloop()
 
 

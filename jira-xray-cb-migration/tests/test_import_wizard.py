@@ -178,6 +178,7 @@ class WizardTests(unittest.TestCase):
         analysis=self.wizard.plan['scopes']['P:1']['analysis']
         self.assertIn('empty',analysis['fields'])
         self.assertNotIn('hidden',analysis['fields'])
+        self.assertEqual(analysis['excluded'],[{'field':'hidden','name':'Hidden','has_value':False}])
         for special in ('attachment','comment','issuelinks','project','issuetype'):
             self.assertNotIn(special,analysis['fields'])
         self.assertFalse(self.cb.mutations)
@@ -187,6 +188,7 @@ class WizardTests(unittest.TestCase):
         self.source.rows[0]['fields']['hidden']='must not lose'
         self.plan()
         self.assertTrue(self.wizard.plan['scopes']['P:1']['analysis']['risks'])
+        self.assertTrue(self.wizard.plan['scopes']['P:1']['analysis']['excluded'][0]['has_value'])
         with self.assertRaises(ApiError):self.wizard.execute(True)
         self.assertFalse(self.cb.mutations)
         with self.assertRaises(ApiError):self.wizard.map_tracker('P','1',999)
@@ -197,6 +199,18 @@ class WizardTests(unittest.TestCase):
         self.source.configured.append(definition('table','Steps','table',hidden=False))
         self.wizard.analyze('P:1')
         self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['table']['status'],'error')
+
+    def test_creation_popup_settings_are_plan_only_and_preserve_source_type(self):
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        self.plan()
+        before=list(self.cb.mutations)
+        proposal=self.wizard.configure_creation('P:1','empty','Planned Empty','text',False,{})
+        self.assertEqual(proposal['label'],'Planned Empty')
+        self.assertEqual(self.cb.mutations,before)
+        with self.assertRaisesRegex(ApiError,'원본 타입'):
+            self.wizard.configure_creation('P:1','empty','Wrong','number',False,{})
+        with self.assertRaisesRegex(ApiError,'기존 CB 필드'):
+            self.wizard.configure_creation('P:1','summary','No','text',False,{})
     def test_collision_and_type_conflict_are_not_automatic(self):
         self.plan();a=self.wizard.plan['scopes']['P:1']['analysis']
         a['fields']['title']=definition('title','Title');a['values']['title']=['x']
@@ -370,6 +384,14 @@ class WizardUITests(unittest.TestCase):
         import tkinter as tk
         from tkinter import ttk
         from import_wizard import launch
+        # Make one real Jira custom field lack a CB counterpart so the creation
+        # popup is exercised without changing the production write boundary.
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        for collection in (self.source.definitions,self.source.configured):
+            for value in collection:
+                if value['id']=='empty':value.update(id='customfield_10001',name='Business Value')
+        for issue in self.source.rows:
+            issue['fields']['customfield_10001']=issue['fields'].pop('empty')
         original = tk.Tk
         errors = []
         def descendants(widget):
@@ -399,14 +421,30 @@ class WizardUITests(unittest.TestCase):
                         combos[3].current(index)
                         button('선택 조합 분석').invoke()
                     combos[3].current(0); button('선택 조합 분석').invoke()
-                    self.assertEqual(tuple(trees[1]['columns']), ('cb','jira'))
+                    self.assertEqual(tuple(trees[1]['columns']), ('cb','cb_type','status','jira','action'))
                     self.assertIn('Codebeamer', trees[1].heading('cb')['text'])
+                    self.assertIn('실제 필드명', trees[1].heading('jira')['text'])
                     self.assertEqual(len(trees[1].get_children()), 3)
+                    creation=next(i for i in trees[1].get_children() if 'customfield_10001' in trees[1].set(i,'jira'))
+                    self.assertIn('Business Value',trees[1].set(creation,'jira'))
+                    self.assertEqual(trees[1].set(creation,'action'),'＋ 신규 필드 생성')
+                    trees[1].selection_set(creation);window.update()
+                    widgets=list(descendants(window));button('＋ 신규 필드 생성').invoke();window.update()
+                    dialog=next(w for w in window.winfo_children() if isinstance(w,tk.Toplevel))
+                    name=next(w for w in descendants(dialog) if isinstance(w,ttk.Entry))
+                    name.delete(0,'end');name.insert(0,'Planned Business Value')
+                    save=next(w for w in descendants(dialog) if isinstance(w,ttk.Button) and w.cget('text')=='생성 설정 저장')
+                    save.invoke();window.update()
+                    self.wizard.configure_creation('P:2','customfield_10001','Planned Business Value','text',False,{})
                     self.assertFalse(self.cb.mutations)
-                    button('Import…').invoke()
+                    self.assertEqual(self.wizard.errors(),[])
+                    button('다음 (Import 승인)  ›').invoke()
                     self.assertFalse(self.cb.mutations)
-                    button('Import…').invoke()
-                    self.assertEqual(len(self.cb.items), 2)
+                    button('다음 (Import 승인)  ›').invoke()
+                    messages=[window.getvar(w.cget('textvariable')) for w in descendants(window)
+                              if isinstance(w,(ttk.Label,ttk.Entry)) and w.cget('textvariable')]
+                    self.assertEqual(len(self.cb.items),2,messages)
+                    self.assertTrue(any(f['label']=='Planned Business Value' for f in self.cb.definitions))
                     self.assertFalse(self.cb.write)
                 except Exception as exc:
                     errors.append(exc)

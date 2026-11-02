@@ -154,6 +154,8 @@ Tracker Configuration 생성은 기존 Wizard에서 실제 템플릿을 GET하�
 
 1. **사전 조회 / 요청 확인**을 누릅니다. Summary → Name과 Description → Description을 기본으로 준비합니다.
 2. 왼쪽 CB 필드와 오른쪽 Jira 필드를 선택하고 실제 원본 값 타입을 지정한 뒤 **매핑 저장**을 누릅니다.
+   왼쪽은 Codebeamer Tracker 필드이고 오른쪽은 Jira 필드입니다. Jira 쪽은
+   `실제 필드명 / customfield_12345` 형식으로 표시하므로 같은 이름의 필드도 ID로 구분할 수 있습니다.
    문자열·숫자·Boolean·날짜만 이 제한 테스트에서 지원합니다. 사용자/Choice/참조 및 Xray 테이블을 기본 타입으로 바꾸지 않습니다.
    CB의 보이는 실제 Tracker 필드는 모두 표시합니다. Name·Description 같은 기본 속성, 기존 `field_bindings`, 또는
    서버별 `migration.wizard.field_types.<type>.binding`이 확인된 필드는 매핑할 수 있습니다. `설정 필요`로 표시된

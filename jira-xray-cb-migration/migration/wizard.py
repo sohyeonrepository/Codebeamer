@@ -87,15 +87,18 @@ def field_analysis(jira, project, issue_type):
                 observations.append(value)
     risks = []
     visible = {}
+    excluded = []
     for key, field in fields.items():
         if key in SPECIAL | CONTEXT | managed:
             continue
         if hidden(field):
-            if any(has_value(v) for v in values.get(key, [])):
+            remaining = any(has_value(v) for v in values.get(key, []))
+            excluded.append({'field':key,'name':field.get('name',key),'has_value':remaining})
+            if remaining:
                 risks.append({'field': key, 'reason': 'hidden-source-with-values'})
         else:
             visible[key] = field
-    return {'fields': visible, 'values': values, 'risks': risks, 'issue_count': count,
+    return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
             'configuration_count': len(configured), 'managed_fields': sorted(managed), 'complete': True}
 
 
@@ -121,11 +124,13 @@ def proposals(analysis, targets, config, existing=None):
     for source, definition in analysis['fields'].items():
         kind, multiple = semantic_type(definition, True)
         candidates = [f for f in visible if label_tokens(source, definition) & label_tokens('', f)]
-        entry = {'source': source, 'status': 'manual', 'reason': '이름 또는 타입 확인 필요', 'spec': None}
+        entry = {'source': source, 'status': 'manual', 'mapping_mode': None,
+                 'reason': '이름 또는 타입 확인 필요', 'spec': None}
         if source in existing:
             candidate = next((f for f in visible if str(field_identifier(f)) == str(existing[source]['field_id'])), None)
             if candidate and compatible(kind, multiple, candidate):
-                entry.update(status='mapped', spec=deepcopy(existing[source]), target=candidate)
+                entry.update(status='mapped', mapping_mode='manual', spec=deepcopy(existing[source]),
+                             target=candidate, reason='저장된 수동 매핑')
             else:
                 entry['reason'] = '기존 대상이 숨김/누락/타입 충돌: 재확인 필요'
         elif len(candidates) == 1 and kind and compatible(kind, multiple, candidates[0]):
@@ -149,7 +154,7 @@ def proposals(analysis, targets, config, existing=None):
                     convert(v, kind, mapping)
                 if str(fid) in claimed:
                     raise ValueError('이미 다른 원본에 연결된 대상')
-                entry.update(status='mapped', spec=spec, target=target, reason='이름·타입 일치')
+                entry.update(status='mapped', mapping_mode='auto', spec=spec, target=target, reason='이름·타입 일치')
             except (ValueError, ApiError, TypeError) as exc:
                 entry.update(target=target, reason=str(exc))
         elif not candidates:
@@ -157,7 +162,7 @@ def proposals(analysis, targets, config, existing=None):
                 entry.update(status='error', reason='지원하지 않는 원본 타입: 자동 변환하지 않음')
             else:
                 choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])))
-                entry.update(status='create', reason='Import 승인 후 생성', creation={
+                entry.update(status='create', mapping_mode='create', reason='Import 승인 후 생성', creation={
                     'label': definition.get('name', source), 'semantic_type': kind,
                     'multipleSelection': multiple, 'choices': choices})
         result[source] = entry
@@ -298,8 +303,37 @@ class ImportWizard:
         from migration.fields import convert
         for value in entry['analysis']['values'].get(source, []):
             convert(value, kind, values)
-        entry['rows'][source].update(status='mapped', target=target, spec=spec, reason='수동 연결')
+        entry['rows'][source].update(status='mapped', mapping_mode='manual', target=target,
+                                     spec=spec, reason='수동 연결')
         self.state.save('wizard', 'plan', self.plan)
+
+    def configure_creation(self, scope, source, label, semantic, multiple, choices):
+        """Save a field proposal only. The actual server write remains in execute()."""
+        entry = self.plan['scopes'][scope]
+        row = entry['rows'][source]
+        if row.get('status') != 'create' or row.get('target'):
+            raise ApiError('신규 필드 생성은 매핑할 기존 CB 필드가 없는 Jira 필드에만 설정할 수 있습니다.')
+        label = label.strip()
+        if not label:
+            raise ApiError('신규 필드 이름을 입력하세요.')
+        source_kind, source_multiple = semantic_type(entry['analysis']['fields'][source], True)
+        if semantic != source_kind or bool(multiple) != bool(source_multiple):
+            raise ApiError('Jira 원본 타입과 다중 선택 여부를 변경할 수 없습니다.')
+        profiles = self.config['migration'].get('wizard', {}).get('field_types', {})
+        if semantic not in profiles:
+            raise ApiError('검증된 신규 필드 타입 설정이 없습니다: ' + semantic)
+        options = {}
+        if semantic in ('option', 'status'):
+            if not isinstance(choices, dict) or not choices or any(not str(v).strip() for v in choices.values()):
+                raise ApiError('Choice 필드는 원본 값에 대응하는 선택 옵션이 필요합니다.')
+            options = {str(k):str(v).strip() for k,v in choices.items()}
+        elif choices:
+            raise ApiError('Choice가 아닌 필드에는 선택 옵션을 설정할 수 없습니다.')
+        row.update(mapping_mode='create', reason='Import 승인 후 생성', creation={
+            'label':label, 'semantic_type':semantic, 'multipleSelection':bool(multiple),
+            'choices':options})
+        self.state.save('wizard', 'plan', self.plan)
+        return deepcopy(row['creation'])
 
     def errors(self):
         errors = []

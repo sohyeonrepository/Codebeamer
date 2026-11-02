@@ -60,7 +60,9 @@ class MappedImportTests(unittest.TestCase):
         def jira_request(method,path,**kwargs):
             self.assertEqual(method,'GET')
             return self.binary if path=='https://jira.test/file' else deepcopy(self.issue)
-        self.jira=SimpleNamespace(http=SimpleNamespace(request=jira_request))
+        self.jira=SimpleNamespace(http=SimpleNamespace(request=jira_request),fields=lambda:[
+            {'id':'summary','name':'Summary'}, {'id':'description','name':'Description'},
+            {'id':'estimate','name':'Original Estimate'}, {'id':'attachment','name':'Attachment'}])
         self.config={'jira':{'url':'https://jira.test'},'codebeamer':{'url':'https://cb.test'},'single_import':{
             'mapped_attachments':True,'field_mapping':{'summary':{'target':'name','type':'text'},'description':{'target':'description','type':'text'},'estimate':{'target':'estimatedHours','type':'number'}}}}
         self.test=SingleImport(self.jira,self.cb,self.state,self.config,'DEMO-1',1,2)
@@ -88,6 +90,14 @@ class MappedImportTests(unittest.TestCase):
     def test_unbound_visible_custom_field_gives_explicit_blocker(self):
         self.test.profile['field_mapping']['estimate']['target']='unbound_4'
         self.assertTrue(any('FieldValue binding' in b['reason'] for b in self.test.prepare()['blockers']))
+
+    def test_jira_custom_field_report_has_human_name_and_stable_id(self):
+        self.issue['fields']['customfield_12345']='customer value'
+        self.jira.fields=lambda:[{'id':'summary','name':'Summary'},{'id':'description','name':'Description'},
+            {'id':'estimate','name':'Original Estimate'},{'id':'attachment','name':'Attachment'},
+            {'id':'customfield_12345','name':'Customer Requirement'}]
+        report=self.test.prepare()
+        self.assertEqual(report['jira_field_names']['customfield_12345'],'Customer Requirement')
 
     def test_approval_mapping_upload_inline_hash_and_resume(self):
         report=self.test.prepare()

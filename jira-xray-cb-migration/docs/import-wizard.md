@@ -15,6 +15,17 @@ Python 3.10+와 Tkinter를 사용합니다. 기존 `mapping_helper.py`, CLI, Run
 
 조합 매핑은 `state_dir/wizard/`에 저장됩니다. 실제 Field ID를 반영한 `resolved-mapping`은 재시작 시 자동으로 읽습니다. 프로젝트 변경은 그 프로젝트의 이전 조합을 무효화합니다. 다른 소스/대상 URL에는 같은 상태 디렉터리를 사용할 수 없습니다. 기존 데이터 삭제와 DELETE 요청은 허용하지 않습니다.
 
+STEP 3 화면은 선택한 `Jira Issue Type → Codebeamer Tracker` 조합 하나만 분석하고 표시합니다. 왼쪽은
+Codebeamer 필드, 오른쪽은 Jira API의 실제 필드명이며 custom field는 실제 이름을 먼저 표시하고 ID를 함께
+표시합니다. 기존 필드는 Jira/CB 메타데이터로 타입 호환성을 검사하므로 사용자가 Field Type을 선택하지 않습니다.
+자동 매핑·수동 매핑·신규 생성·제외 상태와 검색/필터를 제공합니다. Jira Hidden 필드는 `제외`에 표시하고,
+실제 값이 남아 있으면 별도 누락 위험으로 표시하여 Import를 차단합니다.
+
+기존 CB 필드가 없는 행에만 `＋ 신규 필드 생성` 작업이 나타납니다. 팝업의 이름·검증된 타입·다중 선택·Choice
+옵션은 생성 계획으로만 저장되며 이 단계에서는 서버 쓰기를 하지 않습니다. 실제 Tracker/Field 생성은 사용자가
+마지막 `다음 (Import 승인)`에서 승인하고 쓰기 직전 분석 결과가 동일한지 다시 확인한 뒤 실행됩니다.
+Attachment·Comment·Association·History/R4J/Xray 처리는 기존 Migration Engine 경로를 그대로 사용합니다.
+
 ## 사용 필드 판정
 
 `editmeta`는 Field Configuration과 다릅니다. Wizard는 **실제 배포 환경에서 확인된 Field Configuration 읽기 API**를 요구하며, 없으면 분석 오류를 표시합니다. 각 필드의 `id`와 `hidden`/`isHidden`/`visible` 중 하나의 명시적 boolean이 필요합니다. 이름·스키마는 글로벌 필드 정의와 병합합니다.
