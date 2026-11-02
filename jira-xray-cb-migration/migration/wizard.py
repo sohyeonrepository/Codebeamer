@@ -13,6 +13,10 @@ SPECIAL = {'attachment', 'comment', 'issuelinks', 'worklog'}
 CONTEXT = {'issuetype', 'project'}
 
 
+def field_identity(tracker, source, row):
+    return 'wizard-field:'+str(tracker)+':'+source+(':'+row['creation_token'] if row.get('creation_token') else '')
+
+
 def managed_fields(definitions, configured=None):
     result = set()
     if configured:
@@ -263,7 +267,7 @@ class ImportWizard:
         self.plan['projects'] = {project:selected}
         self.config['jira']['single_issue_key'] = key
         self.jira.config = dict(self.jira.config, single_issue_key=key)
-        for name in ('analysis','rows','target_fields'):
+        for name in ('analysis','target_fields'):
             entry.pop(name,None)
         self.stage('single-issue-scope', {'issue_key':key,'project_id':entry['project_id'],'tracker_id':entry['tracker']})
         return scope
@@ -333,18 +337,24 @@ class ImportWizard:
                 self.config['codebeamer'].setdefault('field_bindings', {}).setdefault(key, derived)
         existing = dict(self.config['migration'].get('field_mapping', {}).get(scope, {}))
         old_rows = deepcopy(entry.get('rows', {}))
-        existing.update({k:r['spec'] for k,r in old_rows.items() if r.get('spec') and r.get('mapping_mode') == 'manual'})
+        for k,r in old_rows.items():
+            if r.get('creation_saved') and not r.get('spec'):existing.pop(k,None)
+        existing.update({k:r['spec'] for k,r in old_rows.items() if r.get('spec')})
         entry.update(analysis=analysis, target_fields=fields,
                      rows=proposals(analysis, fields, self.config, existing))
+        for source, row in entry['rows'].items():
+            if source not in existing:
+                row.update(status='manual',mapping_mode=None,spec=None,reason='대상 필드를 선택하거나 신규 생성 설정을 저장하세요.')
+                row.pop('target',None)
         for source, row in old_rows.items():
             phase=self.state.get('field-phase:'+scope+':'+source)
-            receipt=self.state.get('wizard-field:'+str(tracker)+':'+source)
+            receipt=self.state.get(field_identity(tracker,source,row))
             if row.get('creation') and receipt and phase and phase[0]!='COMPLETED' and source in entry['rows']:
                 entry['rows'][source]=deepcopy(row)
                 entry['rows'][source].update(status='create',spec=None)
                 continue
-            if row.get('creation_saved') and source in entry['rows'] and entry['rows'][source]['status'] == 'create':
-                entry['rows'][source].update(creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')))
+            if row.get('creation_saved') and source in entry['rows'] and not entry['rows'][source].get('spec'):
+                entry['rows'][source].update(status='create',creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')),creation_token=row.get('creation_token'))
         entry['target_risks'] = [{'field': source, 'reason': 'hidden-target-with-source-values'}
             for source, definition in analysis['fields'].items()
             if any(has_value(v) for v in analysis['values'].get(source, []))
@@ -422,6 +432,9 @@ class ImportWizard:
         from migration.fields import convert
         for value in entry['analysis']['values'].get(source, []):
             convert(value, kind, values, 'id' if source == 'components' else None)
+        entry['rows'][source].pop('creation_saved',None)
+        entry['rows'][source].pop('creation',None)
+        entry['rows'][source].pop('creation_profile',None)
         entry['rows'][source].update(status='mapped', mapping_mode='manual', target=target,
                                      spec=spec, reason='수동 연결')
         binding = self.config['codebeamer'].get('field_bindings', {}).get(target_key)
@@ -483,8 +496,9 @@ class ImportWizard:
         """Save a field proposal only. The actual server write remains in execute()."""
         entry = self.plan['scopes'][scope]
         row = entry['rows'][source]
-        if row.get('status') != 'create' or row.get('target'):
-            raise ApiError('신규 필드 생성은 매핑할 기존 CB 필드가 없는 Jira 필드에만 설정할 수 있습니다.')
+        receipt=self.state.get(field_identity(entry.get('tracker'),source,row))
+        if receipt and receipt[0]!='done':
+            raise ApiError('이 필드의 이전 생성 요청이 불확실합니다. 서버 대조 후 생성 설정을 변경하세요.')
         label = label.strip()
         if not label:
             raise ApiError('신규 필드 이름을 입력하세요.')
@@ -501,12 +515,15 @@ class ImportWizard:
             options = {str(k):str(v).strip() for k,v in choices.items()}
         elif choices:
             raise ApiError('Choice가 아닌 필드에는 선택 옵션을 설정할 수 없습니다.')
-        row.update(mapping_mode='create', creation_saved=True, creation_profile=deepcopy(profiles[semantic]), reason='Import 승인 후 생성', creation={
+        if receipt and receipt[0]=='done':
+            row['creation_token']=hashlib.sha256(json.dumps([label,semantic,multiple,options],sort_keys=True).encode()).hexdigest()[:16]
+        row.pop('target',None)
+        row.update(status='create',spec=None,mapping_mode='create', creation_saved=True, creation_profile=deepcopy(profiles[semantic]), reason='Import 승인 후 생성', creation={
             'label':label, 'semantic_type':semantic, 'multipleSelection':bool(multiple),
             'choices':options})
         self.state.save('wizard', 'plan', self.plan)
         row['creation_stage']='PLANNED'
-        self.state.field_phase(scope+':'+source,'PLANNED',plan=deepcopy(row['creation']))
+        self.state.field_phase(scope+':'+source,'PLANNED',field_id=None,plan=deepcopy(row['creation']))
         return deepcopy(row['creation'])
 
     def errors(self):
@@ -541,7 +558,7 @@ class ImportWizard:
         except (ApiError,ValueError,KeyError,TypeError) as exc:
             previous=self.state.get('field-phase:'+phase_key)
             phase=previous[0] if previous else 'PLANNED'
-            receipt=self.state.get('wizard-field:'+str(tracker)+':'+source)
+            receipt=self.state.get(field_identity(tracker,source,row))
             if receipt and receipt[0]=='pending':phase='RECONCILIATION_REQUIRED'
             status=('RECONCILIATION_REQUIRED' if phase in ('CREATE_PENDING','RECONCILIATION_REQUIRED')
                     else 'VALUE_MAPPING_PENDING' if phase in ('CREATED','VALUE_MAPPING_PENDING') else 'FAILED')
@@ -562,7 +579,7 @@ class ImportWizard:
             definition['options'] = [{'name': label} for label in dict.fromkeys(proposal['choices'].values())]
         if not compatible(proposal['semantic_type'], proposal['multipleSelection'], dict(definition, typeName=profile['type_name'])):
             raise ApiError('Creation template changes source type')
-        identity = 'wizard-field:' + str(tracker) + ':' + source
+        identity = field_identity(tracker,source,row)
         known = self.state.get(identity)
         fields = self.cb.fields(tracker)
         matches = [f for f in fields if f.get('label', f.get('name')) == proposal['label']]
@@ -754,7 +771,7 @@ class ImportWizard:
                 actual_fields=target_fields(self.cb,checked_tracker)
                 prior_ids={field_identifier(f) for f in entry['target_fields']}
                 resumable_names={r['creation']['label'] for source,r in entry.get('rows',{}).items()
-                    if r.get('creation') and self.state.get('wizard-field:'+str(checked_tracker)+':'+source)}
+                    if r.get('creation') and self.state.get(field_identity(checked_tracker,source,r))}
                 baseline=[f for f in actual_fields if field_identifier(f) in prior_ids or f.get('label',f.get('name')) not in resumable_names]
                 if baseline != entry['target_fields']:
                     raise ApiError('Target configuration changed; analyze again: ' + scope)

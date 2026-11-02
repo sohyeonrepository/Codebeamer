@@ -174,7 +174,36 @@ class WizardTests(unittest.TestCase):
         self.wizard.discover();self.wizard.select_project('P',10)
         for kind in self.source.types:
             self.wizard.map_tracker('P',kind['id'],None if new else 100,'New '+kind['name'])
-            self.wizard.analyze('P:'+kind['id'])
+            scope='P:'+kind['id']
+            entry=self.wizard.analyze(scope)
+            # Integration fixtures explicitly choose mappings; production analysis no longer chooses.
+            choices=proposals(entry['analysis'],entry['target_fields'],self.wizard.config)
+            for source,row in choices.items():
+                if row.get('spec'):
+                    spec=row['spec']
+                    self.wizard.manual_mapping(scope,source,spec['field_id'],spec['target'],spec['value_mapping'])
+                elif row['status']=='create':
+                    creation=row['creation']
+                    self.wizard.configure_creation(scope,source,creation['label'],creation['semantic_type'],creation['multipleSelection'],creation['choices'] if creation['semantic_type'] in ('option','status') else {})
+    def test_unselected_stays_blank_and_user_can_switch_creation_and_existing(self):
+        self.wizard.discover();self.wizard.select_project('P',10)
+        self.wizard.map_tracker('P','1',100)
+        entry=self.wizard.analyze('P:1')
+        self.assertIsNotNone(entry['rows']['summary']['spec'])  # saved config mapping
+        self.assertIsNone(entry['rows']['description']['spec'])
+        self.assertNotIn('target',entry['rows']['description'])
+        self.wizard.configure_creation('P:1','summary','My Summary','text',False,{})
+        self.wizard.analyze('P:1')
+        row=self.wizard.plan['scopes']['P:1']['rows']['summary']
+        self.assertEqual(row['creation']['label'],'My Summary')
+        self.assertIsNone(row['spec'])
+        self.wizard.manual_mapping('P:1','summary',1,'name',{})
+        self.wizard.analyze('P:1')
+        row=self.wizard.plan['scopes']['P:1']['rows']['summary']
+        self.assertEqual(row['spec']['field_id'],1)
+        self.assertFalse(row.get('creation_saved'))
+        self.assertFalse(self.cb.mutations)
+
     def test_analysis_is_read_only_and_all_types_include_empty_type(self):
         self.plan()
         self.assertEqual(len(self.wizard.plan['scopes']),2)
@@ -201,7 +230,7 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['empty']['status'],'create')
         self.source.configured.append(definition('table','Steps','table',hidden=False))
         self.wizard.analyze('P:1')
-        self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['table']['status'],'error')
+        self.assertIsNone(self.wizard.plan['scopes']['P:1']['rows']['table']['spec'])
 
     def test_creation_popup_settings_are_plan_only_and_preserve_source_type(self):
         self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
@@ -212,8 +241,10 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(self.cb.mutations,before)
         with self.assertRaisesRegex(ApiError,'원본 타입'):
             self.wizard.configure_creation('P:1','empty','Wrong','number',False,{})
-        with self.assertRaisesRegex(ApiError,'기존 CB 필드'):
-            self.wizard.configure_creation('P:1','summary','No','text',False,{})
+        self.wizard.configure_creation('P:1','summary','New Summary','text',False,{})
+        self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['summary']['creation']['label'],'New Summary')
+        self.wizard.analyze('P:1')
+        self.assertIsNone(self.wizard.plan['scopes']['P:1']['rows']['summary']['spec'])
     def test_collision_and_type_conflict_are_not_automatic(self):
         self.plan();a=self.wizard.plan['scopes']['P:1']['analysis']
         a['fields']['title']=definition('title','Title');a['values']['title']=['x']
@@ -685,13 +716,13 @@ class WizardUITests(unittest.TestCase):
                         combos[3].current(index)
                         button('선택 조합 분석').invoke()
                     combos[3].current(0); button('선택 조합 분석').invoke()
-                    self.assertEqual(tuple(trees[1]['displaycolumns']), ('jira','cb'))
+                    self.assertEqual(tuple(trees[1]['columns']), ('jira','cb'))
                     self.assertIn('Codebeamer', trees[1].heading('cb')['text'])
-                    self.assertIn('실제 필드명', trees[1].heading('jira')['text'])
+                    self.assertIn('Jira 필드', trees[1].heading('jira')['text'])
                     self.assertEqual(len(trees[1].get_children()), 3)
                     creation=next(i for i in trees[1].get_children() if 'customfield_10001' in trees[1].set(i,'jira'))
                     self.assertIn('Business Value',trees[1].set(creation,'jira'))
-                    self.assertEqual(trees[1].set(creation,'action'),'＋ 신규 필드 생성')
+                    self.assertEqual(trees[1].set(creation,'cb'),'')
                     trees[1].selection_set(creation);window.update()
                     widgets=list(descendants(window));button('＋ 신규 필드 생성').invoke();window.update()
                     dialog=next(w for w in window.winfo_children() if isinstance(w,tk.Toplevel))
@@ -701,6 +732,8 @@ class WizardUITests(unittest.TestCase):
                     save.invoke();window.update()
                     self.wizard.configure_creation('P:2','customfield_10001','Planned Business Value','text',False,{})
                     self.assertFalse(self.cb.mutations)
+                    for scope in self.wizard.plan['scopes']:
+                        self.wizard.manual_mapping(scope,'description',2,'description',{})
                     self.assertEqual(self.wizard.errors(),[])
                     button('다음 (Import 승인)  ›').invoke()
                     self.assertFalse(self.cb.mutations)

@@ -128,16 +128,12 @@ def launch(wizard, initial_projects=None):
     ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
     ttk.Button(target_bar,text='선택 조합 분석',command=lambda:run('필드 분석',analyze)).pack(side='right')
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
-    active_filter=tk.StringVar(value='all')
-    filter_buttons={}
     search=tk.StringVar()
     ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
-    table = ttk.Treeview(table_frame, columns=('cb','cb_type','status','jira','action'),
-                         displaycolumns=('jira','cb'),show='headings',selectmode='browse')
-    for column,text,width in (('cb','Codebeamer 대상 필드 ▾',420),('cb_type','타입',90),('status','매핑 상태',120),
-                              ('jira','Jira 필드 (실제 필드명)',330),('action','작업',150)):
+    table = ttk.Treeview(table_frame, columns=('jira','cb'),show='headings',selectmode='browse')
+    for column,text,width in (('jira','Jira 필드',420),('cb','Codebeamer 대상 필드 ▾',500)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
     table.configure(yscrollcommand=scrollbar.set)
@@ -154,11 +150,6 @@ def launch(wizard, initial_projects=None):
     ttk.Label(step3,textvariable=detail,wraplength=1050).pack(anchor='w',pady=4)
     warning=tk.StringVar()
     ttk.Label(step3,textvariable=warning,foreground='#ad5b00',wraplength=1050).pack(anchor='w')
-    def mode(row):
-        if row.get('status')=='create':return 'create'
-        if row.get('status')=='error':return 'error'
-        if row.get('status')=='mapped':return row.get('mapping_mode') or ('auto' if row.get('reason')=='이름·타입 일치' else 'manual')
-        return 'manual'
     def scope_names(entry):
         tracker=entry.get('new_tracker')
         if not tracker:
@@ -171,33 +162,24 @@ def launch(wizard, initial_projects=None):
         entry = wizard.plan['scopes'][scopes.get()]
         scope_title.set(scope_names(entry))
         scope_rows.clear(); table.delete(*table.get_children())
-        counts={'all':0,'auto':0,'manual':0,'create':0,'error':0,'excluded':len(entry['analysis'].get('excluded',[]))}
         query=search.get().strip().casefold()
-        for index, (source, row) in enumerate(entry.get('rows', {}).items()):
-            row_mode=mode(row);counts['all']+=1;counts[row_mode]=counts.get(row_mode,0)+1
-            target = row.get('target', {})
-            left = target.get('label', target.get('name', ''))
-            if left: left += ' (' + str(target.get('typeName', target.get('type', '타입 미확인'))) + ')'
-            action='매핑 변경'
-            if row_mode=='create':left='＋ 신규 필드 생성';action='＋ 신규 필드 생성'
+        for index,(source,row) in enumerate(entry.get('rows',{}).items()):
+            target=row.get('target') or {}
+            left=''
+            if row.get('spec'):
+                left=target.get('label',target.get('name',''))+' · ID '+str(row['spec']['field_id'])
+            else:
+                phase=wizard.state.get('field-phase:'+scopes.get()+':'+source)
+                if phase and phase[1].get('field_id') and phase[0] in ('CREATED','VALUE_MAPPING_PENDING','COMPLETED'):
+                    field=phase[1].get('field',{})
+                    left=field.get('label',field.get('name',row.get('creation',{}).get('label','')))+' · ID '+str(phase[1]['field_id'])
+                elif row.get('creation_saved'):
+                    left=row['creation']['label']+' (신규 생성 예정)'
             definition=entry['analysis']['fields'][source]
-            actual_name=definition.get('name',source)
-            right=actual_name+('  ('+source+')' if source.startswith('customfield_') else '')
-            if definition.get('visibility') == 'unknown':right += ' · 표시 상태 미확인'
-            cb_kind,_=semantic_type(target) if target else (None,None)
-            if active_filter.get() not in ('all',row_mode):continue
-            if query and query not in (left+' '+right+' '+str(cb_kind)).casefold():continue
+            right=definition.get('name',source)+(' ('+source+')' if source.startswith('customfield_') else '')
+            if query and query not in (left+' '+right).casefold():continue
             iid='field-'+str(index);scope_rows[iid]=source
-            status_text={'auto':'✓ 자동 매핑','manual':'✎ 수동 매핑','create':'＋ 신규 생성 필요','error':'! 매핑 오류'}[row_mode]
-            table.insert('', 'end',iid=iid,values=(left or '수동 연결 필요',cb_kind or '-',status_text,right,action),tags=(row_mode,))
-        if active_filter.get()=='excluded':
-            for index,item in enumerate(entry['analysis'].get('excluded',[])):
-                right=item['name']+('  ('+item['field']+')' if item['field'].startswith('customfield_') else '')
-                if query and query not in right.casefold():continue
-                iid='excluded-'+str(index);scope_rows[iid]=None
-                table.insert('','end',iid=iid,values=('-', '-', '제외 (Jira Hidden)',right,'-'),tags=('error' if item['has_value'] else 'manual',))
-        labels={'all':'전체','auto':'자동 매핑','manual':'수동 매핑','create':'신규 생성','error':'오류','excluded':'제외'}
-        for key,button in filter_buttons.items():button.configure(text=labels[key]+' ('+str(counts.get(key,0))+')')
+            table.insert('','end',iid=iid,values=(right,left))
         risks=entry['analysis']['risks']+entry.get('target_risks',[])
         api_warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(entry.get('tracker') or entry.get('template_tracker')),{}).get('warnings',[])
         detail.set('조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
@@ -210,9 +192,6 @@ def launch(wizard, initial_projects=None):
     def analyze():
         if not scopes.get(): raise ValueError('Tracker ↔ Issue Type 조합을 선택하세요.')
         result=wizard.analyze(scopes.get());display_scope();return result
-    for key in ('all','auto','manual','create','excluded','error'):
-        button=ttk.Button(tools,text=key,command=lambda k=key:(active_filter.set(k),display_scope()))
-        button.pack(side='left',padx=(0,4));filter_buttons[key]=button
     scopes.bind('<<ComboboxSelected>>',lambda event:display_scope())
     search.trace_add('write',lambda *_:display_scope())
     def inspect(event=None):
@@ -225,14 +204,9 @@ def launch(wizard, initial_projects=None):
             row = wizard.plan['scopes'][scopes.get()]['rows'][source]
             phase=wizard.state.get('field-phase:'+scopes.get()+':'+source)
             detail.set(row.get('reason','') + ((' · '+phase[0]+' · Field ID '+str(phase[1].get('field_id','미생성'))+' · '+phase[1].get('error','')) if phase else ''))
-            if row.get('status')=='create':
-                manual_button.pack_forget()
-                if not create_button.winfo_manager():create_button.pack(side='left')
-                create_button.configure(state='normal')
-            else:
-                create_button.pack_forget()
-                if not manual_button.winfo_manager():manual_button.pack(side='left')
-                manual_button.configure(state='normal')
+            if not manual_button.winfo_manager():manual_button.pack(side='left')
+            if not create_button.winfo_manager():create_button.pack(side='left')
+            manual_button.configure(state='normal');create_button.configure(state='normal')
         else:
             create_button.pack_forget()
             if not manual_button.winfo_manager():manual_button.pack(side='left')
@@ -300,7 +274,6 @@ def launch(wizard, initial_projects=None):
         scope=scopes.get();entry=wizard.plan['scopes'][scope];source=scope_rows[table.selection()[0]]
         if source is None:return
         row=entry['rows'][source]
-        if row.get('status')!='create':return
         definition=entry['analysis']['fields'][source]
         source_kind,source_multiple=semantic_type(definition,True)
         profiles=wizard.creation_profiles(scope)
@@ -310,7 +283,7 @@ def launch(wizard, initial_projects=None):
         body=ttk.Frame(dialog,padding=18);body.pack(fill='both',expand=True)
         ttk.Label(body,text='신규 Codebeamer 필드 생성 설정',style='WizardTitle.TLabel').grid(row=0,column=0,columnspan=2,sticky='w',pady=(0,14))
         ttk.Label(body,text='필드 이름 *').grid(row=1,column=0,sticky='w',pady=5)
-        name=tk.StringVar(value=row['creation'].get('label',definition.get('name',source)))
+        name=tk.StringVar(value=row.get('creation',{}).get('label',definition.get('name',source)))
         ttk.Entry(body,textvariable=name,width=38).grid(row=1,column=1,sticky='ew',pady=5)
         ttk.Label(body,text='필드 타입 *').grid(row=2,column=0,sticky='w',pady=5)
         type_names=list(profiles)
@@ -320,7 +293,7 @@ def launch(wizard, initial_projects=None):
         ttk.Checkbutton(body,text='다중 선택',variable=multiple,state='disabled').grid(row=3,column=1,sticky='w')
         ttk.Label(body,text='선택 옵션 (한 줄에 하나)').grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
         options=tk.Text(body,width=48,height=7)
-        initial=list(dict.fromkeys(row['creation'].get('choices',{}).values()))
+        initial=list(dict.fromkeys(row.get('creation',{}).get('choices',{}).values()))
         options.insert('1.0','\n'.join(initial));options.grid(row=5,column=0,columnspan=2,sticky='nsew')
         if source_kind not in ('option','status'):options.configure(state='disabled')
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
@@ -355,7 +328,7 @@ def launch(wizard, initial_projects=None):
         fields = [c['field'] for c in candidates]
         labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
         labels = [label+(' — '+c['reason'] if c['reason'] else '') for label,c in zip(labels,candidates)]
-        can_create = entry['rows'][source].get('status') == 'create'
+        can_create = True
         if can_create:labels.append('＋ 신규 필드 생성')
         if not labels:
             detail.set('호환 후보 없음: Jira '+str(kind)+' / 다중 선택 '+str(multiple)+
