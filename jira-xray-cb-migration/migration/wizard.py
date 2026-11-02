@@ -337,6 +337,12 @@ class ImportWizard:
         entry.update(analysis=analysis, target_fields=fields,
                      rows=proposals(analysis, fields, self.config, existing))
         for source, row in old_rows.items():
+            phase=self.state.get('field-phase:'+scope+':'+source)
+            receipt=self.state.get('wizard-field:'+str(tracker)+':'+source)
+            if row.get('creation') and receipt and phase and phase[0]!='COMPLETED' and source in entry['rows']:
+                entry['rows'][source]=deepcopy(row)
+                entry['rows'][source].update(status='create',spec=None)
+                continue
             if row.get('creation_saved') and source in entry['rows'] and entry['rows'][source]['status'] == 'create':
                 entry['rows'][source].update(creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')))
         entry['target_risks'] = [{'field': source, 'reason': 'hidden-target-with-source-values'}
@@ -435,7 +441,18 @@ class ImportWizard:
         fields = target_fields(self.cb, tracker)
         configuration = self.cb.configuration(tracker)
         reasons = []
-        for template in creation_templates(configuration, fields):
+        template_configuration=deepcopy(configuration)
+        if 'field_type_catalog' in self.cb.config.get('operations',{}):
+            operation=self.cb.operation('field_type_catalog')
+            if operation['method'].upper()!='GET':raise ApiError('Field type catalog must be GET')
+            catalog=self.cb.call('field_type_catalog')
+            if not isinstance(catalog,list) or any(not isinstance(f,dict) or type(f.get('typeId')) is not int or not f.get('typeName') for f in catalog):
+                raise ApiError('Verified field type catalog requires typeId/typeName definitions')
+            template_configuration['fields'].extend(catalog)
+            fields=fields+catalog
+            self.cb.config['verified_creation_type_ids']=[f['typeId'] for f in catalog]
+            self.state.save('wizard','field-type-catalog',catalog)
+        for template in creation_templates(template_configuration, fields):
             definition = template['definition']
             representative = next((f for f in fields if f.get('typeId') == definition['typeId']), None)
             if not representative: continue
@@ -488,6 +505,8 @@ class ImportWizard:
             'label':label, 'semantic_type':semantic, 'multipleSelection':bool(multiple),
             'choices':options})
         self.state.save('wizard', 'plan', self.plan)
+        row['creation_stage']='PLANNED'
+        self.state.field_phase(scope+':'+source,'PLANNED',plan=deepcopy(row['creation']))
         return deepcopy(row['creation'])
 
     def errors(self):
@@ -516,6 +535,22 @@ class ImportWizard:
         return errors
 
     def create_field(self, scope, source, row, tracker):
+        phase_key=scope+':'+source
+        try:
+            return self._create_field(scope,source,row,tracker)
+        except (ApiError,ValueError,KeyError,TypeError) as exc:
+            previous=self.state.get('field-phase:'+phase_key)
+            phase=previous[0] if previous else 'PLANNED'
+            receipt=self.state.get('wizard-field:'+str(tracker)+':'+source)
+            if receipt and receipt[0]=='pending':phase='RECONCILIATION_REQUIRED'
+            status=('RECONCILIATION_REQUIRED' if phase in ('CREATE_PENDING','RECONCILIATION_REQUIRED')
+                    else 'VALUE_MAPPING_PENDING' if phase in ('CREATED','VALUE_MAPPING_PENDING') else 'FAILED')
+            row['creation_stage']=status
+            self.state.field_phase(phase_key,status,error=str(exc) if isinstance(exc,ApiError) else type(exc).__name__)
+            self.state.save('wizard','plan',self.plan)
+            raise
+
+    def _create_field(self, scope, source, row, tracker):
         from mapping_helper import create_dedicated_field, dedicated_field_contract, create_confirmed_field
         proposal = row['creation']
         profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
@@ -535,10 +570,34 @@ class ImportWizard:
             if len(matches) != 1:
                 raise ApiError('Uncertain field creation: reconcile server state')
             created = matches[0]
+            if known[0] != 'done':
+                journal_path=self.state.root/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
+                journal=json.loads(journal_path.read_text()) if journal_path.exists() else {}
+                receipt=next((v for v in journal.values() if v.get('tracker')==tracker),None)
+                if not receipt:
+                    raise ApiError('Pending request has no POST evidence; reconciliation required, no repost')
+                request_body=receipt.get('request',{}).get('body')
+                baseline=request_body['fields'][:-1] if request_body else receipt.get('before_fields')
+                current=self.cb.configuration(tracker) if request_body else {'fields':fields}
+                if baseline is None:raise ApiError('Pending request baseline unavailable; no repost')
+                for old in baseline:
+                    same=next((f for f in current['fields'] if field_identifier(f)==field_identifier(old)),None)
+                    if same is None or any(same.get(k)!=v for k,v in old.items()):
+                        raise ApiError('Pending field reconciliation: existing configuration changed')
+                if request_body and any(current.get(k)!=v for k,v in request_body.items() if k!='fields'):
+                    raise ApiError('Pending field reconciliation: Tracker settings changed')
+                for key in ('typeId','mandatory','multipleSelection','permission','reference'):
+                    if key in definition and created.get(key)!=definition[key]:
+                        raise ApiError('Pending field definition mismatch: '+key)
+                if definition.get('options') is not None:
+                    options=created.get('options')
+                    if not isinstance(options,list) or len(options)!=len(definition['options']) or any(
+                        any(actual_option.get(k)!=v for k,v in planned.items())
+                        for planned,actual_option in zip(definition['options'],options)):
+                        raise ApiError('Pending field Choice definition mismatch')
         else:
             if matches:
                 raise ApiError('Field appeared after analysis; analyze again before reusing it')
-            self.state.mark(identity, 'pending', None)
             journal = self.state.root / ('field-' + hashlib.sha256(identity.encode()).hexdigest() + '.json')
             try:
                 if profile.get('creation_method') == 'configuration':
@@ -549,14 +608,20 @@ class ImportWizard:
                 from clients.codebeamer_3007 import configuration_field_contract
                 expected = configuration_field_contract(self.cb,definition,tracker)
                 direct = False
+            self.state.field_phase(scope+':'+source,'VALIDATED',tracker_id=tracker,definition=definition)
+            row['creation_stage']='VALIDATED'
+            def before_post():
+                self.state.mark(identity,'pending',None)
+                self.state.field_phase(scope+':'+source,'CREATE_PENDING',tracker_id=tracker)
+                row['creation_stage']='CREATE_PENDING'
             self.state.save('field-creation', identity+'-request', {'tracker_id':tracker,
                 'definition':definition, 'method':'POST',
                 'path':'dedicated-field-contract' if direct else '/v3/tracker/configuration'})
             try:
                 if direct:
-                    created, response = create_dedicated_field(self.cb,tracker,definition,journal)
+                    created, response = create_dedicated_field(self.cb,tracker,definition,journal,before_post=before_post)
                 else:
-                    created, response = create_confirmed_field(self.cb,tracker,definition,expected,journal,approved=True)
+                    created, response = create_confirmed_field(self.cb,tracker,definition,expected,journal,approved=True,before_post=before_post)
                 self.state.save('field-creation', identity+'-readback', {'field':created,'configuration':response})
             except ApiError as exc:
                 self.state.save('field-creation', identity+'-failure', {'tracker_id':tracker,
@@ -569,6 +634,10 @@ class ImportWizard:
             raise ApiError('Created field readback type/multiplicity mismatch')
         if known and known[0] == 'done' and known[1]['id'] != field_identifier(actual):
             raise ApiError('Created field ID changed')
+        self.state.mark(identity,'done',{'id':field_identifier(actual)})
+        self.state.field_phase(scope+':'+source,'CREATED',field_id=field_identifier(actual),tracker_id=tracker,field=actual)
+        row['creation_stage']='CREATED'
+        self.state.field_phase(scope+':'+source,'VALUE_MAPPING_PENDING')
         mapping, unmatched = suggest_values(entry_values(self.plan['scopes'][scope], source), actual.get('options'), 'id' if source == 'components' else None)
         if proposal['semantic_type'] in ('option', 'status') and unmatched:
             raise ApiError('Created Choice values do not cover the source')
@@ -681,8 +750,15 @@ class ImportWizard:
             if latest != entry['analysis']:
                 raise ApiError('Source fields/values changed; analyze again: ' + scope)
             checked_tracker = entry['tracker'] or entry.get('template_tracker')
-            if checked_tracker and target_fields(self.cb, checked_tracker) != entry['target_fields']:
-                raise ApiError('Target configuration changed; analyze again: ' + scope)
+            if checked_tracker:
+                actual_fields=target_fields(self.cb,checked_tracker)
+                prior_ids={field_identifier(f) for f in entry['target_fields']}
+                resumable_names={r['creation']['label'] for source,r in entry.get('rows',{}).items()
+                    if r.get('creation') and self.state.get('wizard-field:'+str(checked_tracker)+':'+source)}
+                baseline=[f for f in actual_fields if field_identifier(f) in prior_ids or f.get('label',f.get('name')) not in resumable_names]
+                if baseline != entry['target_fields']:
+                    raise ApiError('Target configuration changed; analyze again: ' + scope)
+
         from migration.preservation import preflight
         if self.state.load('wizard','relation-catalog'):
             from migration.relation_mapping import catalogs, normalize
@@ -830,6 +906,12 @@ class ImportWizard:
             xray.runs = lambda issue, field: deepcopy(runs[issue['key']])
             report = Engine(jira, xray, self.cb,
                             self.state, settings, True).migrate()
+            for scope,entry in self.plan['scopes'].items():
+                for source,row in entry['rows'].items():
+                    if row.get('creation_stage') and report.get('complete'):
+                        row['creation_stage']='COMPLETED'
+                        self.state.field_phase(scope+':'+source,'COMPLETED',item_ids=[i.get('target_id') for i in report['issues'] if i.get('target_id')])
+            self.state.save('wizard','plan',self.plan)
             self.stage('import', report)
             return report
         finally:

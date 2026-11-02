@@ -316,3 +316,42 @@ Reference 방식은 소유 Tracker ID, Reference Field ID, 대상 Tracker ID를 
 이번 환경에서 이 문서 조회는 프록시 HTTP 403으로 차단되어 본문을 독립 확인하지 못했습니다.
 고객 서버 접속 정보도 없어 Association/Reference 실서버 생성은 수행하지 않았습니다.
 자동 테스트는 방향 반전·inward/outward 중복 방지·재실행/저장 복원·참조 보존·Tracker 불일치 차단을 검증합니다.
+
+## 생성 실행 상태와 복구
+
+`configure_creation()`은 PLANNED만 저장합니다. 전체 Import의 다른 사전 검사가 실패하면 POST가
+실행되지 않습니다. PLANNED를 서버 생성 성공으로 읽어서는 안 됩니다.
+`create_field()`는 기존 생성 helper의 읽기/스키마 검증을 거친 뒤 VALIDATED를 기록하고,
+helper의 실제 POST 직전 callback에서만 CREATE_PENDING과 기존 생성 journal을 연결합니다.
+
+재조회된 Field ID는 Choice 매핑 전에 CREATED로 독립 저장합니다. 이후 VALUE_MAPPING_PENDING에서
+원본 값/옵션 ID를 연결하고 실제 Engine의 검증된 Import 결과가 완료일 때만 COMPLETED로 올립니다.
+POST 전 실패는 FAILED, POST가 시작된 뒤 응답/결과가 불확실하면 RECONCILIATION_REQUIRED입니다.
+`field-status/` JSON과 SQLite `field-phase:*` 기록에 단계 이력·Field ID·원인이 있으며 기존 화면의
+선택 행 설명에도 상태가 표시됩니다. 기존 State.once()의 pending 자동 재실행 금지는 유지합니다.
+
+응답 유실 후에는 생성 journal의 POST 전 정의/기존 설정을 실제 서버 응답과 대조합니다.
+유일한 필드 이름만으로 성공을 선언하지 않습니다. ID·타입·다중 선택·Permission·Choice 및 기존
+필드/Tracker 설정 보존이 확인되어야 이어갑니다. 근거 없는 과거 pending은 자동 POST하지 않고
+RECONCILIATION_REQUIRED로 남깁니다. CREATED 이후 옵션 매핑 실패는 생성 성공을 취소하지 않으며,
+재분석·재시작 후에도 기존 ID를 재사용합니다. state/journal 파일을 삭제하지 마세요.
+
+### 선택 Tracker에 없는 타입
+
+검증된 `codebeamer.operations.field_type_catalog` GET이 설정된 경우 서버 타입 정의 목록을 읽습니다.
+이는 내부 adapter 이름이며 고정된 신규 API 경로를 추측한 것이 아닙니다. 정규화된 전체 배열에는
+실제 typeId, typeName, Permission, options/reference 등 생성 정의가 필요합니다. 해당 정의도 실제
+Tracker Configuration POST schema로 검증합니다. 카탈로그가 없는 환경에서는 기존 Tracker 정의와
+명시적 프로필만 사용하며, 서버가 지원하는 모든 타입을 발견했다고 표시하지 않습니다.
+
+| 타입 | 계획 및 생성 경로 | 이번 변경의 실제 서버 생성/값 재조회 |
+| --- | --- | --- |
+| Text, Wikitext | 서버 정의·Permission·POST 계약 확인 시 계획 가능 | 미검증 |
+| Choice / Components | 서버 옵션 ID와 원본 ID 분리, 다중 선택 보존 | 미검증 |
+| Integer, Date, Boolean | 서버 타입 이름·typeId·POST 계약 확인 시 계획 가능 | 미검증 |
+| User, Members | 검증된 정의 및 사용자/참조 설정 필요; 참조형 템플릿은 자동 복사하지 않음 | 미검증 |
+
+어느 타입도 이번 작업에서 실서버 생성 완료로 판정하지 않았습니다. FieldValue 쓰기 가능 여부는 각
+생성 프로필의 value_contract 및 실제 Item GET 검증을 별도로 확인해야 합니다.
+실서버 완료 증거는 POST 경로·HTTP 상태, 실제 Field ID/Configuration, Option ID 대응표, Item ID/GET 값,
+기존 설정/권한 보존, 동일 작업 재실행 결과입니다. 이 환경에는 고객 서버 접속 정보가 없어 이 증거는 없습니다.

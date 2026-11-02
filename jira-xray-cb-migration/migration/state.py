@@ -31,6 +31,19 @@ class State:
         self.mark(key, 'done', result)
         return result
 
+    def field_phase(self, key, status, **evidence):
+        allowed={'PLANNED','VALIDATED','CREATE_PENDING','CREATED','VALUE_MAPPING_PENDING',
+                 'COMPLETED','FAILED','RECONCILIATION_REQUIRED'}
+        if status not in allowed:raise ApiError('Unknown field phase')
+        previous=self.get('field-phase:'+key)
+        result=dict(previous[1]) if previous else {}
+        history=list(result.get('history',[]))
+        history.append({'status':status,**evidence})
+        result.update(evidence,history=history)
+        self.mark('field-phase:'+key,status,result)
+        self.save('field-status',key,dict(result,status=status))
+        return result
+
     def save(self, directory, key, data):
         import hashlib
         dest = self.root / directory / (hashlib.sha256(str(key).encode()).hexdigest() + '.json')

@@ -586,7 +586,7 @@ def creation_templates(configuration, metadata=None):
     """Minimal templates from observed field definitions; no copied ID or options."""
     templates = []
     seen = set()
-    types={str(field_identifier(field)):field for field in metadata or []}
+    types={str(field_identifier(field)):field for field in metadata or [] if field_identifier(field) is not None}
     for field in configuration.get('fields', []):
         if 'typeId' not in field or not isinstance(field.get('permission'),dict):
             continue
@@ -607,7 +607,7 @@ def creation_templates(configuration, metadata=None):
     return templates
 
 
-def create_confirmed_field(cb, tracker, definition, expected, journal_path, approved=False):
+def create_confirmed_field(cb, tracker, definition, expected, journal_path, approved=False, before_post=None):
     """Add one approved definition, preserving existing fields and uncertain writes."""
     if approved is not True:
         raise ApiError('필드 생성 확인이 필요합니다.')
@@ -631,7 +631,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     identities=[('id',str(field_identifier(f))) if field_identifier(f) is not None else ('label',f.get('label'),f.get('typeId')) for f in expected['fields']]
     if len(set(identities))!=len(identities) or any(key[0]=='label' and not key[1] for key in identities):
         raise ApiError('기존 필드의 고유 ID/이름을 확인할 수 없어 생성을 중단합니다.')
-    if definition['typeId'] not in {f.get('typeId') for f in expected['fields']}:
+    if definition['typeId'] not in ({f.get('typeId') for f in expected['fields']} | set(getattr(cb,'config',{}).get('verified_creation_type_ids',[]))):
         raise ApiError('서버에서 확인되지 않은 필드 타입 ID입니다.')
     if any(normalized_label(f.get('label','')) == normalized_label(definition['label']) for f in expected['fields']):
         raise ApiError('같은 이름의 필드가 이미 있습니다. 기존 필드에 매핑하세요.')
@@ -660,6 +660,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     previous = cb.write
     try:
         cb.write = True
+        if before_post:before_post()
         response = read_stage('Codebeamer 새 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
         journal[identity]['post_response'] = response
         persist()
@@ -932,7 +933,7 @@ def partial_field_templates(fields):
     return templates
 
 
-def create_dedicated_field(cb, tracker, definition, journal_path):
+def create_dedicated_field(cb, tracker, definition, journal_path, before_post=None):
     if not isinstance(definition.get('label'),str) or not definition['label'].strip():raise ApiError('새 필드 이름이 필요합니다.')
     if any(key in definition for key in ('id','fieldId','referenceId')):raise ApiError('새 필드 ID는 서버가 부여해야 합니다.')
     operation,body=dedicated_field_contract(cb,definition,tracker)
@@ -944,7 +945,7 @@ def create_dedicated_field(cb, tracker, definition, journal_path):
     journal=json.loads(journal_path.read_text(encoding='utf-8')) if journal_path.exists() else {}
     identity=hashlib.sha256(json.dumps([tracker,definition['label']],ensure_ascii=False).encode()).hexdigest()
     if identity in journal:raise ApiError('이 필드의 이전 생성 기록이 있습니다. 서버에서 확인한 뒤 기존 필드에 연결하세요.')
-    journal[identity]={'status':'pending','tracker':tracker}
+    journal[identity]={'status':'pending','tracker':tracker,'before_fields':before,'definition':definition}
     def persist():
         temporary=journal_path.with_suffix(journal_path.suffix+'.tmp')
         temporary.write_text(json.dumps(journal,indent=2),encoding='utf-8');temporary.replace(journal_path)
@@ -953,6 +954,7 @@ def create_dedicated_field(cb, tracker, definition, journal_path):
     previous_op=cb.config.setdefault('operations',{}).get('helper_field_create')
     try:
         cb.write=True;cb.config['operations']['helper_field_create']=operation
+        if before_post:before_post()
         read_stage('Codebeamer 전용 API 필드 생성',lambda:cb.call('helper_field_create',{'trackerId':tracker,'id':tracker},body))
     finally:
         cb.write=previous

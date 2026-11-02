@@ -223,7 +223,8 @@ def launch(wizard, initial_projects=None):
                 create_button.pack_forget();manual_button.configure(state='disabled')
                 return
             row = wizard.plan['scopes'][scopes.get()]['rows'][source]
-            detail.set(row.get('reason',''))
+            phase=wizard.state.get('field-phase:'+scopes.get()+':'+source)
+            detail.set(row.get('reason','') + ((' · '+phase[0]+' · Field ID '+str(phase[1].get('field_id','미생성'))+' · '+phase[1].get('error','')) if phase else ''))
             if row.get('status')=='create':
                 manual_button.pack_forget()
                 if not create_button.winfo_manager():create_button.pack(side='left')

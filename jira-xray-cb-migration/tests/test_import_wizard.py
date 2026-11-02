@@ -261,6 +261,44 @@ class WizardTests(unittest.TestCase):
         self.assertEqual([f['id'] for f in self.cb.definitions if f['label']=='Empty'],[10])
         self.assertTrue(any(name=='helper_field_create' for name,_ in self.cb.mutations))
         self.assertEqual(self.cb.config['field_bindings']['jira_empty']['fieldId'],10)
+    def test_validation_failure_does_not_leave_pending_creation(self):
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        self.plan()
+        row=self.wizard.plan['scopes']['P:1']['rows']['empty']
+        with patch('mapping_helper.dedicated_field_contract',side_effect=ApiError('schema missing')), patch(
+                'clients.codebeamer_3007.configuration_field_contract',side_effect=ApiError('schema missing')):
+            with self.assertRaisesRegex(ApiError,'schema missing'):
+                self.wizard.create_field('P:1','empty',row,100)
+        self.assertIsNone(self.state.get('wizard-field:100:empty'))
+        self.assertEqual(self.state.get('field-phase:P:1:empty')[0],'FAILED')
+        self.assertFalse(self.cb.mutations)
+
+    def test_created_field_resumes_after_value_mapping_failure(self):
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        self.plan()
+        with patch('migration.wizard.build_spec',side_effect=ApiError('value mapping failed')):
+            with self.assertRaisesRegex(ApiError,'value mapping failed'):self.wizard.execute(True)
+        self.assertEqual(self.state.get('wizard-field:100:empty'),('done',{'id':10}))
+        self.assertEqual(self.state.get('field-phase:P:1:empty')[0],'VALUE_MAPPING_PENDING')
+        self.assertTrue(self.wizard.execute(True)['complete'])
+        self.assertEqual(sum(name=='helper_field_create' for name,_ in self.cb.mutations),1)
+        self.assertEqual(self.state.get('field-phase:P:1:empty')[0],'COMPLETED')
+
+    def test_lost_field_response_reconciles_without_repost(self):
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        self.plan()
+        original=self.cb.call
+        def lost(name,*args,**kwargs):
+            result=original(name,*args,**kwargs)
+            if name=='helper_field_create':raise ApiError('Lost POST response')
+            return result
+        self.cb.call=lost
+        with self.assertRaisesRegex(ApiError,'Lost POST'):self.wizard.execute(True)
+        self.assertEqual(self.state.get('field-phase:P:1:empty')[0],'RECONCILIATION_REQUIRED')
+        self.cb.call=original
+        self.assertTrue(self.wizard.execute(True)['complete'])
+        self.assertEqual(sum(name=='helper_field_create' for name,_ in self.cb.mutations),1)
+
     def test_definition_created_without_value_binding_is_not_complete(self):
         self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
         self.config['migration']['wizard']['field_types']['text'].pop('binding')
