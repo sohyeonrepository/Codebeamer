@@ -9,6 +9,38 @@ def prefer_v3_aliases(paths):
     return [path for path in paths if path.startswith('/v3/') or '/v3'+path not in available]
 
 
+def project_reads(cb):
+    """Bind the complete project list and one-project GET from actual Swagger routes."""
+    operations=cb.config.setdefault('operations',{})
+    shapes={
+        'projects_get':r'(?:/v3)?/projects/?',
+        'project_get':r'(?:/v3)?/projects/\{(?:projectId|id)\}/?'}
+    selected={}
+    for name,shape in shapes.items():
+        configured=operations.get(name)
+        if configured:
+            try:
+                current=cb.operation(name)
+                if current['method'].upper()=='GET' and re.fullmatch(shape,current['path']):
+                    selected[name]=current;continue
+            except ApiError:
+                pass
+        paths=[p for p,methods in cb.spec['paths'].items()
+               if re.fullmatch(shape,p) and isinstance(methods.get('get'),dict)]
+        v3=[p for p in paths if p.startswith('/v3/')]
+        paths=prefer_v3_aliases(paths)
+        if v3:paths=v3
+        if len(paths)!=1:
+            raise ApiError(name+': 프로젝트 GET 경로를 Swagger에서 하나로 확인할 수 없습니다: '+', '.join(paths))
+        operation={'method':'GET','path':paths[0]}
+        if configured:
+            for key in ('response_path','response_fields'):
+                if key in configured:operation[key]=configured[key]
+        operations[name]=operation
+        selected[name]=cb.operation(name)
+    return selected
+
+
 def project_tracker_list(cb):
     """Choose a complete project list by route shape, not operationId alone."""
     operations = cb.config.setdefault('operations',{})
@@ -93,6 +125,10 @@ def bind(cb):
         project_tracker_list(cb)
     except ApiError:
         pass  # Report this capability when the user requests Tracker discovery.
+    try:
+        project_reads(cb)
+    except ApiError:
+        pass  # Report exact project capability when the Wizard requests it.
     cb.config['verified_3007_routes'] = status
     return status
 

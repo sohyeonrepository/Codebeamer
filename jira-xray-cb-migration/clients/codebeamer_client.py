@@ -81,7 +81,10 @@ class CodebeamerClient:
             raise ApiError('Write refused in dry-run')
         context = dict(params or {}, payload=data)
         path_params = dict(params or {})
-        # Bind a generic {id} only for a project-scoped Tracker-list GET.
+        # Bind a generic {id} only for verified project-scoped read operations.
+        if method == 'GET' and operation_name == 'project_get' and re.fullmatch(r'(?:/v3)?/projects/\{id\}/?',op['path']):
+            if 'id' not in path_params and 'projectId' in path_params:
+                path_params['id'] = path_params['projectId']
         if method == 'GET' and operation_name == 'trackers_get' and re.search(r'/projects/\{id\}/trackers(?:/|$)',op['path']):
             if 'id' not in path_params and 'projectId' in path_params:
                 path_params['id'] = path_params['projectId']

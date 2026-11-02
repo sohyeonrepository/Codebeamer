@@ -118,6 +118,29 @@ class TrackerPathTests(unittest.TestCase):
 
 
 class TrackerDiscoveryTests(unittest.TestCase):
+    def test_project_reads_prefer_v3_and_bind_generic_detail_id(self):
+        from clients.codebeamer_3007 import project_reads
+        from clients.codebeamer_client import CodebeamerClient
+        from unittest.mock import Mock
+        http=Mock();http.request.side_effect=[[{'id':1}],{'id':1,'name':'Test'}]
+        cb=CodebeamerClient(http,{'operations':{'prpject_get':{'method':'GET','path':'/wrong'}}})
+        cb.spec={'paths':{p:{'get':{}} for p in ('/projects','/v3/projects','/projects/{projectId}','/v3/projects/{id}')}}
+        selected=project_reads(cb)
+        self.assertEqual(selected['projects_get']['path'],'/v3/projects')
+        self.assertEqual(selected['project_get']['path'],'/v3/projects/{id}')
+        self.assertEqual(cb.call('projects_get'),[{'id':1}])
+        self.assertEqual(cb.call('project_get',{'projectId':1})['id'],1)
+        self.assertEqual([call.args[:2] for call in http.request.call_args_list],
+                         [('GET','/v3/projects'),('GET','/v3/projects/1')])
+
+    def test_project_reads_do_not_choose_unrelated_project_route(self):
+        from clients.codebeamer_3007 import project_reads
+        from clients.codebeamer_client import CodebeamerClient
+        cb=CodebeamerClient(None,{'operations':{}})
+        cb.spec={'paths':{'/other/projects':{'get':{}},'/v3/projects/{id}':{'get':{}}}}
+        with self.assertRaisesRegex(ApiError,'projects_get'):
+            project_reads(cb)
+
     def test_typed_operation_id_is_replaced_with_actual_complete_list(self):
         from clients.codebeamer_client import CodebeamerClient
         from clients.codebeamer_3007 import project_tracker_list

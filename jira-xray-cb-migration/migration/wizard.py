@@ -233,6 +233,10 @@ class ImportWizard:
     def discover(self):
         self.cb.write = False
         self.cb.discover()
+        from clients.codebeamer_client import CodebeamerClient
+        if isinstance(self.cb,CodebeamerClient):
+            from clients.codebeamer_3007 import project_reads
+            project_reads(self.cb)
         projects = self.cb.call('projects_get')
         if not isinstance(projects, list):
             raise ApiError('projects_get must normalize a complete project array')
