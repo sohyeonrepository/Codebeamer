@@ -13,7 +13,14 @@ TYPES = {'TextField':'Text', 'WikiTextField':'Wikitext', 'WikitextField':'Wikite
 def normalize(field):
     result = deepcopy(field)
     if field.get('name'): result['label'] = field['name']
-    if field.get('type') in TYPES: result['typeName'] = TYPES[field['type']]
+    raw_type = field.get('type')
+    if isinstance(raw_type, dict): raw_type = raw_type.get('name')
+    if isinstance(raw_type, str) and raw_type in TYPES: result['typeName'] = TYPES[raw_type]
+    if not result.get('typeName'):
+        model = str(field.get('valueModel', '')).split('<', 1)[0]
+        models = {'TextFieldValue':'Text','WikiTextFieldValue':'Wikitext','IntegerFieldValue':'Integer',
+                  'DecimalFieldValue':'Decimal','BooleanFieldValue':'Boolean','DateFieldValue':'Date'}
+        if model in models: result['typeName'] = models[model]
     if type(field.get('multipleValues')) is bool: result['multipleSelection'] = field['multipleValues']
     return result
 

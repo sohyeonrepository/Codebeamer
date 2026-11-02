@@ -237,13 +237,14 @@ def launch(wizard, initial_projects=None):
         source = scope_rows[table.selection()[0]]
         if source is None:return
         source_kind,source_multiple=semantic_type(entry['analysis']['fields'][source],True)
-        fields = [f for f in entry['target_fields'] if not hidden(f) and compatible(source_kind,source_multiple,f)]
-        if not fields:raise ValueError('호환되는 기존 Codebeamer 필드가 없습니다. 신규 필드 생성을 사용하세요.')
+        candidates = wizard.mapping_candidates(scope,source)
+        fields = [c['field'] for c in candidates]
+        if not fields:raise ApiError('선택 Tracker의 Field API가 빈 목록을 반환했습니다.')
         dialog = tk.Toplevel(root); dialog.title('필드 수동 연결')
         dialog.transient(root);dialog.grab_set()
         ttk.Label(dialog,text='Jira 필드: '+entry['analysis']['fields'][source].get('name',source),style='WizardTitle.TLabel').pack(padx=18,pady=12)
         ttk.Label(dialog,text='호환되는 기존 Codebeamer 필드').pack(anchor='w',padx=18)
-        box = ttk.Combobox(dialog, state='readonly', width=55, values=[f.get('label',f.get('name','')) for f in fields])
+        box = ttk.Combobox(dialog, state='readonly', width=55, values=[c['field'].get('label',c['field'].get('name',''))+' · ID '+str(field_identifier(c['field']))+' · '+str(c['field'].get('typeName',c['field'].get('type','타입 미확인')))+(' — '+c['reason'] if c['reason'] else '') for c in candidates])
         box.pack(padx=18,pady=6)
         value_frame = ttk.Frame(dialog); value_frame.pack(fill='both', padx=12, pady=12)
         choices = []
@@ -260,6 +261,12 @@ def launch(wizard, initial_projects=None):
                     ttk.Label(value_frame, text=label).pack(anchor='w')
                     choice = ttk.Combobox(value_frame, state='readonly', values=[str(o.get('name',o.get('label',''))) for o in options])
                     choice.pack(fill='x'); choices.append((identity,choice,options))
+                    saved = (entry['rows'][source].get('spec') or {})
+                    if saved.get('field_id') == field_identifier(target):
+                        value = saved.get('value_mapping',{}).get(identity)
+                        value_id = value.get('id') if isinstance(value,dict) else value
+                        index = next((i for i,o in enumerate(options) if o.get('id') == value_id), None)
+                        if index is not None:choice.current(index)
         box.bind('<<ComboboxSelected>>', fill)
         chosen = selected_target or entry['rows'][source].get('target')
         if chosen:
@@ -267,6 +274,7 @@ def launch(wizard, initial_projects=None):
             if index is not None: box.current(index); fill()
         def accept():
             if box.current() < 0: raise ValueError('CB 필드를 선택하세요.')
+            if candidates[box.current()]['reason']:raise ApiError(candidates[box.current()]['reason'])
             target = fields[box.current()]; fid = field_identifier(target)
             bindings = wizard.config['codebeamer'].get('field_bindings', {})
             keys = [k for k,b in bindings.items() if b.get('fieldId') == fid]
@@ -334,8 +342,10 @@ def launch(wizard, initial_projects=None):
         if source is None:return
         entry = wizard.plan['scopes'][scopes.get()]
         kind, multiple = semantic_type(entry['analysis']['fields'][source], True)
-        fields = [f for f in entry['target_fields'] if not hidden(f) and compatible(kind,multiple,f)]
+        candidates = wizard.mapping_candidates(scopes.get(),source)
+        fields = [c['field'] for c in candidates]
         labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
+        labels = [label+(' — '+c['reason'] if c['reason'] else '') for label,c in zip(labels,candidates)]
         can_create = entry['rows'][source].get('status') == 'create'
         if can_create:labels.append('＋ 신규 필드 생성')
         if not labels:
@@ -346,11 +356,16 @@ def launch(wizard, initial_projects=None):
         if not bounds:return
         editor = ttk.Combobox(table,state='readonly',values=labels)
         editor.place(x=bounds[0],y=bounds[1],width=bounds[2],height=bounds[3])
+        current = entry['rows'][source].get('spec') or {}
+        index = next((i for i,f in enumerate(fields) if field_identifier(f)==current.get('field_id')),None)
+        if index is not None:editor.current(index)
         editor.focus_set()
         def selected(event=None):
             index=editor.current();editor.destroy()
             if index < 0:return
             if index == len(fields):run('신규 필드 설정',create_field_dialog);return
+            if candidates[index]['reason']:
+                detail.set(candidates[index]['reason']);return
             target=fields[index]
             if kind in ('option','status','user'):
                 run('값 매핑',lambda:edit(selected_target=target));return
@@ -364,7 +379,8 @@ def launch(wizard, initial_projects=None):
             run('매핑 저장',save)
         editor.bind('<<ComboboxSelected>>',selected)
         editor.bind('<Escape>',lambda event:editor.destroy())
-        editor.bind('<FocusOut>',lambda event:editor.destroy() if editor.winfo_exists() else None)
+        # Tk's native dropdown takes focus before it emits ComboboxSelected.
+        # Destroying here used to discard the user's choice before save.
     table.bind('<ButtonRelease-1>',row_action)
     def import_now():
         errors = wizard.errors()

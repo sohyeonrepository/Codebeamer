@@ -330,9 +330,30 @@ class ImportWizard:
                                       'issues': analysis['issue_count'], 'risks': analysis['risks'] + entry['target_risks']})
         return entry
 
+    def mapping_candidates(self, scope, source):
+        entry = self.plan['scopes'][scope]
+        kind, multiple = semantic_type(entry['analysis']['fields'][source], True)
+        candidates = []
+        for target in entry['target_fields']:
+            target_kind, target_multiple = semantic_type(target)
+            reason = ''
+            if hidden(target): reason = 'Hidden 필드'
+            elif not kind or not target_kind or type(target_multiple) is not bool:
+                reason = '타입/다중 선택 미확인: type='+str(target.get('type', target.get('typeName')))+', valueModel='+str(target.get('valueModel'))
+            elif not compatible(kind, multiple, target):
+                reason = '타입 불일치: Jira '+str((kind,multiple))+' → CB '+str((target_kind,target_multiple))
+            elif any(other != source and row.get('spec', {}).get('field_id') == field_identifier(target)
+                     for other,row in entry['rows'].items() if row.get('spec')):
+                reason = '다른 Jira 필드에 이미 연결됨'
+            candidates.append({'field':target, 'reason':reason})
+        return candidates
+
     def manual_mapping(self, scope, source, target_id, target_key, values):
         entry = self.plan['scopes'][scope]
-        target = next(f for f in entry['target_fields'] if field_identifier(f) == target_id and not hidden(f))
+        candidate = next((c for c in self.mapping_candidates(scope,source) if field_identifier(c['field']) == target_id), None)
+        if candidate is None: raise ApiError('선택한 Tracker에 Field ID가 없습니다: '+str(target_id))
+        if candidate['reason']: raise ApiError(candidate['reason'])
+        target = candidate['field']
         kind, multiple = semantic_type(entry['analysis']['fields'][source], True)
         if not compatible(kind, multiple, target):
             raise ApiError('Incompatible source/target types; no implicit conversion')

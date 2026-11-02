@@ -404,6 +404,55 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(analysis['fields']['empty']['visibility'],'unknown')
         self.assertEqual(analysis['createmeta_status'],'available')
 
+    def test_manual_and_mapped_fields_can_change_and_persist(self):
+        self.cb.definitions.extend([field(8,'Alternate title'),field(9,'Another title')])
+        self.plan()
+        entry=self.wizard.plan['scopes']['P:1']
+        self.assertEqual(entry['rows']['summary']['status'],'mapped')
+        # Auto -> manual, then existing manual -> another Field ID.
+        self.wizard.manual_mapping('P:1','summary',8,'cb_field_8',{})
+        self.assertEqual(entry['rows']['summary']['spec']['field_id'],8)
+        self.wizard.manual_mapping('P:1','summary',9,'cb_field_9',{})
+        self.assertEqual(entry['rows']['summary']['spec']['field_id'],9)
+        # Unresolved/manual row uses the same save path.
+        entry['rows']['summary'].update(status='manual',spec=None)
+        self.wizard.manual_mapping('P:1','summary',8,'cb_field_8',{})
+        self.wizard.analyze('P:1')
+        self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['summary']['spec']['field_id'],8)
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        restarted.analyze('P:1')
+        self.assertEqual(restarted.plan['scopes']['P:1']['rows']['summary']['spec']['field_id'],8)
+        self.assertFalse(self.cb.mutations)
+
+    def test_manual_choice_mapping_is_saved_with_field_id(self):
+        self.plan()
+        entry=self.wizard.plan['scopes']['P:1']
+        entry['target_fields'].append(dict(field(8,'Choice target'),typeName='Choice',options=[{'id':81,'name':'A'}]))
+        entry['analysis']['fields']['choice']={'id':'choice','name':'Choice','schema':{'type':'option'}}
+        entry['analysis']['values']['choice']=[{'id':'a','value':'A'}]
+        entry['rows']['choice']={'status':'manual','spec':None}
+        values={'a':{'id':81}}
+        self.wizard.manual_mapping('P:1','choice',8,'cb_field_8',values)
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        spec=restarted.plan['scopes']['P:1']['rows']['choice']['spec']
+        self.assertEqual(spec['field_id'],8)
+        self.assertEqual(spec['value_mapping'],values)
+
+    def test_candidate_rejections_are_visible_and_do_not_replace_mapping(self):
+        self.cb.definitions.extend([dict(field(8,'Number'),typeName='Integer'),
+                                    dict(field(9,'Unknown'),typeName='UnknownModel')])
+        self.plan()
+        before=deepcopy(self.wizard.plan['scopes']['P:1']['rows']['summary'])
+        reasons={c['field']['id']:c['reason'] for c in self.wizard.mapping_candidates('P:1','summary')}
+        self.assertIn('Hidden',reasons[4])
+        self.assertIn('타입 불일치',reasons[8])
+        self.assertIn('미확인',reasons[9])
+        self.assertIn('이미 연결',reasons[2])
+        for identifier in (2,4,8,9,999):
+            with self.subTest(identifier=identifier), self.assertRaises(ApiError):
+                self.wizard.manual_mapping('P:1','summary',identifier,'cb_field_'+str(identifier),{})
+        self.assertEqual(before,self.wizard.plan['scopes']['P:1']['rows']['summary'])
+
     def test_manual_selection_survives_restart_and_reanalysis(self):
         self.plan()
         self.wizard.manual_mapping('P:1','summary',1,'name',{})
