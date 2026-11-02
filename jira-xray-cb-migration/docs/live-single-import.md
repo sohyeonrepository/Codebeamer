@@ -144,3 +144,38 @@ Tracker Configuration 생성은 기존 Wizard에서 실제 템플릿을 GET하�
 ## 연결을 누르면 응답 없음이 발생하는 경우
 
 실제 대상 선택 화면의 Swagger/프로젝트/Tracker 목록 조회는 백그라운드 읽기로 실행합니다. 요청당 10초, 전체 작업 30초 제한을 적용하고 대기 시간과 취소 버튼을 표시합니다. 취소·시간 초과 이후 늦은 결과는 반영하지 않습니다. 인증 입력은 터미널 대기가 아니라 화면의 입력 창에서 받습니다. 이 수정은 연결 화면용이며 Import 실행의 쓰기 결과를 임의로 취소·재시도하지 않습니다. Swagger 조회 실패 시 마지막 HTTP/전송 오류도 표시합니다. 목록이 비어도 연결 성공으로 간주하지 말고 하단 실패/시간 초과 메시지를 확인하세요.
+
+## 필드 매핑 · 첨부파일 1건 테스트
+
+`--live-test`로 연결하고 기존 테스트 프로젝트·Tracker와 Jira Issue 키 1개를 선택한 다음,
+생성 확인 화면의 **필드 매핑·첨부 1건 테스트**를 누릅니다.
+
+1. **사전 조회 / 요청 확인**을 누릅니다. Summary → Name과 Description → Description을 기본으로 준비합니다.
+2. 왼쪽 CB 필드와 오른쪽 Jira 필드를 선택하고 실제 원본 값 타입을 지정한 뒤 **매핑 저장**을 누릅니다.
+   문자열·숫자·Boolean·날짜만 이 제한 테스트에서 지원합니다. 사용자/Choice/참조 및 Xray 테이블을 기본 타입으로 바꾸지 않습니다.
+   CB 필드는 실제 Tracker 필드와 생성 요청 스키마 또는 기존 `field_bindings`에서 확인된 것만 표시합니다.
+   Jira 후보는 선택한 Issue 응답에 포함된 필드이며 null 값도 유지합니다. Field Configuration adapter가 있으면
+   Hidden 필드를 제외하고 남아 있는 값을 위험으로 보고합니다. 없으면 `source_visibility`에 미확인이라고 표시합니다.
+3. 사전 조회를 다시 실행합니다. `field_mapping`, `unmapped_source_fields`, `attachment_inventory`,
+   `attachment_api`, `requests`, `blockers`를 확인합니다. 첨부 목록에는 실제 다운로드한 원본 SHA-256을 표시합니다.
+4. `blockers`가 비어 있으면 **Import…**를 눌러 실제 생성을 승인합니다.
+5. `item_id`, `mapped_fields_verified`, `attachments`, `attachment_counts`를 확인합니다.
+   첨부파일은 실제 CB 다운로드 바이트의 SHA-256/크기와 목록의 ID/파일명/크기가 모두 일치해야 통과합니다.
+   Description 내부 첨부 참조는 다운로드 API URL로 변환하고 Item을 다시 조회합니다. CB 화면의 이미지 렌더링도 직접 확인하세요.
+6. CB에서 생성된 Item과 파일을 열어 확인합니다. **결과 / 오류 복사**로 전체 보고서를 복사할 수 있습니다.
+
+이 모드는 이전 Summary/Description 생성 확인 Item을 수정하지 않습니다. 기존 상태 폴더 아래
+`mapped-attachments/`에 별도 기록하고 새 테스트 Item 1건을 생성합니다. 같은 폴더를 유지하면 재실행 시
+기록된 Item/첨부 ID를 재사용하고 서버에서 다시 검증합니다. 결과가 불명확한 POST는 자동 재전송하지 않으며
+`reconciliation` 오류로 차단합니다. 이때 상태 폴더를 지우고 재시도하면 중복이 생길 수 있으므로 지우지 마세요.
+
+바이너리 multipart 필드명은 서버 Swagger에서 확인합니다. 업로드·목록·다운로드 경로가 없거나 추가 필수
+multipart 항목이 있으면 Item 생성 전에 차단합니다. 서버별 adapter가 필요한 경우 `blockers`에 capability를 표시합니다.
+기본 API 후보는 `/items/{itemId}/attachments` (GET/POST),
+`/items/{itemId}/attachments/{attachmentId}/content` (GET)이며 서버 Swagger에 있을 때만 사용합니다.
+`/v3` 경로가 함께 있으면 V3를 선택합니다. CB의 업로드 응답은 ID 객체 또는 정확히 1개인 배열,
+첨부 목록은 전체 배열이어야 합니다. 다른 응답 envelope는 명시적인 `response_path` 설정이 필요합니다.
+
+성공은 선택한 필드와 첨부파일에만 해당합니다. 미매핑 필드, 신규 Field/Tracker 생성,
+Comment/Association/History/R4J/Xray 전체 이관 성공을 의미하지 않습니다. 기존 전체 Wizard는 그대로 유지합니다.
+네트워크 처리는 백그라운드에서 실행하며, 실제 쓰기가 진행 중이면 완료 결과를 받은 뒤 창을 닫습니다.

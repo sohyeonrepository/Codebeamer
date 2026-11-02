@@ -185,6 +185,10 @@ class SingleImport:
                     self.report['blockers'].append({'stage':'description','reason':'Structured Jira Description requires a verified adapter'})
                 else:
                     body['description'] = (description or '') + '\n\n' + marker
+                    if self.profile.get('mapped_attachments'):
+                        from mapped_import import prepare as prepare_mapped
+                        body['description'] = description or ''
+                        check('mapped-fields-and-attachments',lambda:prepare_mapped(self,body,fields))
                     self.body = check('item-request-schema', lambda: self.request('item_create',body,{'trackerId':self.tracker_id}))
         # Optional creation probes are explicit payloads, never inferred from numeric type IDs.
         for name, payload_key, params in (
@@ -229,7 +233,11 @@ class SingleImport:
                     return self.request(n,body,p)
                 check(name + '-schema', planned_request)
         self.report['requests'].sort(key=lambda r:{'tracker_create':0,'field_create':1,'item_create':2}[r['operation']])
-        self.fingerprint = hashlib.sha256(json.dumps(self.report['requests'],sort_keys=True).encode()).hexdigest()
+        approval = {'requests':self.report['requests']}
+        if self.profile.get('mapped_attachments'):
+            approval.update(mapping=self.profile.get('field_mapping'),attachments=self.report.get('attachment_inventory'),
+                            attachment_api=self.report.get('attachment_api'),issue=getattr(self,'issue',None))
+        self.fingerprint = hashlib.sha256(json.dumps(approval,sort_keys=True).encode()).hexdigest()
         self.save()
         return self.report
 
@@ -283,12 +291,20 @@ class SingleImport:
             created = self.state.once('single:item', lambda: self.cb.call('item_create', {'trackerId':self.tracker_id}, self.body))
             if type(created.get('id')) is not int:
                 raise ApiError('Item create response lacks actual ID; reconcile server before retry')
+            self.report['item_id'] = created['id']
+            self.save()
             actual = self.cb.call('item_get', {'itemId':created['id']})
             if actual.get('id') != created['id'] or actual.get('tracker',{}).get('id') != self.tracker_id:
                 raise ApiError('Actual Item ID/test Tracker readback mismatch')
             for key in ('name','description'):
-                if actual.get(key) != self.body[key]:
+                cached_inline = self.report.get('inline_description',{})
+                expected_value = cached_inline.get('description',self.body[key]) if key == 'description' else self.body[key]
+                if actual.get(key) != expected_value:
                     raise ApiError('Created Item ' + key + ' readback mismatch')
+            if self.profile.get('mapped_attachments'):
+                from mapped_import import verify_fields, finish
+                verify_fields(self,actual)
+                finish(self,created['id'])
             self.report['writes'].append({'operation':'item_create','id':created['id'],'created_this_run':prior is None,'readback':actual})
             self.report['complete'] = True
             return self.save()
@@ -327,6 +343,12 @@ def launch_single(test):
             messagebox.showerror('실제 Import 차단/실패',str(exc) if isinstance(exc,ApiError) else type(exc).__name__)
         display()
     ttk.Button(root,text='읽기 전용 사전 확인 / 요청 보기',command=prepare).pack(side='left',padx=12,pady=8)
+    def mapped_test():
+        from mapped_import import launch
+        root.withdraw()
+        try: launch(test,root)
+        finally: root.deiconify()
+    ttk.Button(root,text='필드 매핑·첨부 1건 테스트',command=mapped_test).pack(side='left',padx=8,pady=8)
     ttk.Button(root,text='Import…',command=apply).pack(side='right',padx=12,pady=8)
     root.mainloop()
 
