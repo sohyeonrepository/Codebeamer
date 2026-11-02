@@ -377,7 +377,7 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
     for label,key,initial in (
         ('Jira URL','jira',config.get('jira',{}).get('url','')),
         ('Codebeamer URL','cb',config.get('codebeamer',{}).get('url','')),
-        ('Swagger JSON URL / file: 경로 (비우면 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url','')),
+        ('Swagger URL (JSON/editor.spr/file:, 비우면 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url','')),
         ('Jira Issue 키 1개','issue','')):
         ttk.Label(root,text=label).pack(anchor='w',padx=12,pady=(8,0))
         values[key]=tk.StringVar(value=initial)

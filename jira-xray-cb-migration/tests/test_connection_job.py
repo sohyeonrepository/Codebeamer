@@ -1,4 +1,6 @@
 import os
+import json
+import urllib.parse
 import tempfile
 import threading
 import time
@@ -212,3 +214,62 @@ class TrackerDiscoveryTests(unittest.TestCase):
         cb.spec={'paths':{p:{'get':{}} for p in ('/other/projects/{projectId}/trackers','/v3/projects/{projectId}/trackers')}}
         with self.assertRaisesRegex(ApiError,'여러 개'):
             project_tracker_list(cb)
+
+
+class SwaggerEditorDiscoveryTests(unittest.TestCase):
+    class HTTP:
+        base='https://cb.test/cb/api'
+        def __init__(self,responses):self.responses,self.calls=responses,[]
+        def request(self,method,path,raw=False):
+            self.calls.append((method,path,raw))
+            route=urllib.parse.urlsplit(path).path
+            value=self.responses.get(route)
+            if isinstance(value,Exception):raise value
+            if value is None:raise ApiError('GET request failed: HTTP 404')
+            if isinstance(value,bytes):return value
+            return json.dumps(value).encode()
+
+    def test_cb_api_base_reads_editor_link_and_actual_same_origin_json(self):
+        from clients.codebeamer_client import CodebeamerClient
+        html=b'<script>SwaggerUIBundle({url: "/cb/v3/swagger/openapi.json"})</script>'
+        spec={'openapi':'3.0.0','paths':{'/v3/projects':{'get':{}}}}
+        http=self.HTTP({'/cb/v3/swagger/editor.spr':html,'/cb/v3/swagger/openapi.json':spec})
+        cb=CodebeamerClient(http,{'operations':{}});cb.discover()
+        self.assertEqual(cb.spec,spec)
+        self.assertEqual(cb.config['discovered_swagger_url'],'https://cb.test/cb/v3/swagger/openapi.json')
+        editor_index=next(i for i,c in enumerate(http.calls) if c[1].endswith('/editor.spr'))
+        self.assertTrue(all('/cb/' in c[1] and '/cb/api/' not in c[1] for c in http.calls[:editor_index+1]))
+
+    def test_supplied_editor_url_and_embedded_openapi_are_supported(self):
+        from clients.codebeamer_client import CodebeamerClient
+        spec={'openapi':'3.0.0','paths':{'/v3/items':{'get':{}}}}
+        page=('<html><script>window.spec = '+json.dumps(spec)+'</script></html>').encode()
+        cb=CodebeamerClient(self.HTTP({'/cb/v3/swagger/editor.spr':page}),
+                            {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        cb.discover();self.assertEqual(cb.spec,spec)
+
+    def test_editor_generic_url_key_is_followed_without_guessing_its_name(self):
+        from clients.codebeamer_client import CodebeamerClient
+        spec={'openapi':'3.0.0','paths':{'/v3/items':{'get':{}}}}
+        page=b'<script>SwaggerUIBundle({url: "/cb/contracts/v3"})</script>'
+        cb=CodebeamerClient(self.HTTP({'/cb/v3/swagger/editor.spr':page,'/cb/contracts/v3':spec}),
+                            {'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        cb.discover();self.assertEqual(cb.config['discovered_swagger_url'],'https://cb.test/cb/contracts/v3')
+
+    def test_cross_origin_or_linkless_html_fails_without_following_it(self):
+        from clients.codebeamer_client import CodebeamerClient
+        page=b'<script>SwaggerUIBundle({url:"https://evil.test/openapi.json"})</script>'
+        http=self.HTTP({'/cb/v3/swagger/editor.spr':page})
+        cb=CodebeamerClient(http,{'swagger_url':'/cb/v3/swagger/editor.spr','operations':{}})
+        with self.assertRaisesRegex(ApiError,'HTML did not expose'):
+            cb.discover()
+        self.assertFalse(any('evil.test' in call[1] for call in http.calls))
+
+    def test_invalid_swagger_file_has_controlled_error(self):
+        from clients.codebeamer_client import CodebeamerClient
+        with tempfile.TemporaryDirectory() as directory:
+            path=os.path.join(directory,'invalid.json')
+            with open(path,'w',encoding='utf-8') as stream:stream.write('<html>not json</html>')
+            cb=CodebeamerClient(self.HTTP({}),{'swagger_url':'file:'+path,'operations':{}})
+            with self.assertRaisesRegex(ApiError,'could not be read as JSON'):
+                cb.discover()

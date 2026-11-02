@@ -27,7 +27,9 @@ Codebeamer 필드, 오른쪽은 Jira API의 실제 필드명이며 custom field�
 Attachment·Comment·Association·History/R4J/Xray 처리는 기존 Migration Engine 경로를 그대로 사용합니다.
 
 기본 전체 Wizard 실행 시 첫 화면에서 Jira 서버 URL·API 토큰, Codebeamer 서버 URL·아이디·비밀번호,
-Swagger JSON URL을 입력합니다. 인증정보는 메모리에만 유지하고 config/state/report/log에 저장하지 않습니다.
+Swagger URL을 입력합니다. JSON 주소와 `/v3/swagger/editor.spr` UI 주소를 모두 지원하며 비우면 `/cb/api` 같은
+REST 기본 주소에서 Codebeamer context root를 계산해 자동 탐색합니다. Swagger UI가 같은 서버의 API 정의 주소를
+노출하면 해당 JSON을 따라갑니다. 인증정보는 메모리에만 유지하고 config/state/report/log에 저장하지 않습니다.
 `연결 / 실제 프로젝트 조회 (GET)`은 30초 제한과 취소 기능이 있는 읽기 전용 연결이며, 성공한 프로젝트 결과를
 STEP 2에 그대로 전달합니다. STEP 2에서 프로젝트를 선택하면 실제 Swagger의 프로젝트 Tracker 목록 경로를
 자동 연결하여 조회합니다. 연결 화면에서 입력한 URL과 인증은 이후 분석 및 승인된 Import에도 같은 세션에서 사용합니다.

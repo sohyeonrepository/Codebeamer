@@ -3,6 +3,7 @@ import re
 import urllib.parse
 from pathlib import Path
 import json
+import html
 from clients.http import ApiError
 from clients.jira_client import segment
 
@@ -15,30 +16,15 @@ class CodebeamerClient:
     def discover(self):
         location = self.config.get('swagger_url')
         if location:
-            self.spec = json.loads(Path(location[5:]).read_text(encoding='utf-8')) if location.startswith('file:') else self.http.request('GET', location)
+            if location.startswith('file:'):
+                try:self.spec = json.loads(Path(location[5:]).read_text(encoding='utf-8-sig'))
+                except (OSError,ValueError) as exc:
+                    raise ApiError('Swagger file could not be read as JSON: '+type(exc).__name__) from None
+            else:
+                self.spec,self.config['discovered_swagger_url'] = self._discover_from_urls([location])
         else:
-            # Read-only probes, never assume a candidate is an actual API definition.
-            base = urllib.parse.urlsplit(self.http.base)
-            parents = [base.path.rstrip('/'), base.path.rstrip('/').rsplit('/', 1)[0]]
-            attempted = []
-            last_failure = None
-            for parent in dict.fromkeys(parents):
-                for suffix in ('/v3/api-docs', '/v2/api-docs', '/swagger.json', '/api-docs'):
-                    candidate = urllib.parse.urlunsplit((base.scheme, base.netloc, parent + suffix, '', ''))
-                    try:
-                        spec = self.http.request('GET', candidate)
-                        if isinstance(spec, dict) and isinstance(spec.get('paths'), dict):
-                            self.spec = spec
-                            self.config['discovered_swagger_url'] = candidate
-                            break
-                    except (ApiError, ValueError) as exc:
-                        last_failure = str(exc) if isinstance(exc,ApiError) else 'Response is not JSON'
-                    attempted.append(parent + suffix)
-                if self.spec is not None:
-                    break
-            if self.spec is None:
-                raise ApiError('Swagger JSON discovery failed at ' + ', '.join(attempted) + '; last failure: ' + str(last_failure) + '; no target write attempted. Supply codebeamer.swagger_url or a file: JSON definition')
-        if not isinstance(self.spec.get('paths'), dict):
+            self.spec,self.config['discovered_swagger_url'] = self._discover_from_urls(self._swagger_candidates())
+        if not isinstance(self.spec,dict) or not isinstance(self.spec.get('paths'), dict):
             raise ApiError('Not an OpenAPI/Swagger document')
         if self.config.get('profile') == '3.0.0.7':
             from clients.codebeamer_3007 import bind
@@ -46,6 +32,88 @@ class CodebeamerClient:
         return [{'path': p, 'method': m.upper(), 'operationId': op.get('operationId')}
                 for p, methods in self.spec['paths'].items() for m, op in methods.items()
                 if m.lower() in ('get', 'post', 'put', 'patch', 'delete')]
+
+    def _swagger_candidates(self):
+        """Cover CB context roots such as /cb and REST bases such as /cb/api."""
+        base=urllib.parse.urlsplit(self.http.base)
+        path=base.path.rstrip('/')
+        roots=[]
+        for suffix in ('/api/v3','/api','/v3'):
+            if path.endswith(suffix):roots.append(path[:-len(suffix)])
+        roots.append(path)
+        if '/' in path.rstrip('/'):
+            roots.append(path.rsplit('/',1)[0])
+        urls=[]
+        for root in dict.fromkeys(roots):
+            for suffix in ('/v3/swagger/api-docs','/v3/openapi.json','/v3/swagger.json','/v3/api-docs',
+                           '/v3/swagger/editor.spr','/swagger.json','/api-docs'):
+                urls.append(urllib.parse.urlunsplit((base.scheme,base.netloc,root+suffix,'','')))
+        return list(dict.fromkeys(urls))
+
+    def _discover_from_urls(self, initial):
+        queue=list(dict.fromkeys(initial));attempted=[];failures=[];seen=set()
+        base=urllib.parse.urlsplit(self.http.base)
+        while queue and len(seen)<40:
+            candidate=queue.pop(0)
+            if not urllib.parse.urlsplit(candidate).scheme:
+                origin=urllib.parse.urlsplit(self.http.base)
+                candidate=urllib.parse.urlunsplit((origin.scheme,origin.netloc,
+                    candidate if candidate.startswith('/') else origin.path.rstrip('/')+'/'+candidate,'',''))
+            if candidate in seen:continue
+            seen.add(candidate);attempted.append(urllib.parse.urlsplit(candidate).path)
+            try:
+                content=self.http.request('GET',candidate,raw=True)
+            except ApiError as exc:
+                failures.append(urllib.parse.urlsplit(candidate).path+': '+str(exc));continue
+            if isinstance(content,dict):document=content
+            else:
+                try:
+                    text=content.decode('utf-8-sig') if isinstance(content,(bytes,bytearray)) else str(content)
+                except UnicodeDecodeError:
+                    failures.append(urllib.parse.urlsplit(candidate).path+': response is neither JSON nor UTF-8 HTML');continue
+                try:document=json.loads(text)
+                except ValueError:document=self._embedded_spec(text)
+                if not isinstance(document,dict):
+                    links=self._swagger_links(text,candidate,base)
+                    if links:
+                        queue.extend(link for link in links if link not in seen)
+                    else:
+                        failures.append(urllib.parse.urlsplit(candidate).path+': HTML did not expose an OpenAPI JSON URL')
+                    continue
+            if isinstance(document.get('paths'),dict):return document,candidate
+            failures.append(urllib.parse.urlsplit(candidate).path+': JSON has no paths object')
+        tail='; '.join(failures[-4:]) if failures else 'no readable response'
+        raise ApiError('Swagger discovery failed. Tried '+', '.join(attempted)+'; '+tail+
+                       '; no target write attempted. The Swagger UI may be used as input only when it exposes a same-server JSON definition.')
+
+    @staticmethod
+    def _embedded_spec(text):
+        decoder=json.JSONDecoder()
+        for marker in ('{"openapi"','{"swagger"'):
+            start=0
+            while True:
+                index=text.find(marker,start)
+                if index<0:break
+                try:
+                    value,_=decoder.raw_decode(text[index:])
+                    if isinstance(value,dict) and isinstance(value.get('paths'),dict):return value
+                except ValueError:pass
+                start=index+1
+
+    @staticmethod
+    def _swagger_links(text,page,base):
+        values=[]
+        decoded=html.unescape(text)
+        patterns=(r'\burl\s*[:=]\s*["\']([^"\'<>\s]+)["\']',
+                  r'["\']([^"\'<>\s]*(?:openapi|swagger|api-docs)[^"\'<>\s]*)["\']')
+        for match in (match for pattern in patterns for match in re.finditer(pattern,decoded,re.I)):
+            value=match.group(1).replace('\\/','/')
+            if value.lower().endswith(('.js','.css','.png','.svg')) or 'editor.spr' in value.lower():continue
+            url=urllib.parse.urljoin(page,value)
+            parsed=urllib.parse.urlsplit(url)
+            if (parsed.scheme,parsed.netloc)==(base.scheme,base.netloc) and not parsed.username and not parsed.password:
+                values.append(url)
+        return list(dict.fromkeys(values))
 
     def operation(self, name):
         op = self.config.get('operations', {}).get(name)

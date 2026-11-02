@@ -1,4 +1,5 @@
 import copy
+import json
 import tempfile
 import unittest
 from clients.http import ApiError
@@ -170,10 +171,11 @@ class RunExtensions(unittest.TestCase):
             base = 'https://example.test/cb/api'
             def __init__(self):
                 self.calls = []
-            def request(self, method, path):
+            def request(self, method, path, raw=False):
                 self.calls.append((method, path))
                 if path.endswith('/swagger.json'):
-                    return {'paths': {'/actual/{recordId}': {'get': {'operationId': 'historyRead'}, 'post': {}}}}
+                    value={'paths': {'/actual/{recordId}': {'get': {'operationId': 'historyRead'}, 'post': {}}}}
+                    return json.dumps(value).encode() if raw else value
                 raise ApiError('Not found')
         http = HTTP()
         cb = CodebeamerClient(http, {'operations': {'run_history': {'operationId': 'historyRead'}}}, True)

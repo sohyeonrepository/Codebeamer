@@ -358,7 +358,7 @@ def launch_connected(config, state):
         ('Codebeamer 서버 URL','cb_url',config.get('codebeamer',{}).get('url',''),False),
         ('Codebeamer 아이디','cb_user','',False),
         ('Codebeamer 비밀번호','cb_password','',True),
-        ('Swagger JSON URL (비우면 자동 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url',''),False))
+        ('Swagger URL (JSON 또는 editor.spr, 비우면 자동 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url',''),False))
     for index,(label,key,initial,secret) in enumerate(rows):
         ttk.Label(form,text=label).grid(row=index,column=0,sticky='w',pady=7,padx=(0,12))
         values[key]=tk.StringVar(value=initial)
