@@ -244,6 +244,10 @@ class ImportWizard:
 
     def select_project(self, project, target):
         self.cb.write = False
+        from clients.codebeamer_client import CodebeamerClient
+        if isinstance(self.cb,CodebeamerClient):
+            from clients.codebeamer_3007 import project_tracker_list
+            project_tracker_list(self.cb)
         actual = self.cb.call('project_get', {'projectId': target})
         if actual.get('id') != target:
             raise ApiError('Existing target project verification failed')

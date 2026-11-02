@@ -13,7 +13,7 @@ from migration.wizard import ImportWizard, field_identifier, semantic_type, hidd
 from mapping_helper import label_tokens, source_choices
 
 
-def launch(wizard):
+def launch(wizard, initial_projects=None):
     import tkinter as tk
     from tkinter import ttk, messagebox
     root = tk.Tk()
@@ -60,13 +60,18 @@ def launch(wizard):
     new_name = tk.StringVar()
     ttk.Label(step2, text='신규 Tracker 이름 (선택한 기존 프로젝트 내부에 생성)').pack(anchor='w', pady=(8,0))
     ttk.Entry(step2, textvariable=new_name, width=55).pack(anchor='w')
-    def discover():
-        result = run('프로젝트 조회', wizard.discover)
+    def apply_projects(result):
         if result is not None:
             projects.update(result)
             jira_box.configure(values=[p['key'] for p in projects['jira']])
             cb_box.configure(values=[str(p['id']) + ' / ' + p.get('name','') for p in projects['codebeamer']])
+    def discover():
+        result = run('프로젝트 조회', wizard.discover)
+        apply_projects(result)
     ttk.Button(top, text='프로젝트 조회', command=discover).grid(row=1, column=2, padx=8)
+    if initial_projects is not None:
+        apply_projects(initial_projects)
+        status.set('서버 연결과 프로젝트 조회 완료. Jira/Codebeamer 프로젝트를 선택하세요.')
     def select_project():
         if jira_box.current() < 0 or cb_box.current() < 0:
             raise ValueError('두 프로젝트를 선택하세요.')
@@ -332,6 +337,105 @@ def launch(wizard):
     root.mainloop()
 
 
+def launch_connected(config, state):
+    """Collect secrets in memory, perform cancellable read-only connection, then open the Wizard."""
+    import tkinter as tk
+    from tkinter import ttk
+    from copy import deepcopy
+    from connection_job import ConnectionJob
+    from clients.codebeamer_3007 import project_reads
+    import time
+    root=tk.Tk();root.title('Jira → Codebeamer Import Wizard · 1. 서버 연결');root.geometry('760x610')
+    style=ttk.Style(root);style.configure('ConnectTitle.TLabel',font=('',17,'bold'))
+    outer=ttk.Frame(root,padding=20);outer.pack(fill='both',expand=True)
+    ttk.Label(outer,text='1. 서버 연결',style='ConnectTitle.TLabel').pack(anchor='w')
+    ttk.Label(outer,text='인증정보는 메모리에서만 사용하며 config 파일이나 상태 보고서에 저장하지 않습니다.').pack(anchor='w',pady=(2,14))
+    form=ttk.Frame(outer);form.pack(fill='x')
+    values={}
+    rows=(
+        ('Jira 서버 URL','jira_url',config.get('jira',{}).get('url',''),False),
+        ('Jira API 토큰','jira_token','',True),
+        ('Codebeamer 서버 URL','cb_url',config.get('codebeamer',{}).get('url',''),False),
+        ('Codebeamer 아이디','cb_user','',False),
+        ('Codebeamer 비밀번호','cb_password','',True),
+        ('Swagger JSON URL (비우면 자동 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url',''),False))
+    for index,(label,key,initial,secret) in enumerate(rows):
+        ttk.Label(form,text=label).grid(row=index,column=0,sticky='w',pady=7,padx=(0,12))
+        values[key]=tk.StringVar(value=initial)
+        ttk.Entry(form,textvariable=values[key],show='*' if secret else '',width=62).grid(row=index,column=1,sticky='ew',pady=7)
+    form.columnconfigure(1,weight=1)
+    status=tk.StringVar(value='연결을 누르면 Swagger, Jira 프로젝트, Codebeamer 프로젝트를 GET으로 조회합니다.')
+    status_entry=ttk.Entry(outer,textvariable=status,state='readonly');status_entry.pack(fill='x',pady=(18,5))
+    status_entry.bind('<Control-a>',lambda event:(status_entry.selection_range(0,tk.END),'break')[-1])
+    controls=ttk.Frame(outer);controls.pack(fill='x',pady=8)
+    active=[None];result=[None]
+    def copy_error():
+        root.clipboard_clear();root.clipboard_append(status.get())
+    ttk.Button(controls,text='오류 복사',command=copy_error).pack(side='left')
+    def required():
+        missing=[label for label,key,_,_ in rows[:5] if not values[key].get().strip()]
+        if missing:raise ApiError('입력 필요: '+', '.join(missing))
+        import urllib.parse
+        for key,label in (('jira_url','Jira'),('cb_url','Codebeamer')):
+            parsed=urllib.parse.urlsplit(values[key].get().strip())
+            if parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.password:
+                raise ApiError(label+' 서버 URL은 인증정보가 없는 http(s) 주소여야 합니다.')
+    def set_busy(busy):
+        connect_button.configure(state='disabled' if busy else 'normal')
+        cancel_button.configure(state='normal' if busy else 'disabled')
+    def connect():
+        if active[0] is not None:return
+        try:required()
+        except ApiError as exc:status.set(str(exc));return
+        current=deepcopy(config)
+        current.setdefault('jira',{}).update(url=values['jira_url'].get().strip(),auth='bearer')
+        current['jira'].pop('username_env',None);current['jira'].pop('password_env',None)
+        cb_settings=current.setdefault('codebeamer',{})
+        cb_settings.update(url=values['cb_url'].get().strip(),auth='basic',profile='3.0.0.7',
+                           swagger_url=values['swagger'].get().strip())
+        def jira_credential(label,secret):return values['jira_token'].get()
+        def cb_credential(label,secret):return values['cb_password'].get() if secret else values['cb_user'].get()
+        jira_http=Http(current['jira']['url'],None,state.root/'requests.jsonl',timeout=10,auth='bearer',
+                       allow_http=current['jira'].get('allow_http',False),prompt_auth=True,credential_prompt=jira_credential)
+        cb_http=Http(cb_settings['url'],None,state.root/'requests.jsonl',timeout=10,auth='basic',
+                     allow_http=cb_settings.get('allow_http',False),prompt_auth=True,credential_prompt=cb_credential)
+        jira=JiraClient(jira_http,current['jira'],state.save)
+        cb=CodebeamerClient(cb_http,cb_settings,False)
+        def fetch():
+            cb.discover();project_reads(cb)
+            jira_projects=jira.projects();cb_projects=cb.call('projects_get')
+            if not isinstance(jira_projects,list) or not isinstance(cb_projects,list):
+                raise ApiError('프로젝트 조회 응답은 전체 배열이어야 합니다.')
+            return current,jira,cb,{'jira':jira_projects,'codebeamer':cb_projects}
+        set_busy(True);started=time.monotonic()
+        job=ConnectionJob(fetch,timeout=30,clients=(jira_http,cb_http));active[0]=job
+        def poll():
+            outcome,value=job.poll()
+            if outcome=='running':
+                status.set('실제 서버 GET 조회 중 · '+str(int(time.monotonic()-started))+'초 / 최대 30초 · 취소 가능')
+                root.after(100,poll);return
+            active[0]=None;set_busy(False)
+            if outcome=='success':
+                for client in (jira_http,cb_http):client.read_deadline=None;client.cancel_event=None
+                result[0]=value;status.set('연결 및 프로젝트 조회 완료');root.after(50,root.destroy)
+            elif outcome=='timeout':status.set('연결 시간 초과(30초). URL·VPN·인증·Swagger 주소를 확인하세요.')
+            elif outcome=='cancelled':status.set('연결 취소됨. 늦게 도착한 결과는 사용하지 않습니다.')
+            else:status.set('연결 실패: '+(str(value) if isinstance(value,ApiError) else type(value).__name__))
+        poll()
+    connect_button=ttk.Button(controls,text='연결 / 실제 프로젝트 조회 (GET)',command=connect)
+    connect_button.pack(side='right')
+    cancel_button=ttk.Button(controls,text='취소',state='disabled',command=lambda:active[0].cancel() if active[0] else None)
+    cancel_button.pack(side='right',padx=6)
+    def close():
+        if active[0]:active[0].cancel()
+        root.destroy()
+    root.protocol('WM_DELETE_WINDOW',close);root.mainloop()
+    if result[0] is None:return
+    current,jira,cb,projects=result[0]
+    wizard=ImportWizard(jira,cb,state,current)
+    launch(wizard,projects)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Jira → Codebeamer Import Wizard')
     parser.add_argument('--config', default='config.local.json')
@@ -389,9 +493,7 @@ def main(argv=None):
             else:
                 launch_single(test)
             return 0
-        wizard = ImportWizard(JiraClient(http(config['jira']), config['jira'], state.save),
-                              CodebeamerClient(http(config['codebeamer']), config['codebeamer'], False), state, config)
-        launch(wizard)
+        launch_connected(config,state)
     except (ApiError, OSError, ValueError, KeyError) as exc:
         if not args.single_issue:
             raise

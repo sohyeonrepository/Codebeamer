@@ -26,6 +26,12 @@ Codebeamer 필드, 오른쪽은 Jira API의 실제 필드명이며 custom field�
 마지막 `다음 (Import 승인)`에서 승인하고 쓰기 직전 분석 결과가 동일한지 다시 확인한 뒤 실행됩니다.
 Attachment·Comment·Association·History/R4J/Xray 처리는 기존 Migration Engine 경로를 그대로 사용합니다.
 
+기본 전체 Wizard 실행 시 첫 화면에서 Jira 서버 URL·API 토큰, Codebeamer 서버 URL·아이디·비밀번호,
+Swagger JSON URL을 입력합니다. 인증정보는 메모리에만 유지하고 config/state/report/log에 저장하지 않습니다.
+`연결 / 실제 프로젝트 조회 (GET)`은 30초 제한과 취소 기능이 있는 읽기 전용 연결이며, 성공한 프로젝트 결과를
+STEP 2에 그대로 전달합니다. STEP 2에서 프로젝트를 선택하면 실제 Swagger의 프로젝트 Tracker 목록 경로를
+자동 연결하여 조회합니다. 연결 화면에서 입력한 URL과 인증은 이후 분석 및 승인된 Import에도 같은 세션에서 사용합니다.
+
 ## 사용 필드 판정
 
 `editmeta`는 Field Configuration과 다릅니다. Wizard는 **실제 배포 환경에서 확인된 Field Configuration 읽기 API**를 요구하며, 없으면 분석 오류를 표시합니다. 각 필드의 `id`와 `hidden`/`isHidden`/`visible` 중 하나의 명시적 boolean이 필요합니다. 이름·스키마는 글로벌 필드 정의와 병합합니다.

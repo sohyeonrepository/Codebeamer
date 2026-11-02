@@ -380,6 +380,43 @@ class WizardUITests(unittest.TestCase):
     def setUp(self):
         WizardTests.setUp(self)
 
+    def test_connection_screen_collects_credentials_in_memory_and_passes_projects(self):
+        import tkinter as tk
+        from tkinter import ttk
+        import import_wizard as ui
+        original=tk.Tk;captured={};errors=[]
+        def descendants(widget):
+            yield widget
+            for child in widget.winfo_children():yield from descendants(child)
+        class FakeHttp:
+            def __init__(fake,base,*args,auth=None,credential_prompt=None,**kwargs):
+                fake.base=base;fake.read_deadline=None;fake.cancel_event=None;fake.timeout=10
+                if auth=='bearer':captured['jira_token']=credential_prompt('token',True)
+                if auth=='basic':
+                    captured['cb_user']=credential_prompt('username',False)
+                    captured['cb_password']=credential_prompt('password',True)
+        class Window(original):
+            def __init__(window,*args,**kwargs):
+                super().__init__(*args,**kwargs);window.after(50,window.exercise);window.after(5000,window.destroy)
+            def exercise(window):
+                try:
+                    entries=[w for w in descendants(window) if isinstance(w,ttk.Entry) and str(w.cget('state'))!='readonly']
+                    for index,value in ((1,'jira-secret'),(3,'cb-user'),(4,'cb-secret')):
+                        entries[index].delete(0,'end');entries[index].insert(0,value)
+                    next(w for w in descendants(window) if isinstance(w,ttk.Button) and w.cget('text').startswith('연결 /')).invoke()
+                except Exception as exc:errors.append(exc);window.destroy()
+        def opened(wizard,projects):
+            captured['wizard']=wizard;captured['projects']=projects
+        jira_factory=lambda http,config,archive=None:JiraClient(self.source,config,archive)
+        with patch.object(tk,'Tk',Window),patch.object(ui,'Http',FakeHttp),patch.object(ui,'JiraClient',side_effect=jira_factory),\
+             patch.object(ui,'CodebeamerClient',return_value=self.cb),patch('clients.codebeamer_3007.project_reads'),patch.object(ui,'launch',side_effect=opened):
+            ui.launch_connected(self.config,self.state)
+        self.assertEqual(errors,[])
+        self.assertEqual((captured['jira_token'],captured['cb_user'],captured['cb_password']),('jira-secret','cb-user','cb-secret'))
+        self.assertEqual(captured['projects']['codebeamer'][0]['id'],10)
+        self.assertNotIn('jira-secret',str(captured['wizard'].config))
+        self.assertNotIn('cb-secret',str(captured['wizard'].config))
+
     def test_project_tracker_scoped_columns_and_explicit_import(self):
         import tkinter as tk
         from tkinter import ttk
