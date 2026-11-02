@@ -9,6 +9,17 @@ from clients.http import ApiError
 from clients.jira_client import segment
 from mapping_helper import request_schema, schema_object, field_identifier
 
+
+def scoped_state_dir(base, issue_key, project_id, tracker_id, config):
+    """Keep each live test journal separate while preserving safe resume behavior."""
+    issue = issue_key.strip().upper()
+    if not re.fullmatch(r'[A-Z][A-Z0-9_]*-[1-9][0-9]*', issue):
+        raise ApiError('Exactly one Jira issue key is required; JQL/project selection is not allowed')
+    identity = '|'.join((config['jira']['url'].rstrip('/'), config['codebeamer']['url'].rstrip('/'),
+                         issue, str(project_id), str(tracker_id)))
+    suffix = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:10]
+    return Path(base) / (issue + '-p' + str(project_id) + '-t' + str(tracker_id) + '-' + suffix)
+
 OPERATIONS = {
     'project_get': ('GET', ('getProject',)),
     'tracker_get': ('GET', ('getTracker',)),
@@ -490,9 +501,13 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
             if projects.current()<0 or trackers.current()<0:raise ApiError('Select an existing test project and Tracker')
             if selected.get('connection')!={k:values[k].get() for k in ('jira','cb','swagger')}:
                 raise ApiError('Connection values changed; query the projects again')
-            state=State(state_dir)
+            issue_key=values['issue'].get().strip()
+            tracker_id=selected['trackers'][trackers.current()]['id']
+            actual_state_dir=scoped_state_dir(state_dir,issue_key,selected['project_id'],tracker_id,selected['config'])
+            state=State(actual_state_dir)
             test=SingleImport(selected['jira'],selected['cb'],state,selected['config'],values['issue'].get().strip(),
-                              selected['project_id'],selected['trackers'][trackers.current()]['id'])
+                              selected['project_id'],tracker_id)
+            status.set('테스트 상태 폴더: '+str(actual_state_dir))
             root.withdraw()
             launch_single(test)
             root.deiconify()

@@ -46,6 +46,8 @@ python import_wizard.py --config config.local.json --live-test --test-state-dir 
 
 Jira/CB URL, 실제 Swagger JSON URL(또는 자동 탐색)을 입력하고 `연결 / 실제 프로젝트 조회 (GET)`를 누릅니다. 기존 테스트 프로젝트와 Tracker를 목록에서 선택하고 Jira Issue 키 1개를 입력합니다. 다음 요청 확인 화면에서 사전 확인 후 `Import…`를 승인합니다. 인증정보는 기존 환경변수 또는 실행 터미널의 비표시 입력을 사용합니다. Swagger UI `{CB_BASE_URL}/v3/swagger/editor.spr`는 JSON 자체가 아니므로 JSON URL란에 HTML을 넣지 마세요.
 
+대화형 `--live-test`는 Jira Issue·CB 프로젝트·Tracker·서버 URL 조합별 하위 상태 폴더를 자동으로 만듭니다. 다른 Issue나 Tracker를 선택해도 `Use a different state directory` 오류가 발생하지 않으며, 같은 조합을 다시 선택하면 기존 기록을 재사용해 중복 생성을 막습니다. `--test-state-dir`에는 이 하위 폴더들을 담을 상위 폴더만 지정하면 됩니다. 상태 문구에 실제 선택된 폴더를 표시합니다.
+
 ## 기존 전체 Wizard로 Issue 1건만 이관
 
 `codebeamer.profile: "3.0.0.7"`을 설정하고 기존 Wizard를 실행합니다. STEP 2에서 프로젝트/기존 테스트 Tracker를 연결한 뒤 STEP 3의 Jira Issue 키 칸에 1개를 입력하고 `이 Issue 1건으로 전체 Import 범위 제한`을 누릅니다. 해당 유형만 다시 분석한 뒤 Import를 승인합니다. 기존 `migration/wizard.py`와 `Engine`을 재사용하며 Jira 프로젝트 검색 대신 해당 Issue 직접 GET으로 제한합니다. 다른 Item에 대한 관계, 별도 Tracker의 Xray Run, 기존 source ID 일치 Item, R4J 등 미확인 필수 API가 있으면 전체 이관이 차단됩니다. 이 단일 테스트 경로는 기존 Item을 갱신하지 않으며 생성 Item의 실제 Tracker ID를 확인한 뒤 후속 처리를 허용합니다. full-Xray 모드는 전체 의존성이 필요하므로 단일 Issue 테스트에서 명시적으로 차단합니다. 신규 Tracker가 필요한 별도 생성 검증은 아래 생성 API 확인 모드를 사용합니다.
