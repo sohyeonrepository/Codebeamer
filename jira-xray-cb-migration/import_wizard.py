@@ -317,6 +317,8 @@ def launch(wizard, initial_projects=None):
         options.insert('1.0','\n'.join(initial));options.grid(row=5,column=0,columnspan=2,sticky='nsew')
         if source_kind not in ('option','status'):options.configure(state='disabled')
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
+        if any(not profile.get('binding') for profile in profiles.values()):
+            ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
         def save_creation():
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
             originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]))

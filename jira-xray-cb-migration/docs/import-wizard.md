@@ -17,7 +17,7 @@ Hidden 판정 근거로 사용하지 않습니다.
 
 신규 생성 팝업은 서버의 Configuration과 Field Detail에서 타입 후보를 얻고 기존 생성 계약 검증 함수를
 재사용합니다. `wizard.field_types`가 비어 있어도 확인 가능한 템플릿을 제공합니다. 다만 numeric typeId,
-권한, 생성 schema 또는 writable FieldValue 모델이 확인되지 않은 타입은 활성화하지 않고 원인을 표시합니다.
+권한 또는 생성 schema가 확인되지 않은 타입은 활성화하지 않고 원인을 표시합니다. FieldValue 미확인은 별도 값 쓰기 제약으로 표시하며 생성 타입을 제외하지 않습니다.
 `valueModel` 문자열만으로 쓰기 형식을 단정하지 않습니다. 서버 schema의 discriminator 및 value/values
 속성이 확인되어야 자동 binding을 사용합니다. 설정 저장은 로컬에서만 수행하고 실제 POST는 Import 승인 후 실행합니다.
 
@@ -245,3 +245,21 @@ Field ID와 Choice 값 대응을 저장하고 즉시 갱신합니다. 기존 선
 Tk 드롭다운이 포커스를 이동하는 순간 제거되던 이벤트 처리를 없애 선택 이벤트가 저장까지 도달하도록 수정했습니다.
 실제 서버 조회 확인은 고객 환경의 URL/인증으로 분석을 실행한 결과가 필요합니다.
 이번 환경에는 해당 연결 설정이 없으므로 실서버 GET 성공을 주장하지 않습니다.
+
+## Field Definition과 FieldValue 계약 분리
+
+KEFICO 디렉터리 및 해당 Git 이력에는 README만 있어 동일 생성 코드/JSON을 확인하지 못했습니다.
+현재 프로젝트의 `creation_templates`, `configuration_field_contract`, `create_confirmed_field`를 재사용합니다.
+새 생성 로직을 추가하지 않습니다. 신규 후보는 Configuration 생성 계약으로 검증하며 FieldValue 모델이
+없어도 생성 설정을 저장할 수 있습니다. 후보는 기존 Tracker typeId/Permission을 근거로 만들고 기존
+Field ID·Choice ID·참조 설정을 복사하지 않습니다. 기존 필드 권한을 일괄 변경하지 않습니다.
+
+사용자가 Import를 승인한 뒤 기존 전체 Configuration을 다시 읽어 변경 여부를 확인하고 새 정의를 추가해
+POST합니다. 재조회에서 신규 ID·타입·Choice 및 기존 필드/권한/필드 외 설정의 보존을 검증합니다.
+생성된 Choice의 서버 할당 ID는 허용하되 요청한 이름/속성과 개수를 대조합니다.
+
+필드 생성 후 FieldValue 계약이 미확인이라면 실제 Field ID와 매핑을 저장하고 Item 이관을 중단하며
+`complete:false`로 보고합니다. 필드 생성 성공과 Jira 값 이관 성공은 별도입니다.
+상태 폴더를 유지하면 다음 분석에서 생성된 필드를 재사용할 수 있습니다. 확인된 Item/FieldValue 계약이
+추가된 뒤에만 데이터 이관을 다시 승인하세요. 실제 고객 서버에서 Text/Choice/Integer 생성과 Item 값
+재조회는 이번 환경의 접속 정보가 없어 수행하지 않았습니다. 저장소 테스트 결과는 Mock 결과입니다.

@@ -261,6 +261,21 @@ class WizardTests(unittest.TestCase):
         self.assertEqual([f['id'] for f in self.cb.definitions if f['label']=='Empty'],[10])
         self.assertTrue(any(name=='helper_field_create' for name,_ in self.cb.mutations))
         self.assertEqual(self.cb.config['field_bindings']['jira_empty']['fieldId'],10)
+    def test_definition_created_without_value_binding_is_not_complete(self):
+        self.cb.definitions=[f for f in self.cb.definitions if f['id']!=3]
+        self.config['migration']['wizard']['field_types']['text'].pop('binding')
+        self.wizard.config['migration']['wizard']['field_types']['text'].pop('binding')
+        self.plan()
+        self.wizard.configure_creation('P:1','empty','Empty','text',False,{})
+        report=self.wizard.execute(True)
+        self.assertFalse(report['complete'])
+        self.assertIn('FieldValue',report['errors'][0]['error'])
+        self.assertEqual(len(self.cb.items),0)
+        spec=self.state.load('wizard','resolved-mapping')['field_mapping']['P:1']['empty']
+        self.assertTrue(spec['value_contract_unverified'])
+        self.assertEqual(spec['field_id'],10)
+        self.assertEqual([f['id'] for f in self.cb.definitions if f['label']=='Empty'],[10])
+
     def test_new_tracker_is_created_in_selected_existing_project(self):
         # Use one type because the fake target shares field definitions across trackers.
         self.source.types=self.source.types[:1]

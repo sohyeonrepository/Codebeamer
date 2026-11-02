@@ -75,6 +75,12 @@ class TrackerFieldsTests(unittest.TestCase):
             self.assertEqual(profiles['option']['definition']['typeId'],8)
             self.assertEqual(profiles['option']['binding']['type'],'ChoiceFieldValue')
             self.assertNotIn('fieldId',profiles['option']['binding'])
+            cb.spec['components']['schemas'] = {}
+            wizard.config['migration']['wizard']['field_types'] = {}
+            profiles = wizard.creation_profiles('P:1')
+            self.assertEqual(profiles['option']['definition_contract'],'verified')
+            self.assertEqual(profiles['option']['value_contract'],'unverified')
+            self.assertIsNone(profiles['option']['binding'])
             self.assertFalse(cb.write)
             self.assertTrue(all(method=='GET' for method,_ in cb.http.calls))
             state.db.close()

@@ -667,13 +667,20 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     if len(matches) != 1 or field_identifier(matches[0]) is None:
         raise ApiError('생성 결과의 실제 필드 ID를 확인할 수 없습니다. 재생성하지 말고 서버에서 확인하세요.')
     created = dict(definition, **matches[0])
-    if any(created.get(key) != definition[key] for key in required):
+    def matches_options(expected_options, actual_options):
+        if expected_options is None:return actual_options is None
+        if not isinstance(actual_options,list) or len(expected_options)!=len(actual_options):return False
+        return all(isinstance(actual,dict) and all(actual.get(k)==v for k,v in expected.items())
+                   for expected,actual in zip(expected_options,actual_options))
+    if any(created.get(key) != definition[key] for key in required if key != 'options') or not matches_options(definition['options'],created.get('options')):
         raise ApiError('생성된 필드 정의가 제안과 다릅니다. 재생성하지 말고 서버에서 확인하세요.')
     for old in expected['fields']:
         field_id = field_identifier(old)
         existing = [field for field in actual.get('fields', []) if (field_identifier(field) == field_id if field_id is not None else (field.get('label')==old.get('label') and field.get('typeId')==old.get('typeId')))]
         if len(existing) != 1 or any(existing[0].get(key) != value for key, value in old.items()):
             raise ApiError('기존 필드의 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
+    if any(actual.get(key) != value for key,value in expected.items() if key != 'fields'):
+        raise ApiError('기존 Tracker의 필드 외 설정 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
     journal[identity] = {'tracker': tracker, 'status': 'done', 'field_id': field_identifier(created)}
     persist()
     return created, actual

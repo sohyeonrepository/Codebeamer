@@ -392,16 +392,18 @@ class ImportWizard:
             candidate_binding = binding(getattr(self.cb, 'spec', None), representative)
             if not candidate_binding:
                 reasons.append(template['name'] + ': writable FieldValue schema 미확인')
-                continue
             try:
                 probe = dict(definition, label='Migration field contract check')
                 configuration_field_contract(self.cb, probe, tracker)
             except ApiError as exc:
                 reasons.append(template['name'] + ': ' + str(exc))
                 continue
-            candidate_binding.pop('fieldId', None)
+            if candidate_binding: candidate_binding.pop('fieldId', None)
             profiles.setdefault(kind, {'type_name':representative.get('typeName'),
-                                      'definition':definition, 'binding':candidate_binding})
+                                      'definition':definition, 'binding':candidate_binding,
+                                      'creation_method':'configuration',
+                                      'definition_contract':'verified',
+                                      'value_contract':'verified' if candidate_binding else 'unverified'})
         self.config['migration'].setdefault('wizard', {})['field_types'] = profiles
         entry['creation_profiles'] = deepcopy(profiles)
         entry['creation_diagnostics'] = reasons
@@ -487,6 +489,8 @@ class ImportWizard:
             self.state.mark(identity, 'pending', None)
             journal = self.state.root / ('field-' + hashlib.sha256(identity.encode()).hexdigest() + '.json')
             try:
+                if profile.get('creation_method') == 'configuration':
+                    raise ApiError('Use verified Configuration creation contract')
                 dedicated_field_contract(self.cb,definition,tracker)
                 direct = True
             except ApiError:
@@ -511,9 +515,13 @@ class ImportWizard:
         key = 'jira_' + source
         spec = build_spec(source, actual, proposal['semantic_type'], key, mapping)
         # The discriminator/value member come from a deployment-verified template.
-        binding = deepcopy(profile['binding'])
-        binding['fieldId'] = field_identifier(actual)
-        self.cb.config.setdefault('field_bindings', {})[key] = binding
+        binding = deepcopy(profile.get('binding'))
+        if binding:
+            binding['fieldId'] = field_identifier(actual)
+            self.cb.config.setdefault('field_bindings', {})[key] = binding
+            spec['binding'] = binding
+        else:
+            spec['value_contract_unverified'] = True
         self.state.mark(identity, 'done', {'id': field_identifier(actual)})
         return spec
 
@@ -544,12 +552,13 @@ class ImportWizard:
             for entry in self.plan['scopes'].values():
                 for row in entry.get('rows', {}).values():
                     selected = row.get('spec')
-                    if not selected or not selected['target'].startswith('cb_field_'):continue
+                    if not selected or not (selected['target'].startswith('cb_field_') or selected.get('value_contract_unverified')):continue
                     target = row.get('target', {})
                     confirmed = selected.get('binding') or binding(self.cb.spec, target)
                     if not confirmed:
                         raise ApiError('Field '+str(selected['field_id'])+': valueModel의 writable FieldValue schema 미확인')
                     selected['binding'] = confirmed
+                    selected.pop('value_contract_unverified', None)
             result={'openapi_source':self.cb.config.get('reused_successful_openapi',self.cb.config.get('discovered_swagger_url')),
                     'item_create':item,'item_get':readback,'request_properties':sorted(schema['properties'])}
             if any(row.get('status')=='create' for entry in self.plan['scopes'].values() for row in entry.get('rows',{}).values()):
@@ -729,6 +738,16 @@ class ImportWizard:
                     spec = settings['field_mapping'][scope][source]
                     actual = next(f for f in entry['target_fields'] if field_identifier(f) == spec['field_id'])
                     row.update(status='mapped', spec=deepcopy(spec), target=actual)
+            self.state.save('wizard', 'plan', self.plan)
+            unresolved = [scope+':'+source for scope,mapping in settings['field_mapping'].items()
+                          for source,spec in mapping.items() if spec.get('value_contract_unverified')]
+            if unresolved:
+                report = {'complete':False, 'mode':'apply', 'issues':[],
+                          'errors':[{'source':name, 'error':'필드 정의 생성·ID 재조회 완료; FieldValue 쓰기 계약 미확인으로 Item 값 이관 차단'} for name in unresolved]}
+                self.stage('import',report)
+                self.state.save('reports','latest',report)
+                (self.state.root/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+                return report
             xray.runs = lambda issue, field: deepcopy(runs[issue['key']])
             report = Engine(jira, xray, self.cb,
                             self.state, settings, True).migrate()

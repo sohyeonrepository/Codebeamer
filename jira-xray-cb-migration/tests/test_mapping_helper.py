@@ -264,6 +264,44 @@ class MappingHelperTests(unittest.TestCase):
                 return {}
         return Client(),baseline
 
+    def test_configuration_creation_preserves_options_with_server_assigned_ids(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from pathlib import Path
+        import tempfile
+        cb,baseline=self.creation_client()
+        baseline['customSettings']={'preserve':'yes'}
+        template=creation_templates(baseline)[0]['definition']
+        template.update(label='New Choice',options=[{'name':'A'},{'name':'B'}])
+        original=cb.call
+        def call(name,params,body):
+            result=original(name,params,body)
+            for i,option in enumerate(cb.actual['fields'][-1]['options']):option['id']=i+501
+            return result
+        cb.call=call
+        with tempfile.TemporaryDirectory() as directory:
+            created,actual=create_confirmed_field(cb,100,template,baseline,Path(directory)/'journal.json',approved=True)
+            self.assertEqual(created['options'][0],{'id':501,'name':'A'})
+            self.assertEqual(actual['customSettings'],baseline['customSettings'])
+            self.assertEqual(actual['fields'][:-1],baseline['fields'])
+
+    def test_configuration_creation_rejects_changed_non_field_settings(self):
+        from mapping_helper import create_confirmed_field, creation_templates
+        from clients.http import ApiError
+        from pathlib import Path
+        import tempfile
+        cb,baseline=self.creation_client()
+        baseline['customSettings']={'preserve':'yes'}
+        template=creation_templates(baseline)[0]['definition'];template['label']='New field'
+        original=cb.call
+        def call(name,params,body):
+            result=original(name,params,body)
+            cb.actual['customSettings']={'preserve':'no'}
+            return result
+        cb.call=call
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ApiError,'필드 외 설정'):
+                create_confirmed_field(cb,100,template,baseline,Path(directory)/'journal.json',approved=True)
+
     def test_field_creation_needs_approval_and_preserves_existing_fields(self):
         from mapping_helper import create_confirmed_field, creation_templates
         from clients.http import ApiError
