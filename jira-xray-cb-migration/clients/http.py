@@ -23,7 +23,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class Http:
     def __init__(self, base, token_env=None, log=None, timeout=60, *, auth="bearer",
-                 username_env=None, password_env=None, allow_http=False, prompt_auth=False):
+                 username_env=None, password_env=None, allow_http=False, prompt_auth=False, credential_prompt=None):
         self.base = base.rstrip('/')
         self.allow_http = allow_http is True
         self.authorization = None
@@ -31,8 +31,8 @@ class Http:
             username = os.environ.get(username_env, '') if username_env else ''
             password = os.environ.get(password_env, '') if password_env else ''
             if prompt_auth:
-                username = username or input('Codebeamer username: ')
-                password = password or getpass.getpass('Codebeamer password: ')
+                username = username or (credential_prompt('Codebeamer username', False) if credential_prompt else input('Codebeamer username: '))
+                password = password or (credential_prompt('Codebeamer password', True) if credential_prompt else getpass.getpass('Codebeamer password: '))
             if not username or not password or ':' in username:
                 raise ApiError('Basic authentication requires a username (without colon) and password; use --prompt-auth or configured environment variables')
             encoded = base64.b64encode((username + ':' + password).encode('utf-8')).decode('ascii')
@@ -40,13 +40,15 @@ class Http:
         elif auth == 'bearer':
             token = os.environ.get(token_env, '') if token_env else ''
             if not token and prompt_auth:
-                token = getpass.getpass((token_env or 'API') + ' token: ')
+                token = credential_prompt((token_env or 'API') + ' token', True) if credential_prompt else getpass.getpass((token_env or 'API') + ' token: ')
             if token:
                 self.authorization = 'Bearer ' + token
         elif auth != 'none':
             raise ApiError('Unsupported authentication type')
         self.log = Path(log) if log else None
         self.timeout = timeout
+        self.read_deadline = None
+        self.cancel_event = None
         self.opener = urllib.request.build_opener(NoRedirect())
 
     def url(self, path):
@@ -71,10 +73,15 @@ class Http:
         h.update(headers or {})
         # Writes are never automatically retried: an uncertain write must be reconciled.
         for attempt in range(3 if method == 'GET' else 1):
+            remaining = self.read_deadline - time.monotonic() if self.read_deadline else self.timeout
+            if self.cancel_event and self.cancel_event.is_set():
+                raise ApiError('Connection cancelled')
+            if remaining <= 0:
+                raise ApiError('Connection deadline exceeded')
             start = time.monotonic()
             status, content = None, b''
             try:
-                with self.opener.open(urllib.request.Request(url, data=body, headers=h, method=method), timeout=self.timeout) as response:
+                with self.opener.open(urllib.request.Request(url, data=body, headers=h, method=method), timeout=min(self.timeout,remaining)) as response:
                     status = response.status
                     content = response.read()
                 return content if raw else (json.loads(content) if content else {})

@@ -21,6 +21,7 @@ class CodebeamerClient:
             base = urllib.parse.urlsplit(self.http.base)
             parents = [base.path.rstrip('/'), base.path.rstrip('/').rsplit('/', 1)[0]]
             attempted = []
+            last_failure = None
             for parent in dict.fromkeys(parents):
                 for suffix in ('/v3/api-docs', '/v2/api-docs', '/swagger.json', '/api-docs'):
                     candidate = urllib.parse.urlunsplit((base.scheme, base.netloc, parent + suffix, '', ''))
@@ -30,13 +31,13 @@ class CodebeamerClient:
                             self.spec = spec
                             self.config['discovered_swagger_url'] = candidate
                             break
-                    except (ApiError, ValueError):
-                        pass
+                    except (ApiError, ValueError) as exc:
+                        last_failure = str(exc) if isinstance(exc,ApiError) else 'Response is not JSON'
                     attempted.append(parent + suffix)
                 if self.spec is not None:
                     break
             if self.spec is None:
-                raise ApiError('Swagger JSON discovery failed at ' + ', '.join(attempted) + '; no target write attempted. Supply codebeamer.swagger_url or a file: JSON definition')
+                raise ApiError('Swagger JSON discovery failed at ' + ', '.join(attempted) + '; last failure: ' + str(last_failure) + '; no target write attempted. Supply codebeamer.swagger_url or a file: JSON definition')
         if not isinstance(self.spec.get('paths'), dict):
             raise ApiError('Not an OpenAPI/Swagger document')
         if self.config.get('profile') == '3.0.0.7':

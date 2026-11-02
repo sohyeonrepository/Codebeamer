@@ -361,35 +361,96 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
             if len(matches)!=1:raise ApiError('Configure '+name+' from the actual Swagger; unique read API not found')
             cb.config['operations'][name]=matches[0]
         return cb.operation(name)
+    from connection_job import ConnectionJob
+    from tkinter import simpledialog
+    import time
+    active = [None]
+    def controls(busy):
+        connect_button.configure(state='disabled' if busy else 'normal')
+        open_button.configure(state='disabled' if busy else 'normal')
+        cancel_button.configure(state='normal' if busy else 'disabled')
+        projects.configure(state='disabled' if busy else 'readonly')
+        trackers.configure(state='disabled' if busy else 'readonly')
+    def background(label,action,success,clients):
+        if active[0] is not None:return
+        controls(True)
+        started=time.monotonic()
+        job=ConnectionJob(action,timeout=30,clients=clients)
+        active[0]=job
+        def poll():
+            if active[0] is not job:return
+            outcome,result=job.poll()
+            if outcome=='running':
+                status.set(label+' · '+str(int(time.monotonic()-started))+'초 / 최대 30초 · 취소 가능')
+                root.after(100,poll);return
+            active[0]=None;controls(False)
+            if outcome=='success':
+                for client in clients:
+                    client.read_deadline=None;client.cancel_event=None
+                try:success(result)
+                except Exception as exc:status.set('조회 결과 처리 실패: '+type(exc).__name__)
+            elif outcome=='timeout':
+                selected.clear();projects.set('');trackers.set('');projects.configure(values=());trackers.configure(values=())
+                status.set(label+' 시간 초과(30초). URL·VPN·인증·Swagger JSON 주소를 확인하세요.')
+            elif outcome=='cancelled':
+                selected.clear();projects.set('');trackers.set('');projects.configure(values=());trackers.configure(values=())
+                status.set(label+' 취소됨. 늦게 도착한 결과는 반영하지 않습니다.')
+            else:
+                selected.clear();projects.set('');trackers.set('');projects.configure(values=());trackers.configure(values=())
+                status.set(label+' 실패: '+(str(result) if isinstance(result,ApiError) else type(result).__name__))
+        poll()
     def connect():
+        if active[0] is not None:return
         try:
+            selected.clear();projects.set('');trackers.set('');projects.configure(values=());trackers.configure(values=())
             current=deepcopy(config)
             current.setdefault('jira',{})['url']=values['jira'].get().strip()
             cb_settings=current.setdefault('codebeamer',{})
             cb_settings.update(url=values['cb'].get().strip(),swagger_url=values['swagger'].get().strip(),profile='3.0.0.7')
+            connection={k:values[k].get() for k in ('jira','cb','swagger')}
+            def prompt(label,secret):
+                answer=simpledialog.askstring('인증정보',label,parent=root,**({'show':'*'} if secret else {}))
+                if not answer:raise ApiError('Authentication entry cancelled')
+                return answer
             def http(settings):
                 Path(state_dir).mkdir(parents=True,exist_ok=True)
-                return Http(settings['url'],settings.get('token_env'),log=Path(state_dir)/'requests.jsonl',auth=settings.get('auth','bearer'),
+                return Http(settings['url'],settings.get('token_env'),log=Path(state_dir)/'requests.jsonl',timeout=10,auth=settings.get('auth','bearer'),
                     username_env=settings.get('username_env'),password_env=settings.get('password_env'),
-                    allow_http=settings.get('allow_http',False),prompt_auth=prompt_auth)
+                    allow_http=settings.get('allow_http',False),prompt_auth=prompt_auth,credential_prompt=prompt)
             jira=JiraClient(http(current['jira']),current['jira'])
-            cb=CodebeamerClient(http(cb_settings),cb_settings,False);cb.discover()
-            read_operation(cb,'projects_get',('getProjects',))
-            rows=cb.call('projects_get')
-            if not isinstance(rows,list):raise ApiError('projects_get must normalize a complete array; configure response_path using actual response')
-            selected.update(config=current,jira=jira,cb=cb,projects=rows,connection={k:values[k].get() for k in ('jira','cb','swagger')})
-            projects.configure(values=[str(p['id'])+' / '+p.get('name','') for p in rows]);projects.set('');trackers.set('')
-            status.set('실제 Swagger와 프로젝트 GET 완료. 테스트 프로젝트를 선택하세요.')
-        except Exception as exc:status.set(str(exc) if isinstance(exc,ApiError) else type(exc).__name__)
+            cb=CodebeamerClient(http(cb_settings),cb_settings,False)
+            def fetch():
+                cb.discover()
+                read_operation(cb,'projects_get',('getProjects',))
+                rows=cb.call('projects_get')
+                if not isinstance(rows,list):raise ApiError('projects_get must normalize a complete array; configure response_path using actual response')
+                return rows
+            def done(rows):
+                selected.update(config=current,jira=jira,cb=cb,projects=rows,connection=connection)
+                projects.configure(values=[str(p['id'])+' / '+p.get('name','') for p in rows])
+                status.set('실제 Swagger와 프로젝트 GET 완료. 테스트 프로젝트를 선택하세요.')
+            background('Swagger / 프로젝트 조회',fetch,done,(jira.http,cb.http))
+        except Exception as exc:status.set('연결 준비 실패: '+(str(exc) if isinstance(exc,ApiError) else type(exc).__name__))
     def load_trackers(event=None):
+        if active[0] is not None or projects.current()<0:return
         try:
             cb=selected['cb'];pid=selected['projects'][projects.current()]['id']
-            read_operation(cb,'trackers_get',('getTrackers','getProjectTrackers'))
-            rows=cb.call('trackers_get',{'projectId':pid})
-            if not isinstance(rows,list):raise ApiError('trackers_get must normalize a complete project Tracker array')
-            selected.update(project_id=pid,trackers=rows)
-            trackers.configure(values=[str(t['id'])+' / '+t.get('name','') for t in rows]);trackers.set('')
-            status.set('Tracker 목록 GET 완료. 지정 테스트 Tracker를 선택하세요.')
+            # A separate HTTP client prevents a cancelled request from sharing
+            # its cancellation/deadline state with a subsequent operation.
+            import copy
+            reader=copy.copy(cb);reader.http=copy.copy(cb.http)
+            reader.config=deepcopy(cb.config)
+            def fetch():
+                read_operation(reader,'trackers_get',('getTrackers','getProjectTrackers'))
+                rows=reader.call('trackers_get',{'projectId':pid})
+                if not isinstance(rows,list):raise ApiError('trackers_get must normalize a complete project Tracker array')
+                return rows
+            def done(rows):
+                selected.update(project_id=pid,trackers=rows)
+                cb.config=reader.config
+                trackers.configure(values=[str(t['id'])+' / '+t.get('name','') for t in rows]);trackers.set('')
+                status.set('Tracker 목록 GET 완료. 지정 테스트 Tracker를 선택하세요.')
+            background('Tracker 목록 조회',fetch,done,(reader.http,))
         except Exception as exc:status.set(str(exc) if isinstance(exc,ApiError) else type(exc).__name__)
     projects.bind('<<ComboboxSelected>>',load_trackers)
     def open_test():
@@ -407,6 +468,14 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
         except Exception as exc:messagebox.showerror('실제 테스트 차단',str(exc) if isinstance(exc,ApiError) else type(exc).__name__)
         finally:
             if state:state.db.close()
-    ttk.Button(root,text='연결 / 실제 프로젝트 조회 (GET)',command=connect).pack(side='left',padx=12,pady=10)
-    ttk.Button(root,text='선택한 Issue 1건의 요청 확인 화면',command=open_test).pack(side='right',padx=12,pady=10)
+    connect_button=ttk.Button(root,text='연결 / 실제 프로젝트 조회 (GET)',command=connect)
+    connect_button.pack(side='left',padx=12,pady=10)
+    cancel_button=ttk.Button(root,text='취소',state='disabled',command=lambda:active[0].cancel() if active[0] else None)
+    cancel_button.pack(side='left',padx=4,pady=10)
+    open_button=ttk.Button(root,text='선택한 Issue 1건의 요청 확인 화면',command=open_test)
+    open_button.pack(side='right',padx=12,pady=10)
+    def close():
+        if active[0]:active[0].cancel()
+        root.destroy()
+    root.protocol('WM_DELETE_WINDOW',close)
     root.mainloop()
