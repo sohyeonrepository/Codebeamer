@@ -1,5 +1,9 @@
 # Jira DC + Xray → Codebeamer Python 마이그레이터
 
+## 실제 Codebeamer 3.0.0.7 테스트
+
+[실서버 1건 테스트 절차와 전체 Import 차단 조건](docs/live-single-import.md)을 참고하세요. `python import_wizard.py --config config.local.json --live-test --prompt-auth`로 URL을 입력하고 테스트 프로젝트/Tracker 및 Jira Issue 1건을 선택할 수 있습니다. 실제 Swagger에서 확인한 요청만 Import 승인 후 전송합니다. 기존 전체 Wizard의 STEP 3에서도 Issue 1건으로 조회·이관 범위를 제한할 수 있습니다. 실제 서버 쓰기 성공 여부는 생성 ID와 GET 결과로 확인하며 오프라인 테스트와 구분합니다.
+
 ## 단계형 Import Wizard
 
 `python mapping_helper.py --wizard --config config.local.json --prompt-auth`로 기존 프로젝트/Tracker 선택(STEP 2), 조합별 CB 왼쪽/Jira 오른쪽 필드 매핑(STEP 3), 명시적 Import 승인 흐름을 실행할 수 있습니다. 기존 매핑 도우미와 CLI도 유지됩니다. [Wizard 설정·실행·제한 및 API 계약](docs/import-wizard.md)을 확인하세요. Field Configuration/R4J/CB 작업 API는 실제 서버에서 확인한 설정이 필요하며, 사전 분석은 읽기 전용입니다.

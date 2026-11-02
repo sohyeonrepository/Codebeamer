@@ -199,6 +199,32 @@ class ImportWizard:
         self.state.save('wizard', 'plan', self.plan)
         return result
 
+    def limit_to_issue(self, key):
+        import re
+        from clients.jira_client import segment
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*', key):
+            raise ApiError('Select exactly one Jira Issue key')
+        if self.config['migration'].get('mode') == 'full-xray':
+            raise ApiError('full-xray requires complete Plan/Test/Set/Execution dependencies; it cannot be declared complete for one isolated Issue')
+        issue = self.jira.http.request('GET', '/rest/api/2/issue/' + segment(key) + '?fields=*all')
+        project = issue['fields']['project']['key']
+        scope = project + ':' + str(issue['fields']['issuetype']['id'])
+        if issue.get('key') != key or scope not in self.plan['scopes']:
+            raise ApiError('Map this Issue Type to a test Tracker in STEP 2 first')
+        entry = self.plan['scopes'][scope]
+        if not entry.get('tracker'):
+            raise ApiError('Select an existing dedicated test Tracker for bounded one-Issue Import')
+        self.plan['scopes'] = {scope:entry}
+        selected = self.plan['projects'][project]
+        selected['types'] = [issue['fields']['issuetype']]
+        self.plan['projects'] = {project:selected}
+        self.config['jira']['single_issue_key'] = key
+        self.jira.config = dict(self.jira.config, single_issue_key=key)
+        for name in ('analysis','rows','target_fields'):
+            entry.pop(name,None)
+        self.stage('single-issue-scope', {'issue_key':key,'project_id':entry['project_id'],'tracker_id':entry['tracker']})
+        return scope
+
     def discover(self):
         self.cb.write = False
         self.cb.discover()
@@ -222,6 +248,10 @@ class ImportWizard:
         return self.stage('trackers', trackers)
 
     def map_tracker(self, project, type_id, tracker=None, name=None):
+        if self.config['jira'].get('single_issue_key'):
+            allowed = next(iter(self.plan['scopes'].values()))
+            if project != allowed['project'] or str(type_id) != str(allowed['type']['id']) or tracker != allowed['tracker']:
+                raise ApiError('Single-Issue test scope is fixed; start a separate test session to change its Tracker')
         selection = self.plan['projects'][project]
         kind = next(t for t in selection['types'] if str(t['id']) == str(type_id))
         if tracker is not None and tracker not in [t['id'] for t in selection['trackers']]:
@@ -295,7 +325,7 @@ class ImportWizard:
         return errors
 
     def create_field(self, scope, source, row, tracker):
-        from mapping_helper import create_dedicated_field
+        from mapping_helper import create_dedicated_field, dedicated_field_contract, create_confirmed_field
         proposal = row['creation']
         profile = self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
         if not profile:
@@ -318,8 +348,18 @@ class ImportWizard:
             if matches:
                 raise ApiError('Field appeared after analysis; analyze again before reusing it')
             self.state.mark(identity, 'pending', None)
-            created, _ = create_dedicated_field(self.cb, tracker, definition,
-                self.state.root / ('field-' + hashlib.sha256(identity.encode()).hexdigest() + '.json'))
+            journal = self.state.root / ('field-' + hashlib.sha256(identity.encode()).hexdigest() + '.json')
+            try:
+                dedicated_field_contract(self.cb,definition,tracker)
+                direct = True
+            except ApiError:
+                from clients.codebeamer_3007 import configuration_field_contract
+                expected = configuration_field_contract(self.cb,definition,tracker)
+                direct = False
+            if direct:
+                created, _ = create_dedicated_field(self.cb,tracker,definition,journal)
+            else:
+                created, _ = create_confirmed_field(self.cb,tracker,definition,expected,journal,approved=True)
         # Re-read the actual server-assigned ID and full metadata, never trust a proposed ID.
         actual = next((f for f in target_fields(self.cb, tracker) if field_identifier(f) == field_identifier(created)), None)
         if not actual or not compatible(proposal['semantic_type'], proposal['multipleSelection'], actual):
@@ -345,6 +385,8 @@ class ImportWizard:
         if approved is not True:
             raise ApiError('Explicit Import approval is required')
         errors = self.errors()
+        if self.config['jira'].get('single_issue_key') and (len(self.plan['scopes']) != 1 or len(self.plan['projects']) != 1):
+            errors.append('Single-Issue test requires exactly one project/Tracker/Issue Type scope')
         if errors:
             raise ApiError('\n'.join(errors))
         config = deepcopy(self.config)
@@ -399,6 +441,13 @@ class ImportWizard:
                 rewrite_description(issue['fields'].get('description'), files,
                                     {str(a['id']): 'https://target.invalid/' + str(a['id']) for a in files})
                 runs[issue['key']] = xray.runs(issue, run_field)
+                if config['jira'].get('single_issue_key'):
+                    if runs[issue['key']]:
+                        raise ApiError('Single-Issue live test cannot write Xray Runs into a separately configured Tracker; dedicated Run/dependency scope is required')
+                    for link in issue['fields'].get('issuelinks',[]):
+                        other = link.get('inwardIssue') or link.get('outwardIssue')
+                        if not other or str(other.get('id')) != str(issue['id']):
+                            raise ApiError('Single-Issue live test cannot create Associations to other Items; choose an isolated test Issue or use a separately approved multi-Item scope')
                 for link in issue['fields'].get('issuelinks', []):
                     target_type = settings['wizard'].get('association_types', {}).get(str(link['type']['id']))
                     if type(target_type) is not int or target_type <= 0:
@@ -429,8 +478,12 @@ class ImportWizard:
                             raise ApiError('Tracker identity changed')
                         self.state.mark(token, 'done', {'id': tracker})
                     else:
-                        body = deepcopy(settings['wizard'].get('tracker_template', {}))
-                        body.update(name=entry['new_tracker'], project={'id': project_id}, sourceKey=scope)
+                        if self.cb.operation('tracker_create')['path'] == '/v3/tracker/configuration':
+                            from clients.codebeamer_3007 import new_tracker_configuration
+                            body = new_tracker_configuration(self.cb,entry['template_tracker'],project_id,entry['new_tracker'])
+                        else:
+                            body = deepcopy(settings['wizard'].get('tracker_template', {}))
+                            body.update(name=entry['new_tracker'], project={'id': project_id}, sourceKey=scope)
                         created = self.state.once(token, lambda: self.cb.call('tracker_create', {'projectId': project_id}, body))
                         tracker = created['id']
                     verified = self.cb.call('trackers_get', {'projectId': project_id})

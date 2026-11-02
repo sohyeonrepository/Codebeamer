@@ -153,6 +153,8 @@ class Engine:
         lookup = self.cb.call('lookup', {'sourceId': source_key, 'sourceKey': key, 'trackerId': tracker_id, 'projectId': project_id})
         if not isinstance(lookup, list) or len(lookup) > 1:
             raise ApiError('Lookup must return zero or one exact source-ID match')
+        if self.jira.config.get('single_issue_key') and lookup:
+            raise ApiError('Single-Issue live test is create-only: an existing source-ID match must not be updated. Use the creation-check report to re-read an already-created test Item.')
         if known:
             if known[0] != 'done':
                 if self.wizard and not events and len(lookup) == 1:
@@ -184,6 +186,8 @@ class Engine:
             replay(self.cb, self.state, key, item_id, events, make_payload)
             self.report['limitations'].append({'source': key, 'reason': 'Original revision author/time preserved in state only; native restoration unverified'})
         actual = self.cb.call('item_get', {'itemId': item_id})
+        if self.jira.config.get('single_issue_key') and actual.get('tracker',{}).get('id') != tracker_id:
+            raise ApiError('Single-Issue target Tracker could not be verified; refuse any Item update')
         if compare_fields(latest, actual):
             if events:
                 raise ApiError('Final replay fields differ from Jira current values')

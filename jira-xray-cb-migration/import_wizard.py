@@ -96,6 +96,14 @@ def launch(wizard):
     ttk.Label(step3, text='왼쪽은 선택한 CB Tracker, 오른쪽은 선택한 Jira Issue Type입니다. 행을 두 번 클릭하면 수동 연결합니다.').pack(anchor='w')
     scopes = ttk.Combobox(step3, state='readonly', width=55)
     scopes.pack(anchor='w', pady=8)
+    single_key = tk.StringVar()
+    ttk.Label(step3,text='실서버 테스트 범위: Jira Issue 키 1개 (기존 테스트 Tracker에 먼저 매핑)').pack(anchor='w')
+    ttk.Entry(step3,textvariable=single_key,width=35).pack(anchor='w')
+    def bound_issue():
+        scope = wizard.limit_to_issue(single_key.get().strip())
+        scopes.configure(values=[scope]);scopes.set(scope)
+        table.delete(*table.get_children())
+    ttk.Button(step3,text='이 Issue 1건으로 전체 Import 범위 제한',command=lambda:run('1건 범위 설정',bound_issue)).pack(anchor='w',pady=6)
     table = ttk.Treeview(step3, columns=('cb','jira'), displaycolumns=('cb','jira'), show='headings', selectmode='browse')
     table.heading('cb', text='Codebeamer Tracker 필드')
     table.heading('jira', text='Jira Issue Type 필드')
@@ -183,21 +191,73 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Jira → Codebeamer Import Wizard')
     parser.add_argument('--config', default='config.local.json')
     parser.add_argument('--prompt-auth', action='store_true')
+    parser.add_argument('--single-issue', help='Exact Jira key for a bounded live creation check')
+    parser.add_argument('--live-test',action='store_true',help='Enter URLs and choose the real test project/Tracker and one Jira Issue in the UI')
+    parser.add_argument('--test-project-id', type=int)
+    parser.add_argument('--test-tracker-id', type=int)
+    parser.add_argument('--test-state-dir', default='.migration/single-import')
+    parser.add_argument('--preflight-only', action='store_true', help='Read real APIs and save requests/blockers without any writes')
     args = parser.parse_args(argv)
+    if args.single_issue and (not args.test_project_id or not args.test_tracker_id):
+        parser.error('--single-issue requires --test-project-id and --test-tracker-id')
+    if not args.single_issue and (args.preflight_only or args.test_project_id or args.test_tracker_id):
+        parser.error('Test flags require --single-issue')
     config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
-    state = State(config['migration'].get('state_dir', '.migration/import-wizard'))
+    if args.live_test:
+        if args.single_issue or args.preflight_only:
+            parser.error('--live-test is the interactive alternative to --single-issue/--preflight-only')
+        from single_import import launch_live_setup
+        return launch_live_setup(config,args.test_state_dir,args.prompt_auth)
+    state = State(args.test_state_dir if args.single_issue else config['migration'].get('state_dir', '.migration/import-wizard'))
     def http(settings):
         return Http(settings['url'], settings.get('token_env'), state.root / 'requests.jsonl',
                     auth=settings.get('auth', 'bearer'), username_env=settings.get('username_env'),
                     password_env=settings.get('password_env'), allow_http=settings.get('allow_http', False),
                     prompt_auth=args.prompt_auth)
     try:
+        if args.single_issue:
+            import os
+            import urllib.parse
+            blockers = []
+            for service in ('jira','codebeamer'):
+                settings = config.get(service,{})
+                url = urllib.parse.urlsplit(settings.get('url',''))
+                if url.scheme not in ('http','https') or not url.netloc:
+                    blockers.append({'stage':service + '-url','reason':'A real HTTP(S) base URL is required'})
+                required = ([settings.get('username_env'),settings.get('password_env')] if settings.get('auth') == 'basic'
+                            else [settings.get('token_env')] if settings.get('auth','bearer') == 'bearer' else [])
+                if not args.prompt_auth and any(not key or not os.environ.get(key) for key in required):
+                    blockers.append({'stage':service + '-authentication','reason':'Configured authentication variables are missing; use secure environment variables or --prompt-auth'})
+            if blockers:
+                report = {'complete':False,'full_migration_complete':False,'blockers':blockers}
+                (state.root / 'single-import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+                print(json.dumps(report,ensure_ascii=False,indent=2))
+                return 2
+            from single_import import SingleImport, launch_single
+            test = SingleImport(JiraClient(http(config['jira']), config['jira'], state.save),
+                CodebeamerClient(http(config['codebeamer']), dict(config['codebeamer']), False),
+                state, config, args.single_issue, args.test_project_id, args.test_tracker_id)
+            if args.preflight_only:
+                report = test.prepare()
+                print(json.dumps(report, ensure_ascii=False, indent=2))
+                return 2 if report['blockers'] else 0
+            else:
+                launch_single(test)
+            return 0
         wizard = ImportWizard(JiraClient(http(config['jira']), config['jira'], state.save),
                               CodebeamerClient(http(config['codebeamer']), config['codebeamer'], False), state, config)
         launch(wizard)
+    except (ApiError, OSError, ValueError, KeyError) as exc:
+        if not args.single_issue:
+            raise
+        report = {'complete': False, 'full_migration_complete': False,
+                  'blockers': [{'stage':'startup-or-authentication', 'reason':str(exc) if isinstance(exc,ApiError) else type(exc).__name__}]}
+        (state.root / 'single-import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+        print(json.dumps(report,ensure_ascii=False,indent=2))
+        return 2
     finally:
         state.db.close()
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -88,7 +88,9 @@ def request_body(operation_id, body, bindings=None):
                 validate_values(model['customFields'])
     else:
         basic, fields = body.get('basicInformation'), body.get('fields')
-        if not isinstance(basic, dict) or type(basic.get('trackerId')) is not int or not isinstance(fields, list):
+        existing = isinstance(basic,dict) and type(basic.get('trackerId')) is int
+        new = isinstance(basic,dict) and basic.get('trackerId') is None and type(basic.get('projectId')) is int
+        if not isinstance(basic, dict) or not (existing or new) or not isinstance(fields, list):
             raise ApiError('Tracker configuration update requires basicInformation.trackerId and fields array')
         for field in fields:
             if not isinstance(field, dict) or ('permission' in field and not isinstance(field['permission'], dict)):

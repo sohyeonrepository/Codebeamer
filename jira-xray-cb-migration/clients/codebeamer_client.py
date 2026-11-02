@@ -39,6 +39,9 @@ class CodebeamerClient:
                 raise ApiError('Swagger JSON discovery failed at ' + ', '.join(attempted) + '; no target write attempted. Supply codebeamer.swagger_url or a file: JSON definition')
         if not isinstance(self.spec.get('paths'), dict):
             raise ApiError('Not an OpenAPI/Swagger document')
+        if self.config.get('profile') == '3.0.0.7':
+            from clients.codebeamer_3007 import bind
+            bind(self)
         return [{'path': p, 'method': m.upper(), 'operationId': op.get('operationId')}
                 for p, methods in self.spec['paths'].items() for m, op in methods.items()
                 if m.lower() in ('get', 'post', 'put', 'patch', 'delete')]
@@ -89,7 +92,16 @@ class CodebeamerClient:
             from clients.codebeamer_payloads import request_body
             operation_id = self.spec['paths'][op['path']][method.lower()].get('operationId')
             data = request_body(operation_id, data, bindings)
+            if self.config.get('profile') == '3.0.0.7':
+                from mapping_helper import request_schema
+                from single_import import validate
+                validate(self.spec,data,request_schema(self.spec,self.spec['paths'][op['path']][method.lower()]))
         result = self.http.request(method, path, data, raw=raw, headers=headers)
+        if self.config.get('profile') == '3.0.0.7' and op['path'] == '/v3/tracker/configuration' and method == 'POST' and not raw:
+            if isinstance(result,dict) and isinstance(result.get('basicInformation'),dict) and type(result['basicInformation'].get('trackerId')) is int:
+                result = dict(result,id=result['basicInformation']['trackerId'])
+            elif type(result) is int:
+                result = {'id':result}
         for part in op.get('response_path', '').split('.'):
             if part:
                 result = result[part]

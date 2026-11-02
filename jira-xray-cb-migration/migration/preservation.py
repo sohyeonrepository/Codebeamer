@@ -21,8 +21,14 @@ def preflight(cb, settings, plan):
     if any(e.get('new_tracker') for e in plan['scopes'].values()):
         required.extend(['tracker_create', 'tracker_lookup'])
         op = cb.operation('tracker_create')
-        if '{projectId}' not in op['path'] or op.get('path_parameters', {}).get('projectId', '${projectId}') != '${projectId}':
+        configuration_api = op['method'].upper() == 'POST' and op['path'] == '/v3/tracker/configuration'
+        if not configuration_api and ('{projectId}' not in op['path'] or op.get('path_parameters', {}).get('projectId', '${projectId}') != '${projectId}'):
             raise ApiError('Tracker creation must use the selected projectId in its API path')
+        if configuration_api:
+            from clients.codebeamer_3007 import new_tracker_configuration
+            for entry in plan['scopes'].values():
+                if entry.get('new_tracker'):
+                    new_tracker_configuration(cb,entry['template_tracker'],entry['project_id'],entry['new_tracker'])
     for name in required:
         op = cb.operation(name)
         method = op['method'].upper()
@@ -45,7 +51,11 @@ def preflight(cb, settings, plan):
                 definition.update(label=row['creation']['label'], multipleSelection=row['creation']['multipleSelection'])
                 if row['creation']['semantic_type'] in ('option', 'status'):
                     definition['options'] = [{'name': label} for label in dict.fromkeys(row['creation']['choices'].values())]
-                dedicated_field_contract(cb, definition, entry.get('tracker'))
+                try:
+                    dedicated_field_contract(cb, definition, entry.get('tracker'))
+                except ApiError:
+                    from clients.codebeamer_3007 import configuration_field_contract
+                    configuration_field_contract(cb,definition,entry.get('tracker') or entry.get('template_tracker'))
 
 
 def collect_r4j(jira, issue, settings, state):

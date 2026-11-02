@@ -122,7 +122,7 @@ class Target:
         if name=='item_create':
             iid=len(self.items)+200;self.items[iid]=deepcopy(dict(data,sourceId=p['sourceId']));return {'id':iid}
         if name=='item_update': self.items[p['itemId']].update(data);return {'id':p['itemId']}
-        if name=='item_get': return deepcopy(dict(self.items[p['itemId']],id=p['itemId']))
+        if name=='item_get': return deepcopy(dict(self.items[p['itemId']],id=p['itemId'],tracker={'id':100}))
         if name=='attachment_lookup':
             return [{'id':k} for k,v in self.files.items() if v['item']==p['itemId'] and v['sourceId']==p['sourceId']]
         if name=='attachment_upload':
@@ -301,6 +301,19 @@ class WizardTests(unittest.TestCase):
         comments=[v for v in self.cb.records.values() if v['kind']=='comment']
         self.assertEqual(len(comments),2)
         self.assertEqual(comments[0]['data']['body'],'Updated complete body')
+
+    def test_one_issue_bound_uses_direct_get_and_creates_only_selected_item(self):
+        self.source.rows[0]['fields']['issuelinks']=[]
+        self.plan()
+        scope=self.wizard.limit_to_issue('P-1')
+        self.source.reads.clear()
+        self.wizard.analyze(scope)
+        report=self.wizard.execute(True)
+        self.assertTrue(report['complete'],report)
+        self.assertEqual(report['counts']['source_issues'],1)
+        self.assertEqual(len(self.cb.items),1)
+        self.assertFalse(any('/search' in path for _,path in self.source.reads))
+        self.assertFalse(any('/issue/P-2' in path for _,path in self.source.reads))
 
     def test_unconfigured_global_null_is_not_displayed_but_configured_null_is(self):
         self.source.definitions.append(definition('global_unused','Unused Global'))

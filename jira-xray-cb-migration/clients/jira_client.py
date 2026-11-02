@@ -71,13 +71,23 @@ class JiraClient:
                 raise ApiError('Truncated pagination')
 
     def issues(self, project):
+        selected = self.config.get('single_issue_key')
+        if selected:
+            issue = self.http.request('GET', '/rest/api/2/issue/' + segment(selected) + '?fields=*all')
+            if issue.get('key') != selected or issue.get('fields', {}).get('project', {}).get('key') != project:
+                raise ApiError('Selected single Issue does not belong to the chosen Jira project')
+            types = self.config.get('execution_issue_types')
+            kind = issue['fields']['issuetype']
+            if not types or str(kind['id']) in [str(t) for t in types] or kind.get('name') in types:
+                yield issue
+            return
         # Encode the literal as a JQL string; never interpolate raw project input.
         import json
         jql = 'project = ' + json.dumps(project)
         types = self.config.get('execution_issue_types')
         if types:
             jql += ' AND issuetype in (' + ', '.join(json.dumps(str(t)) for t in types) + ')'
-        return self.pages('/rest/api/2/search', 'issues', {'jql': jql + ' ORDER BY key', 'fields': '*all'})
+        yield from self.pages('/rest/api/2/search', 'issues', {'jql': jql + ' ORDER BY key', 'fields': '*all'})
 
     def run_source(self, key):
         # Run-only migration does not need issue changelog/comments/worklogs.
