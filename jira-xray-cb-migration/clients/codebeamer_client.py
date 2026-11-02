@@ -67,6 +67,8 @@ class CodebeamerClient:
     def call(self, name, params=None, data=None, raw=False, headers=None):
         op = self.operation(name)
         method = op['method'].upper()
+        if method == 'DELETE':
+            raise ApiError('Migration never deletes existing target data')
         if method != 'GET' and not self.write:
             raise ApiError('Write refused in dry-run')
         context = dict(params or {}, payload=data)
@@ -99,9 +101,13 @@ class CodebeamerClient:
         return result
 
     def fields(self, tracker):
+        if 'fields' in self.config.get('operations', {}):
+            return self.call('fields', {'trackerId': tracker})
         return self.http.request('GET', f'/v3/trackers/{segment(tracker)}/fields')
 
     def configuration(self, tracker):
+        if 'tracker_configuration_get' in self.config.get('operations', {}):
+            return self.call('tracker_configuration_get', {'trackerId': tracker})
         return self.http.request('GET', f'/v3/tracker/{segment(tracker)}/configuration')
 
 

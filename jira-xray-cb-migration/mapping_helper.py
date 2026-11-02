@@ -959,12 +959,18 @@ def create_dedicated_field(cb, tracker, definition, journal_path):
 def main():
     parser = argparse.ArgumentParser(description='고객 PC 내부 매핑 도우미 (연결 자동 반영 / 없는 값 생성)')
     parser.add_argument('--config', default='config.local.json')
-    parser.add_argument('--tracker-id', type=int, action='append', required=True)
+    parser.add_argument('--tracker-id', type=int, action='append')
+    parser.add_argument('--wizard', action='store_true', help='Open the project/Tracker Import Wizard')
     parser.add_argument('--sample-limit', type=int, default=20)
     parser.add_argument('--prompt-auth', action='store_true')
     parser.add_argument('--output', default='mapping.local.json')
     parser.add_argument('--log-dir', default='logs', help='Local diagnostic log directory')
     args = parser.parse_args()
+    if args.wizard:
+        from import_wizard import main as wizard_main
+        return wizard_main(['--config', args.config] + (['--prompt-auth'] if args.prompt_auth else []))
+    if not args.tracker_id:
+        parser.error('--tracker-id is required unless --wizard is selected')
     global _diagnostics
     _diagnostics = Diagnostics(args.log_dir)
     print('진단 요약: ' + str((_diagnostics.root / 'summary.txt').resolve()))

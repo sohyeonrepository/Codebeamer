@@ -31,6 +31,9 @@ def migrate_full(engine):
         for project in jira.projects():
             for summary in jira.issues(project['key']):
                 issue = jira.bundle(summary['key'])
+                if engine.wizard:
+                    from migration.preservation import collect_r4j
+                    collect_r4j(jira, issue, engine.settings, engine.state)
                 kind = next((k for k, v in types.items() if str(v) in
                              (str(issue['fields']['issuetype']['id']), issue['fields']['issuetype']['name'])), None)
                 if kind is None:

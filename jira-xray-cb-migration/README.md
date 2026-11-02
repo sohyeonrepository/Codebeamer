@@ -1,5 +1,9 @@
 # Jira DC + Xray → Codebeamer Python 마이그레이터
 
+## 단계형 Import Wizard
+
+`python mapping_helper.py --wizard --config config.local.json --prompt-auth`로 기존 프로젝트/Tracker 선택(STEP 2), 조합별 CB 왼쪽/Jira 오른쪽 필드 매핑(STEP 3), 명시적 Import 승인 흐름을 실행할 수 있습니다. 기존 매핑 도우미와 CLI도 유지됩니다. [Wizard 설정·실행·제한 및 API 계약](docs/import-wizard.md)을 확인하세요. Field Configuration/R4J/CB 작업 API는 실제 서버에서 확인한 설정이 필요하며, 사전 분석은 읽기 전용입니다.
+
 **현재 기본 실행 범위는 Test Run만 이관입니다.** 설정과 제한은 문서 하단의 “현재 사용 범위: Test Run만 이관”을 먼저 확인하세요. 다른 데이터와 Test Plan–요구사항 관계는 별도 도구로 처리합니다.
 
 Python 3.10 이상, Windows/VS Code 지원. 외부 패키지는 필요하지 않습니다.

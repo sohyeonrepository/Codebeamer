@@ -39,3 +39,8 @@ class State:
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(dest)
         return dest
+
+    def load(self, directory, key):
+        import hashlib
+        path = self.root / directory / (hashlib.sha256(str(key).encode()).hexdigest() + '.json')
+        return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None

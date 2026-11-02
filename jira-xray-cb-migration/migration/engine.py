@@ -12,6 +12,7 @@ class Engine:
     def __init__(self, jira, xray, cb, state, settings, write=False):
         self.jira, self.xray, self.cb, self.state = jira, xray, cb, state
         self.settings, self.write = settings, write
+        self.wizard = settings.get('wizard', {}).get('enabled', False)
         self.report = {'mode': 'apply' if write else 'dry-run', 'complete': False, 'issues': [], 'errors': [], 'limitations': []}
 
     def ensure(self, kind, key, spec):
@@ -44,7 +45,9 @@ class Engine:
                 run_field = XrayClient.identify_field(source_fields, self.jira.config.get('xray_run_field'))
             except ApiError as exc:
                 run_field = None
-                self.report['limitations'].append({'source': 'Xray', 'reason': str(exc)})
+                from migration.wizard import managed_fields
+                if not self.wizard or managed_fields(source_fields, self.jira.config.get('xray_run_field')):
+                    self.report['limitations'].append({'source': 'Xray', 'reason': str(exc)})
             projects = self.jira.projects()
             self.state.save('source', 'projects', projects)
             bundles = []
@@ -54,7 +57,7 @@ class Engine:
                     try:
                         bundle = self.jira.bundle(key)
                         self.state.save('source', key, bundle)
-                        bundle['_runs'] = self.xray.runs(bundle, run_field) if run_field else []
+                        bundle['_runs'] = self.xray.runs(bundle, run_field) if run_field or self.wizard else []
                         self.state.save('source', key, bundle)
                         bundles.append((project, bundle))
                     except (ApiError, KeyError, ValueError) as exc:
@@ -96,16 +99,30 @@ class Engine:
             raise ApiError('Set a positive target Tracker ID for ' + tracker_key)
         mappings = self.settings.get('field_mapping', {})
         mapping = mappings.get(project['key'] + ':' + type_id, mappings.get(type_id, mappings.get(issue['fields']['issuetype'].get('name'), {})))
+        if self.wizard:
+            for spec in mapping.values():
+                if spec.get('binding'):
+                    self.cb.config.setdefault('field_bindings', {})[spec['target']] = spec['binding']
         record = {'key': key, 'planned_fields': len(mapping), 'comments': len(issue['_comments']),
                   'worklogs': len(issue['_worklogs']), 'runs': len(issue['_runs']), 'status': 'planned'}
         self.report['issues'].append(record)
         # Coverage is explicit: no silent loss of nulls, custom fields, or system fields.
         missing = set(issue['fields']) - set(mapping) - {'attachment', 'comment', 'worklog', 'issuelinks'}
+        if self.wizard:
+            from migration.wizard import has_value, managed_fields
+            missing -= {'issuetype', 'project'}
+            missing -= managed_fields(definitions, self.jira.config.get('xray_run_field'))
+            missing = {f for f in missing if has_value(issue['fields'][f])}
         if missing:
             raise ApiError('Unmapped source fields: ' + ', '.join(sorted(missing)))
         if not mapping:
             raise ApiError('No field mappings')
-        make_payload = lambda fields: payload(fields, mapping, self.settings)
+        def make_payload(fields):
+            if self.wizard:
+                cached = self.state.get('inline-description:' + key)
+                if cached and cached[0] == 'done' and fields.get('description') == cached[1]['source']:
+                    fields = dict(fields, description=cached[1]['target'])
+            return payload(fields, mapping, self.settings)
         latest = make_payload(issue['fields'])
         if not self.write:
             if isinstance(tracker_spec, int):
@@ -127,8 +144,8 @@ class Engine:
         if conflicts:
             self.state.save('conflicts', key, conflicts)
             raise ApiError('Field configuration mismatch; see conflicts archive')
-        events = timeline(issue, mapping) if self.settings.get('history_replay') else []
-        if not events and issue['_history']:
+        events = timeline(issue, mapping) if self.settings.get('history_replay') and (not self.wizard or self.settings['wizard'].get('native_replay')) else []
+        if not events and issue['_history'] and not self.wizard:
             self.report['limitations'].append({'source': key, 'reason': 'History replay disabled'})
         # External source-key lookup is mandatory before initial create or a changed snapshot.
         source_key = str(issue['id'])
@@ -138,7 +155,11 @@ class Engine:
             raise ApiError('Lookup must return zero or one exact source-ID match')
         if known:
             if known[0] != 'done':
-                raise ApiError('Uncertain item create: reconcile state before resuming')
+                if self.wizard and not events and len(lookup) == 1:
+                    self.state.mark('item:' + source_key, 'done', {'id': lookup[0]['id']})
+                    known = self.state.get('item:' + source_key)
+                else:
+                    raise ApiError('Uncertain item create: reconcile state before resuming')
             item_id = known[1]['id']
             if not lookup or lookup[0]['id'] != item_id:
                 raise ApiError('Source-ID lookup disagrees with saved mapping')
@@ -150,7 +171,8 @@ class Engine:
             self.state.mark('item:' + source_key, 'done', {'id': item_id})
         else:
             body = make_payload(events[0][1]) if events else latest
-            created = self.state.once('item:' + source_key, lambda: self.cb.call('item_create', {'trackerId': tracker_id}, body))
+            created = self.state.once('item:' + source_key, lambda: self.cb.call('item_create',
+                {'trackerId': tracker_id, 'sourceId': source_key, 'sourceKey': key, 'projectId': project_id}, body))
             item_id = created['id']
             if events:
                 from validation.compare_history import revision_ids
@@ -178,7 +200,21 @@ class Engine:
     def children(self, issue, item_id):
         key = issue['key']
         from migration.records import mapped_record, test_run
+        if self.wizard:
+            from migration.preservation import preserve, comments, attachments
+            if '_r4j' not in issue:
+                from migration.preservation import collect_r4j
+                collect_r4j(self.jira, issue, self.settings, self.state)
+            counts = preserve(self.cb, self.state, issue, item_id)
+            self.report.setdefault('legacy_history', []).append(counts)
+            comments(self.cb, self.state, issue, item_id)
+            type_id = str(issue['fields']['issuetype']['id'])
+            project = issue['fields']['project']['key']
+            mappings = self.settings['field_mapping'][project + ':' + type_id]
+            attachments(self.cb, self.state, self.jira.http, issue, item_id, mappings, self.settings)
         for category, records in [('comment', issue['_comments']), ('worklog', issue['_worklogs'])]:
+            if self.wizard and category == 'comment':
+                continue
             adapter = self.settings.get(category + '_adapter')
             if not adapter and records:
                 self.report['limitations'].append({'source': key, 'reason': category + ' raw data preserved; target adapter missing'})
@@ -187,12 +223,20 @@ class Engine:
                 mapped_record(self.cb, self.state, self.settings, category, key + ':' + str(record['id']),
                               record, {'itemId': item_id}, adapter['fields'])
         for attachment in issue['fields'].get('attachment', []):
-            transfer(self.jira.http, self.cb, self.state, key, item_id, attachment)
+            if not self.wizard:
+                transfer(self.jira.http, self.cb, self.state, key, item_id, attachment)
         for run in issue['_runs']:
             test_run(self.cb, self.state, self.settings, self.jira.http, issue, item_id, run)
 
     def relations(self, bundles):
         if not self.write:
+            return
+        if self.wizard:
+            from migration.preservation import associations
+            try:
+                associations(self.cb, self.state, bundles, self.settings)
+            except (ApiError, KeyError, ValueError) as exc:
+                self.error('associations', exc)
             return
         for _, issue in bundles:
             links = issue['fields'].get('issuelinks', [])

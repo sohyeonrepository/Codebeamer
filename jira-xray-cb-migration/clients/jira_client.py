@@ -13,6 +13,37 @@ class JiraClient:
     def fields(self):
         return self.http.request('GET', '/rest/api/2/field')
 
+    def issue_types(self, project):
+        detail = self.http.request('GET', '/rest/api/2/project/' + segment(project))
+        if not isinstance(detail.get('issueTypes'), list):
+            raise ApiError('Project response lacks complete issueTypes')
+        return detail['issueTypes']
+
+    def configured_records(self, profile, context):
+        """Read a deployment-specific paginated API, never guess plugin endpoints."""
+        from clients.codebeamer_client import render, resolve
+        import re
+        path = re.sub(r'\{([^}]+)\}', lambda m: segment(context[m[1]]), profile['path'])
+        if not path.startswith('/') or path.startswith('//'):
+            raise ApiError('Source adapter requires a same-origin relative path')
+        query = {k: render(v, context) for k, v in profile.get('query', {}).items()}
+        if profile.get('pagination') == 'jira':
+            rows = list(self.pages(path, profile['records_key'], query))
+            if profile.get('record_fields'):
+                rows = [dict(row, **{target: resolve(row, source) for target, source in profile['record_fields'].items()}) for row in rows]
+            return rows
+        if profile.get('pagination') != 'complete':
+            raise ApiError('Source adapter requires jira pagination or an explicit complete response contract')
+        data = self.http.request('GET', path + ('?' + urllib.parse.urlencode(query) if query else ''))
+        rows = resolve(data, profile.get('response_path', ''))
+        if not isinstance(rows, list):
+            raise ApiError('Source adapter must return a full array')
+        if profile.get('total_path') and len(rows) != resolve(data, profile['total_path']):
+            raise ApiError('Source adapter returned incomplete records')
+        if profile.get('record_fields'):
+            rows = [dict(row, **{target: resolve(row, source) for target, source in profile['record_fields'].items()}) for row in rows]
+        return rows
+
     def projects(self):
         keys = self.config.get('projects', [])
         if keys:
@@ -78,7 +109,14 @@ class JiraClient:
         rows = history.get('histories', [])
         if history.get('total') is None or history.get('startAt', 0) != 0 or len(rows) != history['total']:
             # Jira DC versions differ; do not guess a changelog pagination endpoint.
-            raise ApiError('Changelog incomplete: supply a validated full-history adapter before migration')
+            profile = self.config.get('changelog_adapter')
+            if not profile:
+                raise ApiError('Changelog incomplete: supply a validated full-history adapter before migration')
+            rows = self.configured_records(profile, {'issueKey': key})
+            if history.get('total') is not None and len(rows) != history['total']:
+                raise ApiError('Changelog count differs from source total')
+        if len({str(row['id']) for row in rows}) != len(rows):
+            raise ApiError('Duplicate changelog IDs')
         issue['_comments'] = list(self.pages(root + '/comment', 'comments'))
         if self.archive:
             self.archive('source-partial', key, issue)
