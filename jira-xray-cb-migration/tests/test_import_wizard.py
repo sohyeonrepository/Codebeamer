@@ -568,6 +568,51 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(restarted.plan['scopes']['P:1']['rows']['summary']['spec']['field_id'],8)
         self.assertFalse(self.cb.mutations)
 
+    def test_reference_selection_saves_sparse_definition_without_fabrication(self):
+        self.plan()
+        entry=self.wizard.plan['scopes']['P:1']
+        entry['analysis']['fields']['picker']={'id':'picker','name':'Related issue','schema':{'type':'issue'}}
+        entry['analysis']['values']['picker']=[{'key':'P-2'}]
+        entry['rows']['picker']={'status':'manual','spec':None}
+        target={'id':8,'name':'Related','type':'ReferenceField','multipleValues':False,'hidden':False,
+                'reference':{'actualServerProperty':{'trackers':[100]}}}
+        entry['target_fields'].append(target)
+        self.wizard.manual_mapping('P:1','picker',8,'cb_field_8',{})
+        spec=entry['rows']['picker']['spec']
+        self.assertTrue(spec['deferred_reference'])
+        self.assertNotIn('expected_options',spec)
+        self.assertNotIn('expected_mandatory',spec)
+        self.assertEqual(spec['expected_reference'],target['reference'])
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        self.assertEqual(restarted.plan['scopes']['P:1']['rows']['picker']['spec'],spec)
+        self.assertFalse(self.cb.mutations)
+
+    def test_sparse_existing_text_selection_is_saved_but_import_is_blocked(self):
+        self.plan()
+        entry=self.wizard.plan['scopes']['P:1']
+        entry['target_fields'].append({'id':8,'name':'Other','typeName':'Text','multipleSelection':False,'hidden':False})
+        self.wizard.manual_mapping('P:1','summary',8,'cb_field_8',{})
+        spec=entry['rows']['summary']['spec']
+        self.assertEqual(spec['field_id'],8)
+        self.assertIn('mandatory',spec['missing_definition'])
+        self.assertNotIn('expected_options',spec)
+        self.assertTrue(any('Field ID 8' in error for error in self.wizard.errors()))
+        self.assertFalse(self.cb.mutations)
+
+    def test_reference_creation_plan_requires_explicit_server_template(self):
+        self.plan()
+        entry=self.wizard.plan['scopes']['P:1']
+        entry['analysis']['fields']['picker']={'id':'picker','name':'Related issue','schema':{'type':'issue'}}
+        entry['analysis']['values']['picker']=[{'key':'P-2'}]
+        entry['rows']['picker']={'status':'manual','spec':None}
+        self.wizard.config['migration']['wizard']['field_types']['reference']={
+            'type_name':'Reference','definition':{'typeId':55,'mandatory':False,'multipleSelection':False,
+                'options':None,'permission':{'type':'UNRESTRICTED'}},
+            'reference_template':{'trackerIds':['${targetTrackerId}']}}
+        self.wizard.configure_creation('P:1','picker','Related','reference',False,{},reference_tracker=100)
+        self.assertEqual(entry['rows']['picker']['creation_profile']['definition']['reference'],{'trackerIds':[100]})
+        self.assertFalse(self.cb.mutations)
+
     def test_manual_choice_mapping_is_saved_with_field_id(self):
         self.plan()
         entry=self.wizard.plan['scopes']['P:1']
@@ -592,7 +637,7 @@ class WizardTests(unittest.TestCase):
         self.assertIn('타입 불일치',reasons[8])
         self.assertIn('미확인',reasons[9])
         self.assertIn('이미 연결',reasons[2])
-        for identifier in (2,4,8,9,999):
+        for identifier in (2,4,8,999):
             with self.subTest(identifier=identifier), self.assertRaises(ApiError):
                 self.wizard.manual_mapping('P:1','summary',identifier,'cb_field_'+str(identifier),{})
         self.assertEqual(before,self.wizard.plan['scopes']['P:1']['rows']['summary'])

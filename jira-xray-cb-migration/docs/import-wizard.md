@@ -372,3 +372,28 @@ Tracker Configuration POST schema로 검증합니다. 카탈로그가 없는 환
 생성 프로필의 value_contract 및 실제 Item GET 검증을 별도로 확인해야 합니다.
 실서버 완료 증거는 POST 경로·HTTP 상태, 실제 Field ID/Configuration, Option ID 대응표, Item ID/GET 값,
 기존 설정/권한 보존, 동일 작업 재실행 결과입니다. 이 환경에는 고객 서버 접속 정보가 없어 이 증거는 없습니다.
+
+## 기존 필드 선택과 Reference 처리
+
+`manual_mapping()`은 실제 선택한 Field ID로 Field Detail/Configuration을 다시 병합합니다.
+`build_spec(existing=True)`는 받은 속성만 보존하며 없는 options/reference/mandatory를 null·false·빈 배열로
+채우지 않습니다. 일부 정의가 부족해도 선택은 저장합니다. 부족한 속성과 Field ID를 표시하고 실제 Import
+전에 차단합니다. 재분석·재실행 시 ID를 유지하며 상세 응답이 보완되면 검증 상태를 갱신합니다.
+명확한 타입 불일치·Hidden·중복은 구체적인 오류로 표시합니다.
+
+Jira schema의 `issue`/`issuelink` 또는 해당 배열은 참조형으로 해석합니다. 배포별 Issue Picker가 다른
+schema를 반환하면 타입을 추측하지 않고 선택 저장 후 타입 확인을 요구합니다. CB `ReferenceField`/
+`TrackerItemChoiceField`는 Reference로 정규화하며 원래 reference 정의를 그대로 보관합니다.
+사용자가 Reference 필드를 선택한 경우 일반 Item payload에서 제외하고, 전 Item 생성 후 원본 Issue Key/ID를
+CB Item ID로 해석해 Reference API로 기록합니다. 선택 범위 밖 참조는 임의 연결하지 않고 오류로 남깁니다.
+Jira issuelinks는 기존 Association 탭 또는 명시적 Reference 관계 설정 경로를 사용합니다.
+
+신규 Reference 생성은 검증된 `wizard.field_types.reference` 프로필에 `reference_template`이 필요합니다.
+서버 schema에서 확인한 참조 정의의 대상 ID 위치에 `${targetTrackerId}`를 지정합니다. 팝업에서 대상 Tracker를
+선택하면 해당 위치에만 실제 ID를 넣습니다. 참조 설정을 다른 필드에서 무조건 복사하지 않습니다.
+단일/다중 여부는 원본 schema를 유지합니다. 생성 설정 저장과 실제 POST 검증은 별개이며 생성 전에
+Configuration schema 및 기존 설정 보존 계약을 재확인합니다. 확인된 프로필이 없으면 생성 설정에 이유를 표시합니다.
+
+실제 Reference 값 쓰기에는 앞 절의 reference_field_get/values_get/values_update adapter가 필요합니다.
+참조 대상 Tracker·방향·단일/다중을 확인하며 기존 참조를 보존합니다. 이번 환경에서는 고객 서버에 접근하지
+못해 실제 Reference 생성/값 이관과 Association 생성은 미검증입니다. 자동 테스트 결과만으로 실서버 성공을 주장하지 않습니다.

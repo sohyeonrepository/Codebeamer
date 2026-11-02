@@ -39,6 +39,7 @@ def convert(value, kind, mapping, identity_key=None):
 def payload(fields, mappings, settings):
     output = {}
     for source, spec in mappings.items():
+        if spec.get('deferred_reference'):continue
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
@@ -59,6 +60,7 @@ def compare_definitions(source, target, mappings):
         for attr, expected_key in [('typeId', 'expected_type_id'), ('mandatory', 'expected_mandatory'),
                                    ('multipleSelection', 'expected_multiple'), ('options', 'expected_options'),
                                    ('reference', 'expected_reference')]:
+            if spec.get('deferred_reference') and expected_key not in spec:continue
             if expected_key not in spec or field.get(attr) != spec[expected_key]:
                 issues.append({'field': key, 'reason': 'unverified or conflicting ' + attr})
     return issues

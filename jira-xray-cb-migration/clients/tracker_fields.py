@@ -7,7 +7,8 @@ from mapping_helper import field_identifier, schema_object
 TYPES = {'TextField':'Text', 'WikiTextField':'Wikitext', 'WikitextField':'Wikitext',
          'IntegerField':'Integer', 'DecimalField':'Decimal', 'BooleanField':'Boolean',
          'BoolField':'Boolean', 'DateField':'Date', 'DateTimeField':'Datetime',
-         'OptionChoiceField':'Choice', 'UserChoiceField':'User'}
+         'OptionChoiceField':'Choice', 'UserChoiceField':'User',
+         'TrackerItemChoiceField':'Reference', 'ReferenceField':'Reference'}
 
 
 def normalize(field):

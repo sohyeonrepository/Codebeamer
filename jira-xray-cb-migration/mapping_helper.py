@@ -208,25 +208,28 @@ def apply_overlay(config, overlay):
     return result
 
 
-def build_spec(source, target, conversion, target_key, values):
+def build_spec(source, target, conversion, target_key, values, existing=False):
     if not target_key.strip():
         raise ValueError('대상 payload 키를 입력하세요.')
     if not isinstance(values, dict):
         raise ValueError('값 매핑은 JSON 객체여야 합니다.')
     if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference'):
         raise ValueError('지원하지 않는 변환입니다.')
-    if conversion in ('user', 'status', 'option', 'reference') and not values:
+    if not existing and conversion in ('user', 'status', 'option', 'reference') and not values:
         raise ValueError('선택지/사용자/참조 변환은 값 매핑이 필요합니다.')
     field_id = field_identifier(target)
     if field_id is None:
         raise ValueError('대상 API 필드 ID가 없습니다.')
     required = ('typeId', 'mandatory', 'multipleSelection', 'options', 'reference')
-    if any(k not in target for k in required):
+    missing=[key for key in required if key not in target]
+    if missing and not existing:
         raise ValueError('대상 정의에 타입/필수/다중/선택지/참조 정보가 누락됐습니다. 실제 API 정의를 확인하세요.')
-    return {'target': target_key.strip(), 'type': conversion, 'field_id': field_id,
-            'expected_type_id': target['typeId'], 'expected_mandatory': target['mandatory'],
-            'expected_multiple': target['multipleSelection'], 'expected_options': target['options'],
-            'expected_reference': target['reference'], 'value_mapping': deepcopy(values)}
+    spec={'target':target_key.strip(),'type':conversion,'field_id':field_id,'value_mapping':deepcopy(values)}
+    names={'typeId':'expected_type_id','mandatory':'expected_mandatory','multipleSelection':'expected_multiple',
+           'options':'expected_options','reference':'expected_reference'}
+    spec.update({name:deepcopy(target[key]) for key,name in names.items() if key in target})
+    if missing:spec['missing_definition']=missing
+    return spec
 
 
 def validate_overlay(overlay, catalog):
@@ -607,7 +610,7 @@ def creation_templates(configuration, metadata=None):
     return templates
 
 
-def create_confirmed_field(cb, tracker, definition, expected, journal_path, approved=False, before_post=None):
+def create_confirmed_field(cb, tracker, definition, expected, journal_path, approved=False, before_post=None, allow_reference=False):
     """Add one approved definition, preserving existing fields and uncertain writes."""
     if approved is not True:
         raise ApiError('필드 생성 확인이 필요합니다.')
@@ -622,7 +625,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         raise ApiError('필수 여부와 다중 선택은 true/false여야 합니다.')
     if definition['options'] is not None and not isinstance(definition['options'], list):
         raise ApiError('선택지는 실제 API 형식의 배열이어야 합니다.')
-    if definition['reference'] is not None:
+    if definition['reference'] is not None and not allow_reference:
         raise ApiError('참조 필드 자동 생성은 별도 검증된 참조 생성 계약이 필요합니다.')
     if not isinstance(expected.get('fields'), list) or expected.get('basicInformation', {}).get('trackerId') != tracker:
         raise ApiError('대상 트래커의 전체 설정을 조회해야 생성할 수 있습니다.')

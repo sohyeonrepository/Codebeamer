@@ -26,6 +26,26 @@ class RelationTests(unittest.TestCase):
             self.assertEqual(cb.writes,1)
             state.db.close()
 
+    def test_issue_picker_resolves_source_key_to_created_item_ids(self):
+        from unittest.mock import patch
+        from migration.relation_mapping import picker_references
+        from migration.fields import payload
+        first={'id':'1','key':'P-1','fields':{'project':{'key':'P'},'issuetype':{'id':'1'},'picker':{'key':'P-2'}}}
+        second={'id':'2','key':'P-2','fields':{'project':{'key':'P'},'issuetype':{'id':'2'}}}
+        spec={'field_id':3,'target':'cb_field_3','type':'reference','deferred_reference':True}
+        settings={'tracker_mapping':{'P:1':10,'P:2':20},'field_mapping':{'P:1':{'picker':spec}}}
+        self.assertEqual(payload(first['fields'],{'picker':spec},settings),{})
+        with tempfile.TemporaryDirectory() as directory:
+            state=State(directory)
+            state.mark('item:1','done',{'id':101});state.mark('item:2','done',{'id':202})
+            with patch('migration.relation_mapping.write_reference') as write:
+                picker_references(object(),state,[({'key':'P'},first),({'key':'P'},second)],settings)
+                self.assertEqual(write.call_args.args[3:5],(101,202))
+                self.assertEqual(write.call_args.args[5]['target_tracker_id'],20)
+            with self.assertRaisesRegex(ApiError,'outside selected'):
+                picker_references(object(),state,[({'key':'P'},first)],settings)
+            state.db.close()
+
     def test_partial_catalog_is_not_success(self):
         class Http:
             def request(self,*args):return {'values':[],'total':10}

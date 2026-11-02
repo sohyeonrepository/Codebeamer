@@ -255,7 +255,7 @@ def launch(wizard, initial_projects=None):
             if index is not None: box.current(index); fill()
         def accept():
             if box.current() < 0: raise ValueError('CB 필드를 선택하세요.')
-            if candidates[box.current()]['reason']:raise ApiError(candidates[box.current()]['reason'])
+            if candidates[box.current()]['reason'] and '미확인' not in candidates[box.current()]['reason']:raise ApiError(candidates[box.current()]['reason'])
             target = fields[box.current()]; fid = field_identifier(target)
             bindings = wizard.config['codebeamer'].get('field_bindings', {})
             keys = [k for k,b in bindings.items() if b.get('fieldId') == fid]
@@ -299,6 +299,15 @@ def launch(wizard, initial_projects=None):
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
         if any(not profile.get('binding') for profile in profiles.values()):
             ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
+        reference_box=None
+        reference_trackers=wizard.plan['projects'][entry['project']]['trackers']
+        if source_kind=='reference':
+            ttk.Label(body,text='참조 대상 Tracker').grid(row=8,column=0,sticky='w')
+            reference_box=ttk.Combobox(body,state='readonly',values=[t.get('name',str(t['id']))+' · ID '+str(t['id']) for t in reference_trackers])
+            reference_box.grid(row=8,column=1,sticky='ew')
+            saved=row.get('creation',{}).get('reference_tracker_id')
+            index=next((i for i,t in enumerate(reference_trackers) if t['id']==saved),None)
+            if index is not None:reference_box.current(index)
         def save_creation():
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
             originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]), 'id' if source == 'components' else None)
@@ -308,7 +317,8 @@ def launch(wizard, initial_projects=None):
                 if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
                 choices={identity:lines[index] for index,identity in enumerate(originals)}
                 choices.update({'manual:'+str(index):value for index,value in enumerate(lines[len(originals):],start=len(originals))})
-            wizard.configure_creation(scope,source,name.get(),type_box.get(),multiple.get(),choices)
+            wizard.configure_creation(scope,source,name.get(),type_box.get(),multiple.get(),choices,
+                reference_tracker=reference_trackers[reference_box.current()]['id'] if reference_box is not None and reference_box.current()>=0 else None)
             display_scope();dialog.destroy()
         footer=ttk.Frame(body);footer.grid(row=6,column=0,columnspan=2,sticky='e',pady=(14,0))
         ttk.Button(footer,text='취소',command=dialog.destroy).pack(side='left',padx=4)
@@ -346,7 +356,7 @@ def launch(wizard, initial_projects=None):
             index=editor.current();editor.destroy()
             if index < 0:return
             if index == len(fields):run('신규 필드 설정',create_field_dialog);return
-            if candidates[index]['reason']:
+            if candidates[index]['reason'] and '미확인' not in candidates[index]['reason']:
                 detail.set(candidates[index]['reason']);return
             target=fields[index]
             if kind in ('option','status','user'):

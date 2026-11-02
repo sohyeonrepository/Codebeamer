@@ -239,6 +239,8 @@ class Engine:
             from migration.preservation import associations
             try:
                 associations(self.cb, self.state, bundles, self.settings)
+                from migration.relation_mapping import picker_references
+                picker_references(self.cb,self.state,bundles,self.settings)
             except (ApiError, KeyError, ValueError) as exc:
                 self.error('associations', exc)
             return

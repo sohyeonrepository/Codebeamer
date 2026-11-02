@@ -73,3 +73,34 @@ def write_reference(cb,state,identity,source,target,mapping):
         cb.call('reference_values_update',params,{'fieldId':mapping['field_id'],'values':expected})
         if read_values()!=expected:raise ApiError('Reference values/direction readback mismatch')
     state.mark('reference-relation:'+identity,'done',{'source':source,'target':target,'field_id':mapping['field_id']})
+
+
+def issue_references(value):
+    if value is None:return []
+    rows=value if isinstance(value,list) else [value]
+    identities=[]
+    for row in rows:
+        identity=row.get('key',row.get('id')) if isinstance(row,dict) else row
+        if not isinstance(identity,(str,int)) or not str(identity).strip():
+            raise ApiError('Issue Picker requires actual Jira Issue key/id; text conversion is not supported')
+        identities.append(str(identity))
+    return list(dict.fromkeys(identities))
+
+
+def picker_references(cb,state,bundles,settings):
+    indexed={identity:issue for _,issue in bundles for identity in (str(issue['id']),issue['key'])}
+    for project,issue in bundles:
+        scope=project['key']+':'+str(issue['fields']['issuetype']['id'])
+        for source,spec in settings.get('field_mapping',{}).get(scope,{}).items():
+            if not spec.get('deferred_reference'):continue
+            state.save('source-references',issue['key']+':'+source,{'source':source,'value':issue['fields'].get(source)})
+            for identity in issue_references(issue['fields'].get(source)):
+                other=indexed.get(identity)
+                if other is None:raise ApiError('Issue Picker target outside selected migration scope: '+identity)
+                origin=state.get('item:'+str(issue['id']));destination=state.get('item:'+str(other['id']))
+                if not origin or not destination or origin[0]!='done' or destination[0]!='done':
+                    raise ApiError('Issue Picker target Item ID not ready: '+identity)
+                target_scope=other['fields']['project']['key']+':'+str(other['fields']['issuetype']['id'])
+                mapping={'mode':'reference','tracker_id':settings['tracker_mapping'][scope],
+                         'field_id':spec['field_id'],'target_tracker_id':settings['tracker_mapping'][target_scope]}
+                write_reference(cb,state,issue['key']+':'+source+':'+identity,origin[1]['id'],destination[1]['id'],mapping)
