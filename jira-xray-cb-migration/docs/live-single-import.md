@@ -25,7 +25,7 @@
 | 전체 쓰기 preflight | `project_get/tracker_get/trackers_get/item_create/item_get/item_update/lookup` 미확인 | 실제 Item 생성/수정/조회와 원본 ID 완전 일치 조회 |
 | 첨부 preflight | upload/download/lookup/메타데이터/URL API 미확인 | `attachment_upload/get/lookup/metadata_get/url_get` (Legacy JSON 보존에도 필수) |
 | 댓글/관계 preflight | comment/association create/get/lookup 미확인 | `comment_lookup/create/get`, `association_lookup/create/get`, 변경 시 `*_update` |
-| R4J | Revision/Baseline API 미설정·불완전 | `migration.r4j.revisions/baselines` 전수 읽기 계약. 전체 Wizard는 R4J를 무조건 요구하는 현재 제약이 있음 |
+| R4J | Tree/Revision/Baseline API 미설정·불완전 | `migration.r4j.trees/revisions/baselines` 전수 읽기 계약. 전체 Wizard는 세 원본을 무조건 요구하며, 계약이 없으면 쓰기 전에 차단함 |
 | 원본 수집 | Changelog 잘림·total 불일치·중복 ID, 댓글/작업로그 pagination 오류 | 완전한 changelog 또는 `jira.changelog_adapter`, 댓글/작업로그 읽기 권한 |
 | 원본 커버리지 | 매핑 없는 실제 값, 예상 외 유형, structured Description, 인벤토리에 없는/중복 이름 이미지 | 실제 필드 매핑·지원 형식·완전한 첨부 목록 |
 | Xray | 관계 필드 모호·Run 신원 불일치·이벤트/Activity 불완전·필수 참조/adapter 누락 | 기존 `xray_run_field/run_adapter/run_events/test_mapping` 등 실제 계약 |
@@ -44,7 +44,7 @@
 python import_wizard.py --config config.local.json --live-test --test-state-dir .migration/live-check --prompt-auth
 ```
 
-Jira/CB URL, 실제 Swagger JSON URL 또는 Swagger UI `{CB_BASE_URL}/v3/swagger/editor.spr`(또는 자동 탐색)를 입력하고 `연결 / 실제 프로젝트 조회 (GET)`를 누릅니다. Swagger UI를 입력하면 HTML에 선언된 같은 서버의 JSON 정의 주소를 찾아 사용합니다. 외부 서버 링크, 링크 없는 HTML, JSON이 아닌 응답은 쓰기 전에 차단합니다. 기존 테스트 프로젝트와 Tracker를 목록에서 선택하고 Jira Issue 키 1개를 입력합니다. 다음 요청 확인 화면에서 사전 확인 후 `Import…`를 승인합니다. 인증정보는 기존 환경변수 또는 실행 터미널의 비표시 입력을 사용합니다.
+Jira/CB URL을 입력하고 `연결 / 실제 프로젝트 조회 (GET)`를 누릅니다. 연결 및 프로젝트·Tracker·Field GET은 Swagger 탐색과 분리되어 있습니다. 같은 URL 조합의 이전 성공 실행에 보관된 OpenAPI가 있으면 쓰기 계약 검증에 재사용하고, 없으면 `Import…` 직전에만 서버 OpenAPI를 확인합니다. OpenAPI를 얻지 못하면 조회 결과는 유지하되 어떤 쓰기 계약이 부족한지 표시하고 POST/PUT을 보내지 않습니다. 기존 테스트 프로젝트와 Tracker를 목록에서 선택하고 Jira Issue 키 1개를 입력합니다. 다음 요청 확인 화면에서 사전 확인 후 `Import…`를 승인합니다. 인증정보는 환경변수 또는 화면의 비표시 입력을 사용합니다.
 
 대화형 `--live-test`는 Jira Issue·CB 프로젝트·Tracker·서버 URL 조합별 하위 상태 폴더를 자동으로 만듭니다. 다른 Issue나 Tracker를 선택해도 `Use a different state directory` 오류가 발생하지 않으며, 같은 조합을 다시 선택하면 기존 기록을 재사용해 중복 생성을 막습니다. `--test-state-dir`에는 이 하위 폴더들을 담을 상위 폴더만 지정하면 됩니다. 상태 문구에 실제 선택된 폴더를 표시합니다.
 

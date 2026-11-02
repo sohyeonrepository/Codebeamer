@@ -26,13 +26,40 @@ Codebeamer 필드, 오른쪽은 Jira API의 실제 필드명이며 custom field�
 마지막 `다음 (Import 승인)`에서 승인하고 쓰기 직전 분석 결과가 동일한지 다시 확인한 뒤 실행됩니다.
 Attachment·Comment·Association·History/R4J/Xray 처리는 기존 Migration Engine 경로를 그대로 사용합니다.
 
-기본 전체 Wizard 실행 시 첫 화면에서 Jira 서버 URL·API 토큰, Codebeamer 서버 URL·아이디·비밀번호,
-Swagger URL을 입력합니다. JSON 주소와 `/v3/swagger/editor.spr` UI 주소를 모두 지원하며 비우면 `/cb/api` 같은
-REST 기본 주소에서 Codebeamer context root를 계산해 자동 탐색합니다. Swagger UI가 같은 서버의 API 정의 주소를
-노출하면 해당 JSON을 따라갑니다. 인증정보는 메모리에만 유지하고 config/state/report/log에 저장하지 않습니다.
+기본 전체 Wizard 실행 시 첫 화면에서 Jira 서버 URL·API 토큰, Codebeamer 서버 URL·아이디·비밀번호를
+입력합니다. 인증정보는 메모리에만 유지하고 config/state/report/log에 저장하지 않습니다.
 `연결 / 실제 프로젝트 조회 (GET)`은 30초 제한과 취소 기능이 있는 읽기 전용 연결이며, 성공한 프로젝트 결과를
-STEP 2에 그대로 전달합니다. STEP 2에서 프로젝트를 선택하면 실제 Swagger의 프로젝트 Tracker 목록 경로를
-자동 연결하여 조회합니다. 연결 화면에서 입력한 URL과 인증은 이후 분석 및 승인된 Import에도 같은 세션에서 사용합니다.
+STEP 2에 그대로 전달합니다. 프로젝트·Tracker·Field 조회는 Swagger 탐색과 분리되어 있습니다. 연결 화면에서
+입력한 URL과 인증은 이후 분석 및 승인된 Import에도 같은 세션에서 사용합니다.
+
+### 실제 성공 조회 코드 복구 기준
+
+고객 서버에서 Summary/Description Item 1건 생성까지 확인된 기준은 커밋 `e1e694b`입니다. 이때 사용한
+`launch_live_setup.read_operation`, `launch_live_setup.load_trackers`, `SingleImport.prepare`,
+`CodebeamerClient.fields`, `CodebeamerClient.configuration`의 조회 계약을
+`clients/codebeamer_verified_reads.py`로 분리해 전체 Wizard에서 재사용합니다.
+
+연결 및 STEP 2/3 조회는 Swagger 자동 탐색을 실행하지 않습니다. Codebeamer Basic 인증 세션으로 다음 GET만
+사용하며 응답 계약이 다르면 성공 처리하지 않습니다.
+
+| 조회 | Method와 API path | 필요한 응답 |
+| --- | --- | --- |
+| 프로젝트 목록 | `GET /v3/projects` (`GET /projects` 서버 alias 지원) | 정수 `id`가 있는 전체 배열 |
+| 프로젝트 | `GET /v3/projects/{projectId}` | 선택한 동일 `id` 객체 |
+| Tracker 목록 | `GET /v3/projects/{projectId}/trackers` (`/projects/...` alias 지원) | 정수 `id`가 있는 전체 배열 |
+| Tracker | `GET /v3/trackers/{trackerId}` | 동일 Tracker ID와 `project.id` |
+| 필드 | `GET /v3/trackers/{trackerId}/fields` | 실제 Field ID가 있는 전체 배열 |
+| 설정/Hidden | `GET /v3/tracker/{trackerId}/configuration` | `fields` 전체 배열 |
+
+성공한 path는 현재 연결 세션에 기록하여 이후 같은 조회에서 먼저 재사용합니다. Jira 프로젝트·Issue Type·필드
+조회는 기존 `JiraClient`의 Bearer 인증과 REST API를 그대로 사용합니다. 이전 성공 실행이 저장한
+`discovery/single-openapi`는 SQLite의 `single-import-binding` URL이 현재 Jira/CB URL과 정확히 같은 경우에만
+쓰기 계약 증거로 재사용합니다.
+
+Swagger/OpenAPI는 `다음 (Import 승인)`에서 승인 창을 띄우기 전에 쓰기 계약을 검증할 때만 사용합니다.
+최소 Item 1건에는 Tracker 범위의 Item POST request schema, 성공 response, Item GET이 필요합니다. 신규 필드가
+있으면 전체 Tracker Configuration POST schema도 필요합니다. 계약이 없으면 조회 결과는 유지하면서 필요한
+Item/Field/Attachment/Comment/Association/History 계약을 구체적으로 표시하고 POST/PUT을 보내지 않습니다.
 
 ## 사용 필드 판정
 
@@ -64,6 +91,7 @@ Issue를 유형별로 전수 조회합니다. Field Configuration에 포함된 �
   },
   "migration": {
     "r4j": {
+      "trees": {"path": "/r4j/trees/{issueKey}", "pagination": "complete"},
       "revisions": {
         "path": "/VERIFIED_R4J_REVISIONS/{issueKey}",
         "pagination": "jira",
@@ -82,7 +110,7 @@ Issue를 유형별로 전수 조회합니다. Field Configuration에 포함된 �
 
 `jira` pagination은 기존 `startAt/maxResults/total` 페이지 처리를 사용합니다. `complete`는 계약상 전수 배열이 반환될 때만 사용합니다. 직접 배열을 반환하면 `response_path`를 생략합니다. `total_path`가 있으면 건수를 대조합니다. `query`는 `${projectKey}`, `${issueTypeId}` 등의 기존 템플릿을 지원합니다. `record_fields`는 원본을 유지하며 정규화 키를 추가합니다.
 
-확장 changelog가 잘린 경우 `changelog_adapter`로 전수 수집하고 원본 total 및 ID 중복을 검증합니다. 완전한 응답이 없으면 쓰기 전에 실패합니다. R4J Revision/Baseline은 독립된 원본 이력으로 전수 수집하는 계약이 필요합니다. 실제 API가 빈 배열을 반환한 경우에만 0건으로 처리합니다.
+확장 changelog가 잘린 경우 `changelog_adapter`로 전수 수집하고 원본 total 및 ID 중복을 검증합니다. 완전한 응답이 없으면 쓰기 전에 실패합니다. R4J Tree/Revision/Baseline은 독립된 원본 이력으로 전수 수집하는 계약이 필요합니다. 실제 API가 빈 배열을 반환한 경우에만 0건으로 처리합니다.
 
 ## Codebeamer operation 계약
 

@@ -52,6 +52,8 @@ class Source:
         if path == '/rest/api/2/project/P': return {'key':'P','issueTypes':self.types}
         if path.startswith('/field-config/'):
             return deepcopy(self.configured)
+        if path.startswith('/r4j/trees/'):
+            return [{'id':'tree','name':'Original tree','parent':None}]
         if path.startswith('/r4j/revisions/'):
             return [{'id':'rev','author':'original','created':'2020-01-01','fields':{'summary':'old'}}]
         if path.startswith('/r4j/baselines/'):
@@ -162,7 +164,7 @@ class WizardTests(unittest.TestCase):
             'migration':{'mode':'issues','history_replay':True,'field_mapping':{
                 'P:1':{'summary':dict(target='name',type='text',field_id=1,expected_type_id=10,expected_mandatory=False,
                 expected_multiple=False,expected_options=None,expected_reference=None,value_mapping={},sourceId='unused')}},
-                'r4j':{c:{'path':'/r4j/'+c+'/{issueKey}','pagination':'complete'} for c in ('revisions','baselines')},
+                'r4j':{c:{'path':'/r4j/'+c+'/{issueKey}','pagination':'complete'} for c in ('trees','revisions','baselines')},
                 'wizard':{'association_types':{'blocks':7},'tracker_template_id':100,'field_types':{'text':{'type_name':'Text','definition':{'typeId':10,'mandatory':False,
                     'multipleSelection':False,'reference':None,'options':None},
                     'binding':{'type':'TextFieldValue','value_property':'value'}}}}}}
@@ -230,6 +232,8 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(report['legacy_history'][0]['history_source'],1)
         self.assertEqual(report['legacy_history'][0]['history_preserved'],1)
         self.assertEqual(report['legacy_history'][0]['r4j_baselines_preserved'],1)
+        self.assertEqual(report['legacy_history'][0]['r4j_trees_preserved'],1)
+        self.assertEqual(report['legacy_history'][0]['worklogs_preserved'],0)
         self.assertIn('https://cb.test/files/',self.cb.items[200]['description'])
         archives=[json.loads(v['binary']) for v in self.cb.files.values() if v['filename'].endswith('.json')]
         self.assertEqual(archives[0]['history'][0]['author'],{'name':'original'})
@@ -269,6 +273,10 @@ class WizardTests(unittest.TestCase):
     def test_missing_r4j_configuration_blocks_before_target_write(self):
         self.plan();self.wizard.config['migration'].pop('r4j')
         with self.assertRaisesRegex(ApiError,'r4j'):self.wizard.execute(True)
+        self.assertFalse(self.cb.mutations)
+    def test_missing_r4j_tree_contract_blocks_before_target_write(self):
+        self.plan();self.wizard.config['migration']['r4j'].pop('trees')
+        with self.assertRaisesRegex(ApiError,'r4j.trees'):self.wizard.execute(True)
         self.assertFalse(self.cb.mutations)
     def test_lost_comment_response_reconciles_on_retry_without_duplicate(self):
         self.plan();self.cb.lost_comment_response=True
@@ -409,7 +417,9 @@ class WizardUITests(unittest.TestCase):
             captured['wizard']=wizard;captured['projects']=projects
         jira_factory=lambda http,config,archive=None:JiraClient(self.source,config,archive)
         with patch.object(tk,'Tk',Window),patch.object(ui,'Http',FakeHttp),patch.object(ui,'JiraClient',side_effect=jira_factory),\
-             patch.object(ui,'CodebeamerClient',return_value=self.cb),patch('clients.codebeamer_3007.project_reads'),patch.object(ui,'launch',side_effect=opened):
+             patch.object(ui,'CodebeamerClient',return_value=self.cb),\
+             patch('clients.codebeamer_verified_reads.projects',side_effect=lambda cb:cb.call('projects_get')),\
+             patch('clients.codebeamer_verified_reads.load_successful_openapi',return_value=None),patch.object(ui,'launch',side_effect=opened):
             ui.launch_connected(self.config,self.state)
         self.assertEqual(errors,[])
         self.assertEqual((captured['jira_token'],captured['cb_user'],captured['cb_password']),('jira-secret','cb-user','cb-secret'))

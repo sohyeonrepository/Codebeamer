@@ -36,7 +36,7 @@ def preflight(cb, settings, plan):
         if (isinstance(expected, str) and method != expected) or (isinstance(expected, tuple) and method not in expected):
             raise ApiError('Unexpected API method for ' + name)
     r4j = settings.get('r4j', {})
-    for category in ('revisions', 'baselines'):
+    for category in ('trees', 'revisions', 'baselines'):
         if not r4j.get(category, {}).get('path'):
             raise ApiError('Configure migration.r4j.' + category + ' with a complete read-only source adapter')
     for entry in plan['scopes'].values():
@@ -60,7 +60,7 @@ def preflight(cb, settings, plan):
 
 def collect_r4j(jira, issue, settings, state):
     data = {}
-    for category in ('revisions', 'baselines'):
+    for category in ('trees', 'revisions', 'baselines'):
         profile = settings.get('r4j', {}).get(category)
         if not profile:
             raise ApiError('Missing R4J ' + category + ' source adapter')
@@ -87,6 +87,7 @@ def preserve(cb, state, issue, item_id):
     legacy = {'format': 'jira-legacy-history-v1', 'source_id': issue['id'], 'source_key': issue['key'],
               'native_author_restored': False, 'native_timestamp_restored': False,
               'history': issue['_history'], 'comments': issue['_comments'],
+              'worklogs': issue['_worklogs'],
               'linked_issues': issue['fields'].get('issuelinks', []), 'r4j': issue['_r4j'],
               'source_fields': issue['fields']}
     content = json.dumps(legacy, ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
@@ -103,6 +104,10 @@ def preserve(cb, state, issue, item_id):
     counts = {'history_source': len(issue['_history']), 'history_preserved': len(actual['history']),
               'history_changes_source': sum(len(h['items']) for h in issue['_history']),
               'history_changes_preserved': sum(len(h['items']) for h in actual['history']),
+              'worklogs_source': len(issue['_worklogs']),
+              'worklogs_preserved': len(actual['worklogs']),
+              'r4j_trees_source': len(issue['_r4j']['trees']),
+              'r4j_trees_preserved': len(actual['r4j']['trees']),
               'r4j_revisions_source': len(issue['_r4j']['revisions']),
               'r4j_revisions_preserved': len(actual['r4j']['revisions']),
               'r4j_baselines_source': len(issue['_r4j']['baselines']),

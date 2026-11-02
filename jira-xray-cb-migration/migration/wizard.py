@@ -103,8 +103,13 @@ def field_analysis(jira, project, issue_type):
 
 
 def target_fields(cb, tracker):
-    fields = cb.fields(tracker)
-    configuration = cb.configuration(tracker)
+    from clients.codebeamer_client import CodebeamerClient
+    if isinstance(cb,CodebeamerClient) and cb.config.get('verified_reads'):
+        from clients.codebeamer_verified_reads import fields as read_fields,configuration as read_configuration
+        fields,configuration=read_fields(cb,tracker),read_configuration(cb,tracker)
+    else:
+        fields = cb.fields(tracker)
+        configuration = cb.configuration(tracker)
     if not isinstance(fields, list) or not isinstance(configuration.get('fields'), list):
         raise ApiError('Complete target fields and configuration are required')
     by_id = {str(field_identifier(f)): f for f in configuration['fields']}
@@ -232,12 +237,12 @@ class ImportWizard:
 
     def discover(self):
         self.cb.write = False
-        self.cb.discover()
         from clients.codebeamer_client import CodebeamerClient
         if isinstance(self.cb,CodebeamerClient):
-            from clients.codebeamer_3007 import project_reads
-            project_reads(self.cb)
-        projects = self.cb.call('projects_get')
+            from clients.codebeamer_verified_reads import projects as read_projects
+            projects=read_projects(self.cb)
+        else:
+            self.cb.discover();projects=self.cb.call('projects_get')
         if not isinstance(projects, list):
             raise ApiError('projects_get must normalize a complete project array')
         return self.stage('projects', {'jira': self.jira.projects(), 'codebeamer': projects})
@@ -246,13 +251,13 @@ class ImportWizard:
         self.cb.write = False
         from clients.codebeamer_client import CodebeamerClient
         if isinstance(self.cb,CodebeamerClient):
-            from clients.codebeamer_3007 import project_tracker_list
-            project_tracker_list(self.cb)
-        actual = self.cb.call('project_get', {'projectId': target})
+            from clients.codebeamer_verified_reads import project as read_project,trackers as read_trackers
+            actual=read_project(self.cb,target);trackers=read_trackers(self.cb,target)
+        else:
+            actual=self.cb.call('project_get',{'projectId':target});trackers=self.cb.call('trackers_get',{'projectId':target})
         if actual.get('id') != target:
             raise ApiError('Existing target project verification failed')
         types = self.jira.issue_types(project)
-        trackers = self.cb.call('trackers_get', {'projectId': target})
         if not isinstance(trackers, list):
             raise ApiError('trackers_get must normalize a complete project tracker array')
         self.plan['projects'][project] = {'target': target, 'types': types, 'trackers': trackers}
@@ -422,10 +427,49 @@ class ImportWizard:
         self.state.mark(identity, 'done', {'id': field_identifier(actual)})
         return spec
 
+    def ensure_write_contracts(self):
+        from clients.codebeamer_client import CodebeamerClient
+        if not isinstance(self.cb,CodebeamerClient):return {'test_double':True}
+        if self.cb.spec is None:
+            try:self.cb.discover()
+            except ApiError as exc:
+                raise ApiError('조회 기능은 정상이나 실제 Import 쓰기 계약이 부족합니다. 필요한 계약: '
+                    'Item 생성 POST /v3/trackers/{trackerId}/items의 request/response schema와 Item GET; '
+                    '신규 필드/Tracker가 있으면 POST /v3/tracker/configuration 전체 schema; '
+                    'Attachment upload/download, Comment create/get, Association create/get, Legacy History 보존 API. '
+                    '서버 OpenAPI 또는 이전 성공 실행의 discovery/single-openapi가 필요합니다. 원인: '+str(exc)) from exc
+        try:
+            from mapping_helper import request_schema,schema_object
+            item=self.cb.operation('item_create');readback=self.cb.operation('item_get')
+            if item['method'].upper()!='POST' or '{trackerId}' not in item['path'] or readback['method'].upper()!='GET':
+                raise ApiError('Item create/readback method or Tracker scope mismatch')
+            api=self.cb.spec['paths'][item['path']]['post']
+            schema=schema_object(self.cb.spec,request_schema(self.cb.spec,api))
+            if schema.get('type')!='object' or not isinstance(schema.get('properties'),dict) or not schema['properties']:
+                raise ApiError('Item create request object schema missing')
+            responses=api.get('responses',{})
+            success=[value for code,value in responses.items() if str(code).startswith('2') and isinstance(value,dict)]
+            if not success:raise ApiError('Item create success response schema missing')
+            result={'openapi_source':self.cb.config.get('reused_successful_openapi',self.cb.config.get('discovered_swagger_url')),
+                    'item_create':item,'item_get':readback,'request_properties':sorted(schema['properties'])}
+            if any(row.get('status')=='create' for entry in self.plan['scopes'].values() for row in entry.get('rows',{}).values()):
+                field=self.cb.operation('tracker_configuration_update')
+                if field['method'].upper()!='POST' or field['path']!='/v3/tracker/configuration':
+                    raise ApiError('New Field requires POST /v3/tracker/configuration')
+                field_schema=schema_object(self.cb.spec,request_schema(self.cb.spec,self.cb.spec['paths'][field['path']]['post']))
+                if not isinstance(field_schema.get('properties'),dict) or not field_schema['properties']:
+                    raise ApiError('Tracker Configuration request schema missing')
+                result['field_create']=field
+        except (ApiError,KeyError,TypeError) as exc:
+            raise ApiError('Item 1건 Import 쓰기 계약 미확인: '+str(exc)) from exc
+        self.state.save('wizard','write-contracts',result)
+        return result
+
     def execute(self, approved=False):
         self.cb.write = False
         if approved is not True:
             raise ApiError('Explicit Import approval is required')
+        self.ensure_write_contracts()
         errors = self.errors()
         if self.config['jira'].get('single_issue_key') and (len(self.plan['scopes']) != 1 or len(self.plan['projects']) != 1):
             errors.append('Single-Issue test requires exactly one project/Tracker/Issue Type scope')

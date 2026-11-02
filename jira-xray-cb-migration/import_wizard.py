@@ -326,6 +326,7 @@ def launch(wizard, initial_projects=None):
     def import_now():
         errors = wizard.errors()
         if errors: raise ApiError('\n'.join(errors))
+        wizard.ensure_write_contracts()
         if not messagebox.askyesno('Import 승인', '선택한 기존 프로젝트에 Tracker, Field, Item 및 관련 데이터를 실제로 생성합니다. Import를 승인하시겠습니까?'):
             return
         report = wizard.execute(approved=True)
@@ -343,7 +344,7 @@ def launch_connected(config, state):
     from tkinter import ttk
     from copy import deepcopy
     from connection_job import ConnectionJob
-    from clients.codebeamer_3007 import project_reads
+    from clients.codebeamer_verified_reads import projects as read_cb_projects,load_successful_openapi
     import time
     root=tk.Tk();root.title('Jira → Codebeamer Import Wizard · 1. 서버 연결');root.geometry('760x610')
     style=ttk.Style(root);style.configure('ConnectTitle.TLabel',font=('',17,'bold'))
@@ -364,7 +365,7 @@ def launch_connected(config, state):
         values[key]=tk.StringVar(value=initial)
         ttk.Entry(form,textvariable=values[key],show='*' if secret else '',width=62).grid(row=index,column=1,sticky='ew',pady=7)
     form.columnconfigure(1,weight=1)
-    status=tk.StringVar(value='연결을 누르면 Swagger, Jira 프로젝트, Codebeamer 프로젝트를 GET으로 조회합니다.')
+    status=tk.StringVar(value='연결을 누르면 Jira 및 Codebeamer 프로젝트를 GET으로 조회합니다. Swagger는 쓰기 계약 확인에만 사용합니다.')
     status_entry=ttk.Entry(outer,textvariable=status,state='readonly');status_entry.pack(fill='x',pady=(18,5))
     status_entry.bind('<Control-a>',lambda event:(status_entry.selection_range(0,tk.END),'break')[-1])
     controls=ttk.Frame(outer);controls.pack(fill='x',pady=8)
@@ -402,11 +403,16 @@ def launch_connected(config, state):
         jira=JiraClient(jira_http,current['jira'],state.save)
         cb=CodebeamerClient(cb_http,cb_settings,False)
         def fetch():
-            cb.discover();project_reads(cb)
-            jira_projects=jira.projects();cb_projects=cb.call('projects_get')
+            saved=load_successful_openapi(state.root,current['jira']['url'],cb_settings['url'])
+            if saved:
+                cb.spec,cb.config['reused_successful_openapi']=saved
+                from clients.codebeamer_3007 import bind
+                bind(cb)
+            jira_projects=jira.projects();cb_projects=read_cb_projects(cb)
             if not isinstance(jira_projects,list) or not isinstance(cb_projects,list):
                 raise ApiError('프로젝트 조회 응답은 전체 배열이어야 합니다.')
-            return current,jira,cb,{'jira':jira_projects,'codebeamer':cb_projects}
+            return current,jira,cb,{'jira':jira_projects,'codebeamer':cb_projects,
+                'swagger_warning':None if saved else '이전 성공 OpenAPI 없음: 조회는 가능하지만 실제 쓰기 계약은 아직 미확인'}
         set_busy(True);started=time.monotonic()
         job=ConnectionJob(fetch,timeout=30,clients=(jira_http,cb_http));active[0]=job
         def poll():
@@ -418,7 +424,7 @@ def launch_connected(config, state):
             if outcome=='success':
                 for client in (jira_http,cb_http):client.read_deadline=None;client.cancel_event=None
                 result[0]=value;status.set('연결 및 프로젝트 조회 완료');root.after(50,root.destroy)
-            elif outcome=='timeout':status.set('연결 시간 초과(30초). URL·VPN·인증·Swagger 주소를 확인하세요.')
+            elif outcome=='timeout':status.set('연결 시간 초과(30초). 서버 URL·VPN·인증을 확인하세요.')
             elif outcome=='cancelled':status.set('연결 취소됨. 늦게 도착한 결과는 사용하지 않습니다.')
             else:status.set('연결 실패: '+(str(value) if isinstance(value,ApiError) else type(value).__name__))
         poll()
