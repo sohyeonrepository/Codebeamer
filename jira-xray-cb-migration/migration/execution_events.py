@@ -3,12 +3,13 @@
 These events are Execution context, NOT a reconstructed Run-status timeline.
 """
 from copy import deepcopy
+from migration.dates import parse_iso
 from datetime import datetime
 from clients.http import ApiError
 
 
 def timestamp(value):
-    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    parsed = parse_iso(value)
     if parsed.tzinfo is None:
         raise ApiError('Execution history timestamp must contain a timezone')
     return parsed

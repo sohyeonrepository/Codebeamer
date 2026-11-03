@@ -1,5 +1,6 @@
 """Replay source Run history/activity through real updates, never History POST."""
 from copy import deepcopy
+from migration.dates import parse_iso
 from datetime import datetime
 import hashlib
 import json
@@ -10,7 +11,7 @@ from validation.compare_history import revision_ids
 
 
 def event_time(value):
-    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    parsed = parse_iso(value)
     if parsed.tzinfo is None:
         raise ApiError('Run event timestamp requires a timezone')
     return parsed
