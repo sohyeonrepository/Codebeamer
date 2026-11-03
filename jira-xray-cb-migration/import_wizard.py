@@ -52,7 +52,7 @@ def launch(wizard, initial_projects=None):
     tabs = ttk.Notebook(root)
     tabs.pack(fill='both', expand=True, padx=12, pady=12)
     step2, step3, step4 = (ttk.Frame(tabs, padding=12) for _ in range(3))
-    for frame, title in zip((step2, step3, step4), ('STEP 2 · 프로젝트 / Tracker', 'STEP 3 · 필드 매핑', 'Import 결과')):
+    for frame, title in zip((step2, step3, step4), ('STEP 2 · 프로젝트 / Tracker', 'STEP 3 · Jira 필드 검수', 'Import 결과')):
         tabs.add(frame, text=title)
     ttk.Label(root, textvariable=status, wraplength=1080).pack(fill='x', padx=12, pady=8)
     evidence = tk.Text(step4, wrap='word')
@@ -157,12 +157,14 @@ def launch(wizard, initial_projects=None):
     ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
     ttk.Button(target_bar,text='선택 조합 분석',command=lambda:run('필드 분석',analyze)).pack(side='right')
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
+    selected_only=tk.BooleanVar(value=False)
+    ttk.Checkbutton(tools,text='선택 항목만 보기',variable=selected_only,command=lambda:display_scope()).pack(side='left')
     search=tk.StringVar()
     ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
-    table = ttk.Treeview(table_frame, columns=('jira','cb'),show='headings',selectmode='browse')
-    for column,text,width in (('jira','Jira 필드',420),('cb','Codebeamer 대상 필드 ▾',500)):
+    table = ttk.Treeview(table_frame, columns=('selected','jira','kind','cb','options'),show='headings',selectmode='browse')
+    for column,text,width in (('selected','선택',55),('jira','Jira 필드',230),('kind','Jira 타입',120),('cb','CB 생성 계획 ▾',350),('options','옵션 수',80)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
     table.configure(yscrollcommand=scrollbar.set)
@@ -175,6 +177,11 @@ def launch(wizard, initial_projects=None):
     manual_button=ttk.Button(action_bar,text='선택 필드 매핑 변경')
     create_button=ttk.Button(action_bar,text='＋ 신규 필드 생성')
     manual_button.pack(side='left')
+    def select_all(value):
+        for source in wizard.plan['scopes'].get(scopes.get(),{}).get('rows',{}):wizard.select_field(scopes.get(),source,value)
+        display_scope()
+    ttk.Button(action_bar,text='전체 선택',command=lambda:select_all(True)).pack(side='left')
+    ttk.Button(action_bar,text='전체 해제',command=lambda:select_all(False)).pack(side='left')
     detail = tk.StringVar(value='Attachment · Comment · Linked Issue · History · R4J는 별도로 자동 이관합니다.')
     ttk.Label(step3,textvariable=detail,wraplength=1050).pack(anchor='w',pady=4)
     warning=tk.StringVar()
@@ -193,6 +200,7 @@ def launch(wizard, initial_projects=None):
         scope_rows.clear(); table.delete(*table.get_children())
         query=search.get().strip().casefold()
         for index,(source,row) in enumerate(entry.get('rows',{}).items()):
+            if selected_only.get() and not row.get('selected',True):continue
             target=row.get('target') or {}
             left=''
             if row.get('spec'):
@@ -202,16 +210,17 @@ def launch(wizard, initial_projects=None):
                 if phase and phase[1].get('field_id') and phase[0] in ('CREATED','VALUE_MAPPING_PENDING','COMPLETED'):
                     field=phase[1].get('field',{})
                     left=field.get('label',field.get('name',row.get('creation',{}).get('label','')))+' · ID '+str(phase[1]['field_id'])
-                elif row.get('creation_saved'):
+                elif row.get('creation'):
                     left=row['creation']['label']+' (신규 생성 예정)'
             definition=entry['analysis']['fields'][source]
             right=definition.get('name',source)+(' ('+source+')' if source.startswith('customfield_') else '')
             if query and query not in (left+' '+right).casefold():continue
             iid='field-'+str(index);scope_rows[iid]=source
-            table.insert('','end',iid=iid,values=(right,left))
+            kind,multiple=semantic_type(definition,True)
+            table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,str(kind)+(' / Multi' if multiple else ''),left or row.get('reason','검증 필요'),len(row.get('creation',{}).get('choices',{}))))
         risks=entry['analysis']['risks']+entry.get('target_risks',[])
         api_warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(entry.get('tracker') or entry.get('template_tracker')),{}).get('warnings',[])
-        detail.set('조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
+        detail.set(str(sum(r.get('selected',True) for r in entry['rows'].values()))+' / '+str(len(entry['rows']))+' 선택 · 조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
         warning.set(('⚠ Hidden 필드에 실제 값이 남아 있어 누락 위험 '+str(len(risks))+'건: '+
                      ', '.join(r['field'] for r in risks)) if risks else '')
         if entry['analysis'].get('visibility_unknown') or entry['analysis'].get('configuration_status') == 'unavailable':
@@ -223,6 +232,14 @@ def launch(wizard, initial_projects=None):
         result=wizard.analyze(scopes.get());display_scope();return result
     scopes.bind('<<ComboboxSelected>>',lambda event:display_scope())
     search.trace_add('write',lambda *_:display_scope())
+    def option_details():
+        if not table.selection():return
+        source=scope_rows[table.selection()[0]]
+        entry=wizard.plan['scopes'][scopes.get()]
+        window=tk.Toplevel(root);window.title('원본 옵션 및 생성 계획')
+        text=tk.Text(window,width=90,height=25);text.pack(fill='both',expand=True)
+        text.insert('1.0',json.dumps({'source':entry['analysis']['fields'][source], 'plan':entry['rows'][source]},ensure_ascii=False,indent=2));text.configure(state='disabled')
+    ttk.Button(action_bar,text='옵션 및 계획 상세',command=option_details).pack(side='left')
     def inspect(event=None):
         if table.selection():
             source=scope_rows[table.selection()[0]]
@@ -355,7 +372,13 @@ def launch(wizard, initial_projects=None):
     manual_button.configure(command=lambda:run('수동 매핑',edit))
     create_button.configure(command=lambda:run('신규 필드 설정',create_field_dialog))
     def row_action(event):
-        if table.identify_region(event.x,event.y) != 'cell' or table.identify_column(event.x) != '#2':return
+        if table.identify_column(event.x)=='#1':
+            iid=table.identify_row(event.y)
+            if iid in scope_rows:
+                source=scope_rows[iid];row=wizard.plan['scopes'][scopes.get()]['rows'][source]
+                wizard.select_field(scopes.get(),source,not row.get('selected',True));display_scope()
+            return
+        if table.identify_region(event.x,event.y) != 'cell' or table.identify_column(event.x) != '#4':return
         iid = table.identify_row(event.y)
         if not iid:return
         table.selection_set(iid)
@@ -404,6 +427,19 @@ def launch(wizard, initial_projects=None):
         # Destroying here used to discard the user's choice before save.
     table.bind('<ButtonRelease-1>',row_action)
     def import_now():
+        planned=[r for r in wizard.creation_review() if r['selected']]
+        preview=tk.Toplevel(root);preview.title('생성 예정 내역 확인')
+        text=tk.Text(preview,width=100,height=25);text.pack(fill='both',expand=True)
+        lines=[]
+        for item in planned:
+            creation=item.get('creation') or {};target=item.get('target') or {}
+            lines.append(item['scope']+' / '+item['source']+' → '+(creation.get('label','')+' / '+str(creation.get('semantic_type'))+(' / 다중' if creation.get('multipleSelection') else ' / 단일')+' / 옵션 '+str(len(creation.get('choices',{})))+'개 / 신규 생성' if not target else str(target.get('target'))+' / Field ID '+str(target.get('field_id'))+' / 기존 필드 활용'))
+        text.insert('1.0','\n'.join(lines));text.configure(state='disabled')
+        confirmed=[False]
+        def confirm():confirmed[0]=True;preview.destroy()
+        ttk.Button(preview,text='내역 확인 후 계속',command=confirm).pack()
+        preview.grab_set();root.wait_window(preview)
+        if not confirmed[0]:return
         errors = wizard.errors()
         if errors: raise ApiError('\n'.join(errors))
         review = wizard.visibility_review()

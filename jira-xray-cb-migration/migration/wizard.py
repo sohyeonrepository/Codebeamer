@@ -349,10 +349,6 @@ class ImportWizard:
         existing.update({k:r['spec'] for k,r in old_rows.items() if r.get('spec')})
         entry.update(analysis=analysis, target_fields=fields,
                      rows=proposals(analysis, fields, self.config, existing))
-        for source, row in entry['rows'].items():
-            if source not in existing:
-                row.update(status='manual',mapping_mode=None,spec=None,reason='대상 필드를 선택하거나 신규 생성 설정을 저장하세요.')
-                row.pop('target',None)
         for source, row in old_rows.items():
             phase=self.state.get('field-phase:'+scope+':'+source)
             receipt=self.state.get(field_identity(tracker,source,row))
@@ -360,8 +356,11 @@ class ImportWizard:
                 entry['rows'][source]=deepcopy(row)
                 entry['rows'][source].update(status='create',spec=None)
                 continue
-            if row.get('creation_saved') and source in entry['rows'] and not entry['rows'][source].get('spec'):
-                entry['rows'][source].update(status='create',creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')),creation_token=row.get('creation_token'))
+            if row.get('creation_saved') and not row.get('spec') and source in entry['rows']:
+                entry['rows'][source].update(status='create',spec=None,creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')),creation_token=row.get('creation_token'))
+        for source,row in entry['rows'].items():
+            row['selected']=old_rows.get(source,{}).get('selected',True)
+            if row.get('creation'):row['creation_saved']=True
         entry['target_risks'] = [{'field': source, 'reason': 'hidden-target-with-source-values'}
             for source, definition in analysis['fields'].items()
             if any(has_value(v) for v in analysis['values'].get(source, []))
@@ -369,6 +368,17 @@ class ImportWizard:
         self.stage('fields:' + scope, {'source': len(analysis['fields']), 'target': len(fields),
                                       'issues': analysis['issue_count'], 'risks': analysis['risks'] + entry['target_risks']})
         return entry
+
+    def select_field(self, scope, source, selected):
+        if type(selected) is not bool:raise ApiError('Field selection must be boolean')
+        self.plan['scopes'][scope]['rows'][source]['selected']=selected
+        self.state.save('wizard','plan',self.plan)
+
+    def creation_review(self):
+        return [{'scope':scope,'source':source,'selected':row.get('selected',True),
+                 'creation':deepcopy(row.get('creation')),'target':deepcopy(row.get('spec')),
+                 'reason':row.get('reason')} for scope,entry in self.plan['scopes'].items()
+                for source,row in entry.get('rows',{}).items()]
 
     def relation_catalog(self):
         from migration.relation_mapping import catalogs
@@ -600,6 +610,7 @@ class ImportWizard:
                 if entry['analysis']['risks'] or entry.get('target_risks'):
                     errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
                 for source, row in entry['rows'].items():
+                    if not row.get('selected',True):continue
                     spec=row.get('spec') or {}
                     if spec.get('missing_definition') or spec.get('selection_unverified'):
                         errors.append(scope+':'+source+': 선택한 Field ID '+str(spec.get('field_id'))+' 상세 정의 미확인: '+str(spec.get('missing_definition',spec.get('selection_unverified'))))
@@ -607,7 +618,7 @@ class ImportWizard:
                         errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
                     if row['status'] not in ('mapped', 'create'):
                         errors.append(scope + ':' + source + ': ' + row['reason'])
-                keys = [row['spec']['target'] for row in entry['rows'].values() if row.get('spec')]
+                keys = [row['spec']['target'] for row in entry['rows'].values() if row.get('spec') and row.get('selected',True)]
                 if len(keys) != len(set(keys)):
                     errors.append(scope + ': 중복 대상 payload 키')
         return errors
@@ -768,6 +779,7 @@ class ImportWizard:
             from clients.tracker_fields import binding
             for entry in self.plan['scopes'].values():
                 for row in entry.get('rows', {}).values():
+                    if not row.get('selected',True):continue
                     selected = row.get('spec')
                     if not selected or selected.get('deferred_reference') or not (selected['target'].startswith('cb_field_') or selected.get('value_contract_unverified')):continue
                     target = row.get('target', {})
@@ -841,7 +853,14 @@ class ImportWizard:
                     raise ApiError('Target configuration changed; analyze again: ' + scope)
 
         from migration.preservation import preflight
-        preflight(self.cb, settings, self.plan)
+        selected_plan=deepcopy(self.plan)
+        settings['wizard']['excluded_fields']={}
+        for scope,entry in selected_plan['scopes'].items():
+            settings['wizard']['excluded_fields'][scope]=[k for k,r in entry['rows'].items() if not r.get('selected',True)]
+            entry['rows']={k:r for k,r in entry['rows'].items() if r.get('selected',True)}
+            if 'summary' in settings['wizard']['excluded_fields'][scope]:
+                raise ApiError(scope+': Summary는 Item 이름에 필요한 필수 필드입니다.')
+        preflight(self.cb, settings, selected_plan)
         # Collect every selected bundle (including R4J) before any target write.
         bundles = {}
         runs = {}
@@ -930,6 +949,7 @@ class ImportWizard:
                 mapping = {}
                 actual_fields = target_fields(self.cb, tracker)
                 for source, row in entry['rows'].items():
+                    if not row.get('selected',True):continue
                     spec=row.get('spec') or {}
                     if spec.get('missing_definition') or spec.get('selection_unverified'):
                         errors.append(scope+':'+source+': 선택한 Field ID '+str(spec.get('field_id'))+' 상세 정의 미확인: '+str(spec.get('missing_definition',spec.get('selection_unverified'))))
@@ -968,6 +988,7 @@ class ImportWizard:
                 entry['new_tracker'] = None
                 entry['target_fields'] = target_fields(self.cb, entry['tracker'])
                 for source, row in entry['rows'].items():
+                    if not row.get('selected',True):continue
                     spec = settings['field_mapping'][scope][source]
                     actual = next(f for f in entry['target_fields'] if field_identifier(f) == spec['field_id'])
                     row.update(status='mapped', spec=deepcopy(spec), target=actual)

@@ -111,6 +111,7 @@ class Engine:
         if self.wizard:
             from migration.wizard import has_value, managed_fields
             missing -= {'issuetype', 'project'}
+            missing -= set(self.settings.get('wizard',{}).get('excluded_fields',{}).get(project['key']+':'+type_id,[]))
             missing -= managed_fields(definitions, self.jira.config.get('xray_run_field'))
             missing = {f for f in missing if has_value(issue['fields'][f])}
         if missing:

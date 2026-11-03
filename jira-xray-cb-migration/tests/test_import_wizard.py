@@ -190,8 +190,8 @@ class WizardTests(unittest.TestCase):
         self.wizard.map_tracker('P','1',100)
         entry=self.wizard.analyze('P:1')
         self.assertIsNotNone(entry['rows']['summary']['spec'])  # saved config mapping
-        self.assertIsNone(entry['rows']['description']['spec'])
-        self.assertNotIn('target',entry['rows']['description'])
+        self.assertEqual(entry['rows']['description']['spec']['field_id'],2)
+        self.assertTrue(entry['rows']['description']['selected'])
         self.wizard.configure_creation('P:1','summary','My Summary','text',False,{})
         self.wizard.analyze('P:1')
         row=self.wizard.plan['scopes']['P:1']['rows']['summary']
@@ -203,6 +203,20 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(row['spec']['field_id'],1)
         self.assertFalse(row.get('creation_saved'))
         self.assertFalse(self.cb.mutations)
+
+    def test_review_selection_persists_and_excludes_values(self):
+        self.plan()
+        self.wizard.select_field('P:1','description',False)
+        self.wizard.select_field('P:1','empty',False)
+        self.wizard.analyze('P:1')
+        self.assertFalse(self.wizard.plan['scopes']['P:1']['rows']['description']['selected'])
+        restarted=ImportWizard(JiraClient(self.source,self.jira_config),self.cb,self.state,self.config)
+        self.assertFalse(restarted.plan['scopes']['P:1']['rows']['empty']['selected'])
+        self.assertFalse(self.cb.mutations)
+        report=self.wizard.execute(True)
+        self.assertTrue(report['complete'],report)
+        self.assertNotIn('description',self.wizard.config['migration']['field_mapping']['P:1'])
+        self.assertNotIn('empty',self.wizard.config['migration']['field_mapping']['P:1'])
 
     def test_analysis_is_read_only_and_all_types_include_empty_type(self):
         self.plan()
