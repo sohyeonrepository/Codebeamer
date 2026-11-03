@@ -1,3 +1,4 @@
+from migration.dates import parse_iso
 from clients.http import ApiError
 
 
@@ -23,7 +24,7 @@ def convert(value, kind, mapping, identity_key=None):
         return value
     if kind in ('date', 'datetime'):
         from datetime import datetime
-        datetime.fromisoformat(value.replace('Z', '+00:00'))
+        parse_iso(value)
         return value
     if kind in ('user', 'status', 'option', 'reference'):
         if isinstance(value, list):
