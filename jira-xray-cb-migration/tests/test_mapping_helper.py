@@ -251,8 +251,8 @@ class MappingHelperTests(unittest.TestCase):
             write=False
             spec=None
             writes=0
-            def discover(self): self.spec={};return []
-            def operation(self,name): return {}
+            def discover(self): self.spec={'paths':{'/v3/tracker/configuration':{'post':{'requestBody':{'content':{'application/json':{'schema':{'type':'object','properties':{'fields':{'type':'array','items':{'type':'object'}}}}}}}}}}};return []
+            def operation(self,name): return {'method':'POST','path':'/v3/tracker/configuration'}
             def configuration(self,tracker):
                 if changed and not self.writes:return dict(baseline,changed=True)
                 return deepcopy(self.actual if self.writes else baseline)
@@ -385,7 +385,7 @@ class MappingHelperTests(unittest.TestCase):
                 return deepcopy(self.actual if self.body else baseline)
         http=Http()
         cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
-        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration'}}}}
+        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':{'type':'object','properties':{'fields':{'type':'array','items':{'type':'object'}}}}}}}}}}}
         proposal=creation_templates(baseline)[0]['definition'];proposal['label']='Build'
         with tempfile.TemporaryDirectory() as directory:
             created,_=create_confirmed_field(cb,100,proposal,baseline,Path(directory)/'journal.json',approved=True)
@@ -504,7 +504,7 @@ class MappingHelperTests(unittest.TestCase):
         cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
         choice={'type':'object','required':['name'],'properties':{'name':{'type':'string'}}}
         schema={'type':'object','properties':{'fields':{'type':'array','items':{'type':'object','properties':{'options':{'type':'array','items':choice}}}}}}
-        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
         with tempfile.TemporaryDirectory() as directory:
             created,actual=create_missing_option(cb,100,baseline['fields'][0],'Failed',Path(directory)/'a.json')
         self.assertEqual(created['id'],77)
@@ -583,7 +583,7 @@ class MappingHelperTests(unittest.TestCase):
         schema={'type':'object','properties':{'fields':{'type':'array','items':{'type':'object','required':['label','typeId'],
                 'properties':{'label':{'type':'string'},'typeId':{'type':'integer'},'permission':{'type':'object'}}}}}}
         http=Http();cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
-        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
         definition=creation_templates(expected)[0]['definition'];definition['label']='Build'
         with tempfile.TemporaryDirectory() as directory:
             created,actual=create_confirmed_field(cb,4872985,definition,expected,Path(directory)/'a.json',approved=True)
@@ -602,7 +602,7 @@ class MappingHelperTests(unittest.TestCase):
         schema={'properties':{'fields':{'type':'array','items':{'type':'object','required':['permission'],
                  'properties':{'permission':{'type':'object'}}}}}}
         cb=CodebeamerClient(None,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
-        cb.spec={'paths':{'/actual/config':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
+        cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration','requestBody':{'content':{'application/json':{'schema':schema}}}}}}}
         with self.assertRaises(ApiError):prepare_configuration_permissions(cb,{'fields':[{'id':1}]})
 
     def test_field_identifier_uses_reference_when_id_is_null(self):

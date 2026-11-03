@@ -650,6 +650,8 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     current = read_stage('Codebeamer 생성 전 설정 재확인', lambda: cb.configuration(tracker))
     if current != expected:
         raise ApiError('트래커 설정이 변경됐습니다. 도우미를 재실행해 다시 조회하세요.')
+    from clients.field_definition import plan_definition
+    definition=plan_definition(cb,definition,current)
     body = deepcopy(expected)
     body['fields'].append(deepcopy(definition))
     body=prepare_configuration_permissions(cb,body)
@@ -677,7 +679,9 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     matches = [field for field in actual.get('fields', []) if field.get('label') == definition['label']]
     if len(matches) != 1 or field_identifier(matches[0]) is None:
         raise ApiError('생성 결과의 실제 필드 ID를 확인할 수 없습니다. 재생성하지 말고 서버에서 확인하세요.')
-    created = dict(definition, **matches[0])
+    created = deepcopy(matches[0])
+    if 'referenceId' in definition and created.get('referenceId') != definition['referenceId']:
+        raise ApiError('Created referenceId differs from the approved definition contract')
     def matches_options(expected_options, actual_options):
         if expected_options is None:return actual_options is None
         if not isinstance(actual_options,list) or len(expected_options)!=len(actual_options):return False

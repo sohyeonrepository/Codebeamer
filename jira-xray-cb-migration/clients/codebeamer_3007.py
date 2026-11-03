@@ -145,7 +145,8 @@ def configuration_field_contract(cb, definition, tracker):
     if current.get('basicInformation',{}).get('trackerId') != tracker or not isinstance(current.get('fields'),list):
         raise ApiError('Full current Tracker Configuration and matching trackerId required')
     body = deepcopy(current)
-    body['fields'].append(deepcopy(definition))
+    from clients.field_definition import plan_definition
+    body['fields'].append(plan_definition(cb,definition,current))
     body = prepare_configuration_permissions(cb,body)
     schema = request_schema(cb.spec,cb.spec['paths'][op['path']]['post'])
     validate(cb.spec,body,schema)
