@@ -1,0 +1,12 @@
+{
+  "status": "DESIGN_ONLY_NOT_IMPLEMENTED",
+  "purpose": "History preservation Java/Codebeamer-internal API bridge; not a REST history writer",
+  "input": "output/history_java_queue.json",
+  "id_mapping": "output/id_map.json",
+  "required_java_verification": [
+    "Jira Connector's actual revision import entrypoints and permissions",
+    "RemoteSynchronizationController / TrackerItemRevisionDto dependency compatibility with Codebeamer 3.0.0.7",
+    "History author/date fidelity and partial-failure rollback"
+  ],
+  "safety": "Never run directly against production before controlled PoC."
+}

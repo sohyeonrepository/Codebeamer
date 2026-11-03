@@ -1,0 +1,36 @@
+test_apply_readback (test_field_config.FieldTest.test_apply_readback) ... ok
+test_creates_without_modifying_others (test_field_config.FieldTest.test_creates_without_modifying_others) ... ok
+test_never_posts_on_preview (test_field_config.FieldTest.test_never_posts_on_preview) ... ok
+test_reject_duplicate (test_field_config.FieldTest.test_reject_duplicate) ... ok
+test_reject_duplicate_id (test_field_config.FieldTest.test_reject_duplicate_id) ... ok
+test_apply_v1_documented_requests (test_full_migration.FullMigrationTests.test_apply_v1_documented_requests) ... ok
+test_duplicate_test_cases_latest_wins (test_full_migration.FullMigrationTests.test_duplicate_test_cases_latest_wins) ... ok
+test_history_bridge_no_false_success (test_full_migration.FullMigrationTests.test_history_bridge_no_false_success) ... ok
+test_reject_unresolved (test_full_migration.FullMigrationTests.test_reject_unresolved) ... ok
+test_related_edges (test_full_migration.FullMigrationTests.test_related_edges) ... ok
+test_run_group (test_full_migration.FullMigrationTests.test_run_group) ... ok
+test_status (test_full_migration.FullMigrationTests.test_status) ... ok
+test_xray_export (test_full_migration.FullMigrationTests.test_xray_export) ... ok
+test_adapter_locked_without_verification (test_pipeline.TestMigrator.test_adapter_locked_without_verification) ... ok
+test_bulk_reference_not_overwritten (test_pipeline.TestMigrator.test_bulk_reference_not_overwritten) ... ok
+test_creation_idempotent (test_pipeline.TestMigrator.test_creation_idempotent) ... ok
+test_dry_run (test_pipeline.TestMigrator.test_dry_run) ... ok
+test_history_order (test_pipeline.TestMigrator.test_history_order) ... ok
+test_no_bad_id (test_pipeline.TestMigrator.test_no_bad_id) ... ok
+test_reference_edges (test_pipeline.TestMigrator.test_reference_edges) ... ok
+test_templates (test_pipeline.TestMigrator.test_templates) ... ok
+test_association_and_native_history_no_unverified_writes (test_review_regressions.Regression.test_association_and_native_history_no_unverified_writes) ... ok
+test_directed_links_dedup_and_types_preserved (test_review_regressions.Regression.test_directed_links_dedup_and_types_preserved) ... ok
+test_empty_page_does_not_complete_history (test_review_regressions.Regression.test_empty_page_does_not_complete_history) ... ok
+test_four_categories_offline (test_review_regressions.Regression.test_four_categories_offline) ... ok
+test_lost_item_response_never_reposts (test_review_regressions.Regression.test_lost_item_response_never_reposts) ... ok
+test_reference_retry_uses_existing_values_without_write (test_review_regressions.Regression.test_reference_retry_uses_existing_values_without_write) ... ok
+test_unknown_verdict_is_error (test_review_regressions.Regression.test_unknown_verdict_is_error) ... ok
+test_xray_partial_page_reports_error (test_review_regressions.Regression.test_xray_partial_page_reports_error) ... ok
+test_app_import (tests_ui.GuiSmoke.test_app_import) ... ok
+test_mapping_types (tests_ui.GuiSmoke.test_mapping_types) ... ok
+
+----------------------------------------------------------------------
+Ran 31 tests in 0.008s
+
+OK

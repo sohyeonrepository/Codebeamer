@@ -1,0 +1,64 @@
+{
+  "jira_project": "STGVSTAR",
+  "cb_tracker_ids": {
+    "test_plan": 0,
+    "test_case": 0,
+    "test_set": 0,
+    "test_execution": 0
+  },
+  "field_map": {
+    "test_plan": {},
+    "test_case": {},
+    "test_set": {},
+    "test_execution": {}
+  },
+  "xray_paths": {
+    "test_plan": {},
+    "test_case": {},
+    "test_set": {},
+    "test_execution": {}
+  },
+  "relation_field_map": {
+    "test_plan": {},
+    "test_case": {},
+    "test_set": {},
+    "test_execution": {}
+  },
+  "cb_api": {
+    "verified_against_3_0_0_7": false,
+    "create_item": {
+      "method": "POST",
+      "path": "/v3/items"
+    },
+    "update_item": {
+      "method": "PUT",
+      "path": "/v3/items/{item_id}"
+    },
+    "read_item": {
+      "method": "GET",
+      "path": "/v3/items/{item_id}"
+    },
+    "set_reference": {
+      "method": "PUT",
+      "path": "/v3/items/{item_id}"
+    },
+    "create_association": {
+      "method": "POST",
+      "path": "/v3/associations"
+    },
+    "created_item_id_path": "id",
+    "item_create_body": {
+      "tracker": {
+        "id": "{{tracker_id}}"
+      },
+      "name": "{{summary}}"
+    },
+    "reference_body": null,
+    "reference_body_bulk": null
+  },
+  "cb_projects_path": "/cb/api/v3/projects",
+  "cb_tracker_config_path": "/cb/api/v3/tracker/{tracker_id}/configuration",
+  "cb_tracker_post_path": "/cb/api/v3/tracker/configuration",
+  "cb_api_prefix": "/cb/api",
+  "cb_v1_prefix": "/cb/rest"
+}
