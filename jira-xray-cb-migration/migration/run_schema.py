@@ -61,8 +61,9 @@ def sync_run_fields(cb, state, tracker, settings, write):
         field['permission'] = deepcopy(permission)
         plan.append({'label': field['label'], 'action': action})
     # User requested unrestricted permissions on ALL fields of this Tracker only.
-    for field in desired:
-        field['permission'] = deepcopy(permission)
+    if sync.get('apply_permission_to_all_fields') is True:
+        for field in desired:
+            field['permission'] = deepcopy(permission)
     state.save('schema-plans', tracker, {'fields': desired, 'plan': plan})
     if not write:
         return plan
@@ -80,7 +81,7 @@ def sync_run_fields(cb, state, tracker, settings, write):
             raise ApiError('Field create/update readback failed: ' + expected['label'])
         if any(matches[0].get(k) != v for k, v in expected.items() if k not in ('id', 'referenceId')):
             raise ApiError('Field definition/permission verification failed: ' + expected['label'])
-    if any(f.get('permission') != permission for f in actual):
+    if sync.get('apply_permission_to_all_fields') is True and any(f.get('permission') != permission for f in actual):
         raise ApiError('Not all Run Tracker fields have unrestricted permissions')
     state.save('target-schema', tracker, actual)
     return plan

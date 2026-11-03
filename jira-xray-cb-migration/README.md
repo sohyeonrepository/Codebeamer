@@ -10,7 +10,7 @@
 
 `python mapping_helper.py --wizard --config config.local.json --prompt-auth`로 기존 프로젝트/Tracker 선택(STEP 2), 조합별 CB 왼쪽/Jira 오른쪽 필드 매핑(STEP 3), 명시적 Import 승인 흐름을 실행할 수 있습니다. 기존 매핑 도우미와 CLI도 유지됩니다. [Wizard 설정·실행·제한 및 API 계약](docs/import-wizard.md)을 확인하세요. Field Configuration/R4J/CB 작업 API는 실제 서버에서 확인한 설정이 필요하며, 사전 분석은 읽기 전용입니다.
 
-**현재 기본 실행 범위는 Test Run만 이관입니다.** 설정과 제한은 문서 하단의 “현재 사용 범위: Test Run만 이관”을 먼저 확인하세요. 다른 데이터와 Test Plan–요구사항 관계는 별도 도구로 처리합니다.
+**실행 범위를 구분하세요.** 기존 CLI 기본 `test-runs`는 Run 전용입니다. `import_wizard.py`는 연결 → 프로젝트 선택 → Tracker/Field 검수 → Item/Run 데이터 처리 → Reference/Association 처리를 제공합니다. `migration.mode: full-xray`는 Plan/Case/Set/Execution 전체 경로이며 실제 관계·Run 어댑터 설정이 필요합니다. Mock 검증은 실제 서버 3.0.0.7 호환성 인증이 아닙니다. 재현 명령과 제한은 [Mock E2E 검증](docs/mock-e2e.md)을 확인하세요.
 
 Python 3.10 이상, Windows/VS Code 지원. 외부 패키지는 필요하지 않습니다.
 기존 저장소에는 README만 있어 API 클라이언트와 마이그레이션 엔진을 새로 작성했습니다.
