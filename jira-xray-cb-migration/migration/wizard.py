@@ -67,6 +67,52 @@ def text_conversion(kind, multiple, target=None):
     return kind
 
 
+def creation_kind(field):
+    """Preserve the concrete CB creation type rather than collapsing variants."""
+    from mapping_helper import field_type_label
+    from mapping_helper import normalized_label
+    label = field_type_label(field)
+    if not label:
+        return None
+    key = normalized_label(label.split(' (', 1)[0])
+    aliases = {'choice':'option', 'bool':'boolean', 'members':'user',
+               'users':'user', 'references':'reference', 'wikilinkurl':'wikilink',
+               'workconfigitems':'reference', 'projects':'project',
+               'trackers':'tracker', 'repositories':'repository'}
+    return aliases.get(key, key)
+
+
+def selected_conversion(source_kind, source_multiple, target_kind, target_multiple):
+    """Explicit, loss-aware conversion for user-selected Codebeamer types."""
+    if target_kind in ('text', 'wikitext', 'wikilink'):
+        if source_kind == 'text':
+            return 'text_list' if source_multiple and target_multiple else (
+                'text_multi' if source_multiple else 'text')
+        return 'stringify'
+    if target_kind in ('integer', 'decimal', 'number'):
+        if source_kind == 'number':
+            return 'number'
+        if source_kind == 'text':
+            return 'parse_number'
+    if target_kind in ('boolean', 'bool'):
+        if source_kind == 'boolean':
+            return 'boolean'
+        if source_kind == 'text':
+            return 'parse_boolean'
+    if target_kind in ('date', 'datetime'):
+        if source_kind in ('date', 'datetime'):
+            return 'date' if target_kind == 'date' else 'datetime'
+    if target_kind in ('option', 'status') and source_kind in ('option', 'status', 'text'):
+        return 'status' if target_kind == 'status' else 'option'
+    if target_kind == 'user' and source_kind == 'user':
+        return 'user'
+    if target_kind == 'reference' and source_kind == 'reference':
+        return 'reference'
+    if source_kind == target_kind:
+        return source_kind
+    return None
+
+
 def target_multiple_for(kind, multiple):
     # Multi-text arrays stored in a single CB Text/WikiText field.
     return False if kind == 'text' and multiple else multiple
@@ -745,7 +791,8 @@ class ImportWizard:
                     reasons.append(template['name'] + ': ' + str(config_error) + '; ' + str(exc))
                     continue
             if candidate_binding: candidate_binding.pop('fieldId', None)
-            profiles.setdefault(kind, {'type_name':representative.get('typeName'),
+            profile_key = creation_kind(representative) or kind
+            profiles.setdefault(profile_key, {'type_name':representative.get('typeName'),
                                       'definition':definition, 'binding':candidate_binding,
                                       'creation_method':method, 'source_tracker_id':tracker,
                                       'definition_contract':'verified',
@@ -767,12 +814,21 @@ class ImportWizard:
         if not label:
             raise ApiError('신규 필드 이름을 입력하세요.')
         source_kind, source_multiple = semantic_type(entry['analysis']['fields'][source], True)
-        if semantic != source_kind or bool(multiple) != bool(target_multiple_for(source_kind, source_multiple)):
-            raise ApiError('Jira 원본 타입에 호환되지 않는 대상 다중 선택 설정입니다.')
         profiles = entry.get('creation_profiles', self.config['migration'].get('wizard', {}).get('field_types', {}))
         if semantic not in profiles:
-            raise ApiError('검증된 신규 필드 타입 설정이 없습니다: ' + semantic)
+            raise ApiError('선택한 타입의 검증된 Codebeamer 생성 정의가 없습니다: ' + semantic)
         selected_profile=deepcopy(profiles[semantic])
+        target_kind = {'wikitext':'text', 'integer':'number', 'decimal':'number',
+                       'bool':'boolean', 'wikilink':'text'}.get(semantic, semantic)
+        target_cardinality = bool(multiple)
+        conversion = selected_conversion(source_kind, source_multiple, semantic, target_cardinality)
+        if conversion is None:
+            raise ApiError('지원하지 않는 값 변환: Jira '+str(source_kind)+' → Codebeamer '+semantic)
+        if source_multiple and not multiple and target_kind not in ('text',):
+            raise ApiError('원본 다중 값을 단일 필드로 변환하면 데이터가 손실됩니다.')
+        actual_kind = semantic_type(dict(selected_profile['definition'], typeName=selected_profile['type_name']))[0]
+        if actual_kind != target_kind:
+            raise ApiError('선택한 필드 타입과 서버 생성 템플릿이 일치하지 않습니다: '+semantic)
         if semantic=='reference':
             allowed=[t['id'] for t in self.plan['projects'][entry['project']]['trackers']]
             if reference_tracker not in allowed:raise ApiError('선택한 프로젝트의 실제 참조 대상 Tracker를 선택하세요.')
@@ -792,7 +848,8 @@ class ImportWizard:
             row['creation_token']=hashlib.sha256(json.dumps([label,semantic,multiple,options],sort_keys=True).encode()).hexdigest()[:16]
         row.pop('target',None)
         row.update(status='create',spec=None,mapping_mode='create', creation_saved=True, creation_profile=selected_profile, reason='Import 승인 후 생성', creation={
-            'label':label, 'semantic_type':semantic, 'multipleSelection':bool(multiple),
+            'label':label, 'semantic_type':target_kind, 'profile_key':semantic,
+            'conversion':conversion, 'multipleSelection':bool(multiple),
             'choices':options, **({'reference_tracker_id':reference_tracker} if semantic=='reference' else {})})
         self.state.save('wizard', 'plan', self.plan)
         row['creation_stage']='PLANNED'
@@ -849,7 +906,7 @@ class ImportWizard:
     def _create_field(self, scope, source, row, tracker):
         from mapping_helper import create_dedicated_field, dedicated_field_contract, create_confirmed_field
         proposal = row['creation']
-        profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
+        profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal.get('profile_key', proposal['semantic_type']))
         if not profile:
             raise ApiError('Configure a verified wizard.field_types template for ' + proposal['semantic_type'])
         entry = self.plan['scopes'][scope]
@@ -945,7 +1002,7 @@ class ImportWizard:
             mapping = deepcopy(self.config['migration'].get('user_mapping', {}))
         key = 'jira_' + source
         source_kind, source_multiple = semantic_type(self.plan['scopes'][scope]['analysis']['fields'][source], True)
-        conversion = text_conversion(source_kind, source_multiple, actual)
+        conversion = proposal.get('conversion') or text_conversion(source_kind, source_multiple, actual)
         spec = build_spec(source, actual, conversion, key, mapping,existing=True)
         if proposal['semantic_type']=='reference':
             spec['deferred_reference']=True
