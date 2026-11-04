@@ -19,6 +19,43 @@ class JiraClient:
             raise ApiError('Project response lacks complete issueTypes')
         return detail['issueTypes']
 
+    def global_catalog(self):
+        """Read Jira DC global definitions, not project-scoped availability.
+
+        Permissions may restrict some endpoints. Security Levels are scoped by
+        security schemes, so do not infer those from a global status list.
+        """
+        paths = {
+            'issue_types': '/rest/api/2/issuetype',
+            'priorities': '/rest/api/2/priority',
+            'statuses': '/rest/api/2/status',
+            'resolutions': '/rest/api/2/resolution',
+        }
+        result = {}
+        for key, path in paths.items():
+            values = self.http.request('GET', path)
+            if not isinstance(values, list) or any(
+                not isinstance(row, dict) or row.get('id') is None or not row.get('name')
+                for row in values
+            ):
+                raise ApiError('Incomplete Jira global definition catalog: ' + key)
+            ids = [str(row['id']) for row in values]
+            if len(set(ids)) != len(ids):
+                raise ApiError('Duplicate Jira global definition IDs: ' + key)
+            result[key] = values
+        return result
+
+    def project_issue_type_catalog(self, project):
+        """Return the complete project issue-type configuration, not issue samples."""
+        types = self.issue_types(project)
+        if any(not isinstance(row, dict) or row.get('id') is None or not row.get('name')
+               for row in types):
+            raise ApiError('Invalid project Issue Type definition')
+        ids = [str(row['id']) for row in types]
+        if len(set(ids)) != len(ids):
+            raise ApiError('Duplicate project Issue Type IDs')
+        return types
+
     def creation_fields(self, project, issue_type):
         query = urllib.parse.urlencode({'projectKeys':project, 'issuetypeIds':str(issue_type),
                                        'expand':'projects.issuetypes.fields'})
