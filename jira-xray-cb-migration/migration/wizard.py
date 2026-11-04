@@ -120,6 +120,10 @@ def field_analysis(jira, project, issue_type):
             observations = values.setdefault(key, [])
             if value not in observations:
                 observations.append(value)
+    # A configured field is not necessarily a field used by this Issue Type.
+    # Retain standard/system and required fields even when every issue value is empty.
+    from migration.system_fields import STANDARD, REFERENCE_CATALOGS
+    core_fields = STANDARD | {'created', 'creator', 'updated', 'updater', 'id', 'key'}
     risks = []
     visible = {}
     excluded = []
@@ -134,8 +138,9 @@ def field_analysis(jira, project, issue_type):
         else:
             field['configured'] = key in configured_ids or key in screen_fields
             field['has_value'] = any(has_value(v) for v in values.get(key, []))
-            field['default_selected'] = bool(field['configured'] or field['has_value'] or field.get('required')
-                                             or key in ('summary','description','assignee','reporter','priority','status'))
+            field['default_selected'] = bool(field['has_value'] or field.get('required') or key in core_fields)
+            field['used_in_issues'] = field['has_value']
+            field['show_by_default'] = bool(field['default_selected'] or key in REFERENCE_CATALOGS and field['has_value'])
             visible[key] = field
     if 'components' in visible:
         components = {}
@@ -150,6 +155,15 @@ def field_analysis(jira, project, issue_type):
                 components[identity] = name
         if len(set(components.values())) != len(components):
             raise ApiError('Components 이름이 같은 서로 다른 ID: Choice 옵션을 합치지 않도록 별도 검토가 필요합니다.')
+    # A Jira issue response can omit empty system fields. Surface expected core
+    # fields from metadata without inventing their schema.
+    for key in ('summary', 'description'):
+        if key not in visible and key not in excluded:
+            definition = definitions.get(key)
+            if definition:
+                visible[key] = dict(definition, visibility='unknown', configured=False,
+                                    has_value=False, used_in_issues=False,
+                                    default_selected=True, show_by_default=True)
     return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
             'configuration_status': configuration_status, 'createmeta_status': screen_status,
             'visibility_unknown': sorted(k for k, f in visible.items() if f['visibility'] == 'unknown'),
@@ -193,18 +207,38 @@ def proposals(analysis, targets, config, existing=None):
             continue
         kind, multiple = semantic_type(definition, True)
         candidates = [f for f in visible if label_tokens(source, definition) & label_tokens('', f)]
-        # Named payload bindings can identify the built-in field even when labels are localized.
+        # Built-in mappings take precedence over fuzzy label matching. The
+        # Intland Connector ID values are NOT assumed to be REST field IDs.
         builtin_key = {'summary':'name','description':'description','assignee':'assignedTo',
-                       'reporter':'submittedBy','duedate':'endDate','startdate':'startDate',
-                       'priority':'priority','status':'status'}.get(source)
-        bound = bindings.get(builtin_key, {})
-        verified = [f for f in visible if field_identifier(f) == bound.get('fieldId')
-                    and compatible(kind, multiple, f)] if bound else []
-        matching = [f for f in candidates if compatible(kind, multiple, f)]
+                       'reporter':'supervisor','duedate':'endDate','startdate':'startDate',
+                       'priority':'priority','status':'status','resolution':'resolution'}.get(source)
+        aliases = {'summary': ('name', '제목', 'title'),
+                   'description': ('description', '설명'),
+                   'assignee': ('assignedto', 'assigned to', '담당자', 'assigned'),
+                   'reporter': ('supervisor', 'reporter', 'submitter'),
+                   'created': ('submittedat', 'submitted at'),
+                   'updated': ('modifiedat', 'modified at')}
+        # Configured bindings are authoritative only when the target field
+        # exists on this Tracker and has a compatible type.
+        binding_keys = [builtin_key] if builtin_key else []
+        if source == 'reporter': binding_keys += ['submittedBy']
+        verified = [f for f in visible if any(
+                    str(field_identifier(f)) == str(bindings.get(k, {}).get('fieldId'))
+                    for k in binding_keys if bindings.get(k, {}).get('fieldId') is not None)
+                    and compatible(kind, multiple, f)]
         if len(verified) == 1:
             candidates = verified
-        elif len(matching) == 1:
-            candidates = matching
+        else:
+            # A single exact target name is stronger than multiple fuzzy label hits.
+            from mapping_helper import normalized_label
+            expected = {normalized_label(n) for n in aliases.get(source, ())}
+            exact = [f for f in visible if normalized_label(f.get('label') or f.get('name')) in expected
+                     and compatible(kind, multiple, f)]
+            matching = [f for f in candidates if compatible(kind, multiple, f)]
+            if len(exact) == 1:
+                candidates = exact
+            elif len(matching) == 1:
+                candidates = matching
         entry = {'source': source, 'status': 'manual', 'mapping_mode': None,
                  'reason': '이름 또는 타입 확인 필요', 'spec': None}
         if not kind:
