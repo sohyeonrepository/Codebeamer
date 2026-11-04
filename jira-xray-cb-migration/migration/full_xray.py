@@ -26,6 +26,8 @@ def migrate_full(engine):
         if not isinstance(relations, list) or not relations:
             raise ApiError('Configure full_xray.relationships from actual Xray membership fields; Jira issuelinks alone are insufficient')
         for relation in relations:
+            if 'issuelinks' in relation.get('path', '').split('.'):
+                raise ApiError('Jira Issue Links do not prove Xray memberships; configure a dedicated source adapter')
             if relation.get('from') not in ORDER or relation.get('to') not in ORDER or not relation.get('path') or not relation.get('identity_path'):
                 raise ApiError('Each membership adapter requires from, to, path and identity_path')
         config = dict(engine.jira.config, execution_issue_types=list(types.values()))
@@ -76,11 +78,20 @@ def migrate_full(engine):
                         context_edges.append({'source': issue['key'], 'target': target[1]['key'], 'adapter': adapter})
                     else:
                         edges.append((issue, target[1], adapter))
+        edge_ids = [(i['key'], o['key'], a.get('name', a['from'] + ':' + a['to'])) for i, o, a in edges]
+        if len(edge_ids) != len(set(edge_ids)):
+            raise ApiError('Duplicate Xray membership in source; reconcile before Import')
+        from migration.xray_run_collections import prepare_test_steps
+        test_step_plans = {}
+        for kind, _, issue in target_bundles:
+            if kind == 'test':
+                test_step_plans[issue['key']] = prepare_test_steps(engine.cb, engine.settings, issue)
         seen_runs = set()
         for kind, _, issue in bundles:
             if kind != 'execution' or execution_target:
                 continue
             context = {'id': issue['id'], 'key': issue['key'], 'fields': issue['fields'],
+                       'legacy_history':issue.get('changelog', {}), 'r4j':issue.get('_r4j', {}),
                        'relationships': [e for e in context_edges if issue['key'] in (e['source'], e['target'])]}
             issue['_executionSourceContext'] = context
             engine.state.save('source-execution-context', issue['key'], issue)
@@ -113,11 +124,19 @@ def migrate_full(engine):
                     raise ApiError('Configure Run Test Case identity path')
                 if str(read_path(data, adapter['test_issue_id_path'])) not in (str(test[1]['id']), test[1]['key']):
                     raise ApiError('Run Test Case identity path conflicts with testKey')
+                from migration.xray_run_collections import prepare
+                prepare(engine.cb, engine.settings, run)
                 report['runs'].append({'source_run_id': str(run['id']), 'test_key': data['testKey'],
                                        'execution_key': issue['key'], 'status': 'planned'})
         report['execution_relationships_preserved'] = context_edges
-        if context_edges:
+        plan_run = engine.settings.get('plan_run_adapter', {})
+        if context_edges and plan_run.get('fields'):
+            if not {'targetId','relationKind'} <= set(plan_run['fields']):
+                raise ApiError('Plan/Run adapter must map targetId and relationKind before Import')
+        if context_edges and (not plan_run.get('name') or not plan_run.get('fields')):
             report['limitations'].append({'reason': 'Execution relationships preserved; native Plan-to-Run relation write contract not configured'})
+        if context_edges and any({e['adapter']['from'],e['adapter']['to']} != {'plan','execution'} for e in context_edges):
+            report['limitations'].append({'reason':'Only source Plan/Execution memberships support the configured Plan/Run derivation'})
         # Validate every object before the first target write.
         original_write = engine.write
         try:
@@ -135,10 +154,10 @@ def migrate_full(engine):
             if report['runs']:
                 for name in ('run_lookup', 'run_create', 'run_get'):
                     engine.cb.operation(name)
-            if edges:
+            if edges or (context_edges and plan_run.get('fields')):
                 for name in ('relation_lookup', 'relation_create', 'relation_get', 'relation_update'):
                     engine.cb.operation(name)
-                if not engine.settings.get('relation_adapter', {}).get('fields'):
+                if edges and not engine.settings.get('relation_adapter', {}).get('fields'):
                     raise ApiError('Configure relation_adapter.fields before creating objects')
         for kind in ORDER:
             for current, project, issue in target_bundles:
@@ -160,7 +179,13 @@ def migrate_full(engine):
                               engine.settings['relation_adapter']['fields'])
                 record['status'] = 'verified'
         if original_write:
-            for _, _, issue in target_bundles:
+            for kind, _, issue in target_bundles:
+                if kind == 'test' and issue['key'] in test_step_plans:
+                    from migration.xray_run_collections import write_test_steps
+                    steps, files = test_step_plans[issue['key']]
+                    result = write_test_steps(engine.cb, engine.state, engine.settings, engine.jira.http,
+                                              issue, engine.state.get('item:' + str(issue['id']))[1]['id'], steps, files)
+                    report.setdefault('test_steps', []).append(result)
                 engine.children(issue, engine.state.get('item:' + str(issue['id']))[1]['id'])
             if not execution_target:
                 from migration.records import test_run
@@ -169,14 +194,38 @@ def migrate_full(engine):
                         for run in issue['_runs']:
                             result = test_run(engine.cb, engine.state, engine.settings, engine.jira.http, issue, None, run)
                             row = next(r for r in report['runs'] if r['source_run_id'] == str(run['id']))
-                            row.update(status='verified', target_id=result['id'])
+                            row.update(status='verified', target_id=result['id'],
+                                       verified_step_ids=result.get('verified_step_ids', []),
+                                       evidence_count=result.get('evidence', 0))
+                            if plan_run.get('name') and plan_run.get('fields'):
+                                plans = set()
+                                for edge in context_edges:
+                                    if edge['adapter']['from'] == 'plan' and edge['adapter']['to'] == 'execution' and edge['target'] == issue['key']:
+                                        plans.add(edge['source'])
+                                    elif edge['adapter']['from'] == 'execution' and edge['adapter']['to'] == 'plan' and edge['source'] == issue['key']:
+                                        plans.add(edge['target'])
+                                for plan_key in sorted(plans):
+                                    plan_id = engine.state.get('item:' + plan_key)[1]['id']
+                                    identity = json.dumps(['plan-run',plan_key,issue['key'],str(run['id']),plan_run['name']])
+                                    relation_id = mapped_record(engine.cb, engine.state, engine.settings, 'relation', identity,
+                                        {'targetId':result['id'],'relationKind':plan_run['name']}, {'itemId':plan_id}, plan_run['fields'])
+                                    report['relationships'].append({'source':plan_key,'target_run':str(run['id']),
+                                        'via_execution':issue['key'],'kind':plan_run['name'],'target_id':relation_id,'status':'verified'})
+
             engine.relations([(project, issue) for _, project, issue in target_bundles])
     except (ApiError, KeyError, ValueError, TypeError) as exc:
         engine.error('full-xray', exc)
+    report['source_target_map'] = [
+        {'source_id':str(issue['id']), 'source_key':issue['key'], 'kind':kind,
+         'target_id':(engine.state.get('item:' + str(issue['id'])) or (None, {}))[1].get('id')}
+        for kind, _, issue in target_bundles]
     report['counts'] = {'source_issues': len(bundles), 'target_issues': len(target_bundles), 'verified_issues': sum(r['status'] == 'verified' for r in report['issues']),
-                        'relationships': len(report['relationships'])}
+                        'relationships': len(report['relationships']),
+                        'source_runs': len(report.get('runs', [])),
+                        'verified_runs': sum(r['status'] == 'verified' for r in report.get('runs', []))}
     report['complete'] = bool(engine.write and bundles and not report['errors'] and not report['limitations']
-                              and report['counts']['target_issues'] == report['counts']['verified_issues'])
+                              and report['counts']['target_issues'] == report['counts']['verified_issues']
+                              and report['counts']['source_runs'] == report['counts']['verified_runs'])
     engine.state.save('reports', 'latest', report)
     (engine.state.root / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return report

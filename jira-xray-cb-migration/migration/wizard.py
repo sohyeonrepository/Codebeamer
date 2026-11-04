@@ -306,6 +306,10 @@ class ImportWizard:
         if resolved:
             for section in ('project_mapping', 'tracker_mapping', 'field_mapping'):
                 self.config['migration'].setdefault(section, {}).update(resolved.get(section, {}))
+        saved_xray = state.load('wizard','xray-record-mapping') or {}
+        for category in ('run','run_step','test_step'):
+            if category in saved_xray:
+                self.config['migration'].setdefault(category+'_adapter', {}).setdefault('fields', {}).update(saved_xray[category])
         saved_relations = state.load('wizard','relation-mapping')
         if saved_relations is not None:
             self.config['migration'].setdefault('wizard',{})['association_types'] = saved_relations
@@ -412,10 +416,30 @@ class ImportWizard:
             'tracker': tracker, 'new_tracker': name.strip() if tracker is None else None}
         self.state.save('wizard', 'plan', self.plan)
 
+    def map_execution_context(self, project, type_id):
+        """Select an actual project Execution type without assigning a target Tracker."""
+        if self.config['jira'].get('single_issue_key'):
+            raise ApiError('Execution context requires the full Xray dependency scope')
+        from migration.xray_review import issue_kind
+        selected = self.plan['projects'][project]
+        kind = next((t for t in selected['types'] if str(t['id']) == str(type_id)), None)
+        if not kind or issue_kind(kind, self.config['migration']) != 'execution':
+            raise ApiError('Only a project-applied Test Execution may be selected as source context')
+        if self.config['migration'].get('full_xray', {}).get('create_execution_items', False):
+            raise ApiError('Disable legacy create_execution_items before selecting source-only context')
+        self.plan['scopes'][project + ':' + str(type_id)] = {
+            'project':project, 'type':deepcopy(kind), 'project_id':selected['target'],
+            'tracker':None, 'new_tracker':None, 'source_only':True}
+        self.state.save('wizard', 'plan', self.plan)
+
     def analyze(self, scope):
         self.cb.write = False
         entry = self.plan['scopes'][scope]
         analysis = field_analysis(self.jira, entry['project'], entry['type'])
+        if entry.get('source_only'):
+            entry.update(analysis=analysis, target_fields=[], rows={}, target_risks=[])
+            self.state.save('wizard', 'plan', self.plan)
+            return entry
         tracker = entry['tracker']
         if tracker is None:
             tracker = self.config['migration'].get('wizard', {}).get('tracker_template_id')
@@ -695,6 +719,8 @@ class ImportWizard:
                 entry = self.plan['scopes'].get(scope, {})
                 if 'analysis' not in entry:
                     errors.append(scope + ': 분석 필요')
+                    continue
+                if entry.get('source_only'):
                     continue
                 if entry['analysis']['risks'] or entry.get('target_risks'):
                     errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
@@ -983,16 +1009,22 @@ class ImportWizard:
                     raise ApiError('Unmapped Issue Type in source selection')
                 missing = {f for f, v in issue['fields'].items() if f not in entry['rows']
                            and f not in SPECIAL | CONTEXT | set(entry['analysis']['managed_fields']) and has_value(v)}
-                if missing:
+                if missing and not entry.get('source_only'):
                     raise ApiError('Unmapped source values before Import: ' + ', '.join(sorted(missing)))
                 from migration.preservation import rewrite_description
                 files = issue['fields'].get('attachment', [])
                 rewrite_description(issue['fields'].get('description'), files,
                                     {str(a['id']): 'https://target.invalid/' + str(a['id']) for a in files})
-                runs[issue['key']] = xray.runs(issue, run_field)
+                from migration.xray_review import issue_kind
+                collect_runs = settings.get('mode') != 'full-xray' or issue_kind(issue['fields']['issuetype'], settings) == 'execution'
+                runs[issue['key']] = xray.runs(issue, run_field) if collect_runs else []
                 if config['jira'].get('single_issue_key') and runs[issue['key']]:
                     raise ApiError('Single-Issue live test cannot write Xray Runs into a separately configured Tracker; dedicated Run/dependency scope is required')
                 bundles[issue['key']] = issue
+        from migration.xray_run_collections import prepare
+        for source_runs in runs.values():
+            for source_run in source_runs:
+                prepare(self.cb, settings, source_run)
         from migration.relation_mapping import issue_references, verify_reference
         identities={identity:issue for issue in bundles.values() for identity in (str(issue['id']),issue['key'])}
         for issue in bundles.values():

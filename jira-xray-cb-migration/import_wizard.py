@@ -146,10 +146,17 @@ def launch(wizard, initial_projects=None):
     ttk.Button(top, text='Priority / Status / Resolution 정의',
                command=lambda: run('전체 정의 조회', show_global_definitions)).grid(row=2, column=1, pady=8)
     def map_tracker():
-        if not types.selection() or tracker_box.current() < 0:
-            raise ValueError('Issue Type과 Tracker를 선택하세요.')
+        if not types.selection():
+            raise ValueError('Issue Type을 선택하세요.')
         iid = types.selection()[0]
         project, kind = type_rows[iid]
+        if issue_kind(kind, wizard.config['migration']) == 'execution' and not wizard.config['migration'].get('full_xray', {}).get('create_execution_items', False):
+            wizard.map_execution_context(project, kind['id'])
+            types.set(iid, 'tracker', '원본 맥락 보존 · 대상 Tracker 없음')
+            scopes.configure(values=list(wizard.plan['scopes']))
+            return
+        if tracker_box.current() < 0:
+            raise ValueError('대상 Tracker를 선택하세요.')
         trackers = wizard.plan['projects'][project]['trackers']
         index = tracker_box.current()
         tracker = trackers[index]['id'] if index < len(trackers) else None
@@ -162,7 +169,11 @@ def launch(wizard, initial_projects=None):
     def selected_type_changed(event=None):
         selected = types.selection()
         allowed = bool(selected and type_rows[selected[0]][1].get('project_available'))
-        map_button.configure(state='normal' if allowed else 'disabled')
+        context = bool(allowed and issue_kind(type_rows[selected[0]][1],wizard.config['migration'])=='execution'
+                       and not wizard.config['migration'].get('full_xray',{}).get('create_execution_items',False))
+        map_button.configure(state='normal' if allowed else 'disabled',
+            text='원본 실행 맥락 선택 (Tracker 생성 없음)' if context else '이 Issue Type의 Tracker 매핑 저장')
+        tracker_box.configure(state='disabled' if context else 'readonly')
     types.bind('<<TreeviewSelect>>', selected_type_changed)
 
     style=ttk.Style(root)
@@ -179,19 +190,53 @@ def launch(wizard, initial_projects=None):
     xray_tab=ttk.Frame(mapping_tabs,padding=8)
     mapping_tabs.add(xray_tab,text='Xray 관계 / 실행 결과 검수')
     ttk.Label(xray_tab,text='Issue는 Key로, Test Run은 별도 숫자 Run ID로 조회합니다. 집계 PASS/FAIL은 개별 Run이 아닙니다.',wraplength=950).pack(anchor='w')
-    xray_kind=ttk.Combobox(xray_tab,state='readonly',values=list(TITLES),width=20)
-    xray_kind.pack(anchor='w');xray_kind.set('test')
+    xray_kind=ttk.Combobox(xray_tab,state='readonly',values=list(TITLES.values()),width=42)
+    xray_kind.pack(anchor='w');xray_kind.set(TITLES['test'])
     ttk.Label(xray_tab,text='원본 Issue Key 또는 Run ID').pack(anchor='w')
     xray_identifier=ttk.Entry(xray_tab,width=40);xray_identifier.pack(anchor='w')
-    xray_output=tk.Text(xray_tab,width=100,height=22);xray_output.pack(fill='both',expand=True)
+    xray_output=tk.Text(xray_tab,width=100,height=12);xray_output.pack(fill='both',expand=True)
+    xray_mapping_rows={}
+    xray_map=ttk.Treeview(xray_tab,columns=('category','source','target','conversion'),show='headings',height=6)
+    for column,label in [('category','양식'),('source','원본 필드'),('target','검증된 대상 속성'),('conversion','값 변환')]:
+        xray_map.heading(column,text=label)
+    xray_map.pack(fill='x')
+    def refresh_xray_mapping(report):
+        from migration.xray_mapping import mapping_rows
+        xray_map.delete(*xray_map.get_children());xray_mapping_rows.clear()
+        for index,row in enumerate(mapping_rows(report,wizard.config['migration'])):
+            key='xray-map-'+str(index);xray_mapping_rows[key]=row
+            xray_map.insert('','end',iid=key,values=(row['category'],row['source'],row['spec'].get('target',''),row['spec'].get('type','')))
+    def edit_xray_mapping():
+        from migration.xray_mapping import writable_properties, save_field, CONVERTERS
+        if not xray_map.selection():raise ApiError('조회된 Xray 매핑 행을 선택하세요.')
+        key=xray_map.selection()[0];row=xray_mapping_rows[key]
+        properties=writable_properties(wizard.cb,row['category'])
+        dialog=tk.Toplevel(root);dialog.title(row['category']+' · '+row['source'])
+        ttk.Label(dialog,text='생성 요청 스키마로 확인한 대상 속성 · 저장은 계획만 변경합니다.').pack(anchor='w')
+        target=ttk.Combobox(dialog,state='readonly',values=list(properties),width=45);target.pack(fill='x')
+        target.set(row['spec'].get('target',''))
+        conversion=ttk.Combobox(dialog,state='readonly',values=CONVERTERS);conversion.pack(fill='x')
+        conversion.set(row['spec'].get('type','raw'))
+        ttk.Label(dialog,text='원본 ID → 대상 값 매핑 JSON (User / Choice / Reference)').pack(anchor='w')
+        values=tk.Text(dialog,width=65,height=7);values.pack(fill='both',expand=True)
+        values.insert('1.0',json.dumps(row['spec'].get('value_mapping',{}),ensure_ascii=False,indent=2))
+        def save():
+            spec=save_field(wizard,row['category'],row['source'],target.get(),conversion.get(),
+                            json.loads(values.get('1.0','end')),row['samples'])
+            row['spec']=spec
+            xray_map.item(key,values=(row['category'],row['source'],spec['target'],spec['type']))
+            dialog.destroy()
+        ttk.Button(dialog,text='매핑 계획 저장',command=lambda:run('Xray 매핑 저장',save)).pack(anchor='e')
+    ttk.Button(xray_tab,text='선택한 Run / Step 매핑 변경',command=lambda:run('Xray 매핑',edit_xray_mapping)).pack(anchor='w')
     def inspect_xray_source():
         from clients.xray_client import XrayClient
         identifier=xray_identifier.get().strip()
         if not identifier:raise ApiError('원본 Key/Run ID를 입력하세요.')
         report=collect_review(wizard.jira,XrayClient(wizard.jira.http,wizard.jira.config,wizard.state.save),
-                              identifier,xray_kind.get(),wizard.config['migration'])
+                              identifier,next(k for k,v in TITLES.items() if v==xray_kind.get()),wizard.config['migration'])
         xray_output.delete('1.0','end')
         xray_output.insert('end',json.dumps(report,ensure_ascii=False,indent=2))
+        refresh_xray_mapping(report)
     ttk.Button(xray_tab,text='원본 전용 API 조회 · 쓰기 없음',
                command=lambda:run('Xray 원본 검수',inspect_xray_source)).pack(anchor='w')
 
@@ -244,6 +289,8 @@ def launch(wizard, initial_projects=None):
     warning=tk.StringVar()
     ttk.Label(step3,textvariable=warning,foreground='#ad5b00',wraplength=1050).pack(anchor='w')
     def scope_names(entry):
+        if entry.get('source_only'):
+            return entry['type']['name'] + ' → 원본 맥락 보존 (CB Tracker 생성 없음)'
         tracker=entry.get('new_tracker')
         if not tracker:
             tracker=next((t.get('name',str(t['id'])) for t in wizard.plan['projects'][entry['project']]['trackers']
@@ -255,7 +302,7 @@ def launch(wizard, initial_projects=None):
         entry = wizard.plan['scopes'][scopes.get()]
         category=issue_kind(entry['type'],wizard.config['migration'])
         scope_title.set((TITLES.get(category,'Jira Issue')+' · ')+scope_names(entry))
-        if category:xray_kind.set(category)
+        if category:xray_kind.set(TITLES[category])
         scope_rows.clear(); table.delete(*table.get_children())
         query=search.get().strip().casefold()
         for index,(source,row) in enumerate(entry.get('rows',{}).items()):
@@ -278,6 +325,10 @@ def launch(wizard, initial_projects=None):
             iid='field-'+str(index);scope_rows[iid]=source
             kind,multiple=semantic_type(definition,True)
             table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,field_group(source,definition),str(kind)+(' / Multi' if multiple else ''),left or row.get('reason','검증 필요'),len(row.get('creation',{}).get('choices',{}))))
+        if entry.get('source_only'):
+            detail.set('Test Execution의 모든 원본 필드·환경·관계는 Run 맥락으로 보존합니다. 일반 필드 생성/매핑 대상이 아닙니다.')
+            warning.set('Xray 관계 / 실행 결과 검수에서 개별 Run ID와 결과를 확인하세요.')
+            return
         risks=entry['analysis']['risks']+entry.get('target_risks',[])
         api_warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(entry.get('tracker') or entry.get('template_tracker')),{}).get('warnings',[])
         detail.set(str(sum(r.get('selected',True) for r in entry['rows'].values()))+' / '+str(len(entry['rows']))+' 선택 · 조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Comment · Attachment · History는 별도 보존/검증 · Xray 관계/Run은 별도 검수')

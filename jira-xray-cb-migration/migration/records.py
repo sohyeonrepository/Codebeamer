@@ -54,6 +54,8 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
     if not adapter:
         raise ApiError('Missing run_adapter: Test Run schemas must be verified from actual APIs')
     tracker_id = run_tracker_id(settings)
+    from migration.xray_run_collections import prepare, write_steps
+    collection_steps, collection_files = prepare(cb, settings, run)
     for category, records in [('comment', issue.get('_comments', [])), ('worklog', issue.get('_worklogs', []))]:
         if records and not settings.get(category + '_adapter', {}).get('fields'):
             raise ApiError('Execution ' + category + ' records were collected; configure target adapter before creating a Run')
@@ -95,6 +97,7 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
                             (issue, run.get('field_definitions', []), adapter) if adapter.get('reference_mode') == 'field-values' else None)
     else:
         run_id = mapped_record(cb, state, settings, 'run', run['id'], source, parameters, adapter['fields'])
+    verified_steps = write_steps(cb, state, settings, run, run_id, collection_steps)
     evidence_count = 0
     documents = [data]
     if settings.get('history_replay'):
@@ -120,6 +123,15 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
             seen_files[identity] = metadata
             transfer(source_http, cb, state, 'run:' + run['id'], run_id, metadata)
             evidence_count += 1
+    for metadata in collection_files:
+        identity = str(metadata['id'])
+        if identity in seen_files:
+            if seen_files[identity] != metadata:
+                raise ApiError('Separate Run evidence conflicts with embedded metadata')
+            continue
+        seen_files[identity] = metadata
+        transfer(source_http, cb, state, 'run:' + run['id'], run_id, metadata)
+        evidence_count += 1
     if explicit and not adapter.get('evidence_inventory_verified', False):
         raise ApiError('Explicit attachment paths require a verified complete inventory')
     if not run.get('events_complete') and not adapter.get('activity_inventory_verified', False):
@@ -133,7 +145,8 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
         for record in records:
             mapped_record(cb, state, settings, category, 'run:' + run['id'] + ':execution:' + str(issue['id']) + ':' + str(record['id']),
                           record, {'itemId': run_id}, settings[category + '_adapter']['fields'])
-    return {'id': run_id, 'evidence': evidence_count, 'execution_attachments': execution_attachment_count}
+    return {'id': run_id, 'evidence': evidence_count, 'execution_attachments': execution_attachment_count,
+            'verified_step_ids': verified_steps}
 
 
 def run_tracker_id(settings):
