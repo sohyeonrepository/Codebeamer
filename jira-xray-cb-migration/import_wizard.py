@@ -373,11 +373,21 @@ def launch(wizard, initial_projects=None):
         if source_kind in type_names:type_box.set(source_kind)
         multiple=tk.BooleanVar(value=bool(source_multiple))
         ttk.Checkbutton(body,text='다중 선택',variable=multiple,state='disabled').grid(row=3,column=1,sticky='w')
-        ttk.Label(body,text='선택 옵션 (한 줄에 하나)').grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
+        # Show Choice options ONLY for selectable source types. Standard
+        # Summary/Description/Assignee/Date do not require choice options.
+        option_label=ttk.Label(body,text='선택 옵션 (Choice/Status 전용, 한 줄에 하나)')
         options=tk.Text(body,width=48,height=7)
         initial=list(dict.fromkeys(row.get('creation',{}).get('choices',{}).values()))
-        options.insert('1.0','\n'.join(initial));options.grid(row=5,column=0,columnspan=2,sticky='nsew')
-        if source_kind not in ('option','status'):options.configure(state='disabled')
+        options.insert('1.0','\n'.join(initial))
+        if source_kind in ('option','status'):
+            option_label.grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
+            options.grid(row=5,column=0,columnspan=2,sticky='nsew')
+        else:
+            options.configure(state='disabled')
+            ttk.Label(body,text='이 Jira 필드는 선택 옵션 입력이 필요하지 않습니다. '+
+                ('사용자 ID 매핑은 기존 필드 연결 및 사용자 검증 단계에서 확인합니다.' if source_kind=='user'
+                 else '기존 대상 필드가 있으면 신규 생성 대신 필드 연결을 사용하세요.'),
+                wraplength=430).grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
         if any(not profile.get('binding') for profile in profiles.values()):
             ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
