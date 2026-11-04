@@ -57,6 +57,18 @@ class JiraFieldSemanticTests(unittest.TestCase):
             with self.subTest(schema=schema):
                 self.assertEqual(semantic_type(source(schema), True), expected)
 
+    def test_checklist_addon_is_not_mistaken_for_generic_choice(self):
+        # Real CB Jira Connector supports plugin-based field import.
+        # Nonempty allowedValues on a Checklist add-on is NOT a generic Choice.
+        checklist = source({
+            "type": "array", "items": "string",
+            "custom": "com.okapya.jira.checklist:checklist",
+        }, [{"id": "1", "name": "Do something"}])
+        kind, multiple, evidence = jira_field_semantics(checklist)
+        self.assertIsNone(kind)
+        self.assertTrue(multiple)
+        self.assertIn("Checklist", evidence)
+
     def test_unknown_type_is_not_assigned_arbitrarily(self):
         kind, multi, explanation = jira_field_semantics(source({"type": "array", "items": "unknown"}))
         self.assertIsNone(kind)
