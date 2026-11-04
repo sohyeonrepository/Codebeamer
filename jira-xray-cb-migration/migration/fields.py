@@ -30,6 +30,26 @@ def convert(value, kind, mapping, identity_key=None):
                     return str(value[key])
             return json.dumps(value, ensure_ascii=False, sort_keys=True)
         raise ApiError('Unsupported source for explicit Text conversion')
+    if kind == 'parse_number':
+        from decimal import Decimal, InvalidOperation
+        if isinstance(value, bool):
+            raise ApiError('Boolean cannot be converted to Number')
+        try:
+            parsed = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError, TypeError):
+            raise ApiError('Jira value is not a valid number')
+        if not parsed.is_finite():
+            raise ApiError('Non-finite number is not supported')
+        return int(parsed) if parsed == parsed.to_integral_value() else float(parsed)
+    if kind == 'parse_boolean':
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            if value.strip().casefold() in ('true', 'yes', 'y', '1'):
+                return True
+            if value.strip().casefold() in ('false', 'no', 'n', '0'):
+                return False
+        raise ApiError('Jira text cannot be converted safely to Boolean')
     if kind == 'text':
         if not isinstance(value, str):
             raise ApiError('Non-text source requires explicit conversion')
