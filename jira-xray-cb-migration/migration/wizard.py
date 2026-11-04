@@ -893,17 +893,20 @@ class ImportWizard:
             if entry['analysis']['risks'] or entry.get('target_risks'):
                 errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
             for source, row in entry['rows'].items():
-                    if not row.get('selected',True):continue
-                    spec=row.get('spec') or {}
-                    if spec.get('missing_definition') or spec.get('selection_unverified'):
-                        errors.append(scope+':'+source+': 선택한 Field ID '+str(spec.get('field_id'))+' 상세 정의 미확인: '+str(spec.get('missing_definition',spec.get('selection_unverified'))))
-                    if row.get('target', {}).get('visibility_unknown'):
-                        errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
-                    if row['status'] not in ('mapped', 'create'):
-                        errors.append(scope + ':' + source + ': ' + row['reason'])
-                keys = [row['spec']['target'] for row in entry['rows'].values() if row.get('spec') and row.get('selected',True)]
-                if len(keys) != len(set(keys)):
-                    errors.append(scope + ': 중복 대상 payload 키')
+                if not row.get('selected', True):
+                    continue
+                spec = row.get('spec') or {}
+                if spec.get('missing_definition') or spec.get('selection_unverified'):
+                    errors.append(scope+':'+source+': 선택한 Field ID '+str(spec.get('field_id'))+
+                                  ' 상세 정의 미확인: '+str(spec.get('missing_definition',spec.get('selection_unverified'))))
+                if row.get('target', {}).get('visibility_unknown'):
+                    errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
+                if row['status'] not in ('mapped', 'create'):
+                    errors.append(scope + ':' + source + ': ' + row['reason'])
+            keys = [row['spec']['target'] for row in entry['rows'].values()
+                    if row.get('spec') and row.get('selected', True)]
+            if len(keys) != len(set(keys)):
+                errors.append(scope + ': 중복 대상 payload 키')
         return errors
 
     def create_field(self, scope, source, row, tracker):
