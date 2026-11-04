@@ -40,14 +40,24 @@ def convert(value, kind, mapping, identity_key=None):
         if isinstance(value, list):
             return [convert(v, kind, mapping, identity_key) for v in value]
         if isinstance(value, dict):
-            if kind in ('option', 'status'):
-                source_key = value.get('id', value.get('value', value.get('name')))
+            if identity_key:
+                identifiers = [value.get(identity_key)]
+            elif kind == 'user':
+                identifiers = [value.get(k) for k in ('accountId', 'id', 'name', 'displayName')]
+            elif kind in ('option', 'status'):
+                # Legacy mappings use display names, newer mappings may use ID.
+                identifiers = [value.get(k) for k in ('name', 'value', 'id')]
             else:
-                source_key = value.get('accountId', value.get('name', value.get('id')))
-            identity = str(source_key)
-        else:
-            identity = str(value)
-        if identity_key and isinstance(value,dict): identity = str(value.get(identity_key))
+                identifiers = [value.get(k) for k in ('id', 'key', 'name')]
+            matches = [(str(i), mapping[str(i)]) for i in identifiers
+                       if i is not None and str(i) in mapping]
+            if not matches:
+                raise ApiError('Missing ' + kind + ' mapping for source identifiers')
+            # Multiple aliases with conflicting targets cannot be resolved safely.
+            if any(mapped != matches[0][1] for _, mapped in matches[1:]):
+                raise ApiError('Conflicting ' + kind + ' mapping aliases for one source value')
+            return matches[0][1]
+        identity = str(value)
         if identity not in mapping:
             raise ApiError('Missing ' + kind + ' mapping: ' + identity)
         return mapping[identity]
