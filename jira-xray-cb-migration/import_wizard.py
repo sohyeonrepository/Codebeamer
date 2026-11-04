@@ -84,13 +84,15 @@ def launch(wizard, initial_projects=None):
         evidence.delete('1.0', 'end')
         evidence.insert('end', json.dumps(report or wizard.plan['stages'], ensure_ascii=False, indent=2))
     ttk.Label(step2, text='프로젝트 연결', style='WizardTitle.TLabel').pack(anchor='w',pady=(0,8))
+    ttk.Label(step2, text='Jira 프로젝트와 기존 Codebeamer 프로젝트를 선택해 먼저 연결합니다.',style='WizardSub.TLabel').pack(anchor='w',pady=(0,8))
     top = ttk.Frame(step2); top.pack(fill='x')
     jira_box = ttk.Combobox(top, state='readonly', width=35)
     cb_box = ttk.Combobox(top, state='readonly', width=45)
     ttk.Label(top, text='Jira 프로젝트').grid(row=0, column=0, sticky='w')
     ttk.Label(top, text='기존 Codebeamer 프로젝트').grid(row=0, column=1, sticky='w')
     jira_box.grid(row=1, column=0, padx=(0,12)); cb_box.grid(row=1, column=1)
-    ttk.Label(step2, text='Tracker 연결 · 선택한 Jira Issue Type → Codebeamer Tracker',style='WizardSub.TLabel').pack(anchor='w',pady=(14,0))
+    ttk.Label(step2, text='Tracker 연결',style='WizardTitle.TLabel').pack(anchor='w',pady=(14,0))
+    ttk.Label(step2, text='선택한 Jira Issue Type별로 대상 Tracker를 지정하세요.',style='WizardSub.TLabel').pack(anchor='w',pady=(2,4))
     types = ttk.Treeview(step2, columns=('id','kind','availability','tracker'), show='tree headings', selectmode='browse')
     types.heading('#0', text='Jira Issue Type 전체 목록')
     for column, label in [('id','Issue Type ID'),('kind','Regular / Sub-task'),('availability','프로젝트 적용')]:
@@ -132,7 +134,7 @@ def launch(wizard, initial_projects=None):
         scopes.configure(values=[]); scopes.set(''); table.delete(*table.get_children())
     catalog_notice = tk.StringVar()
     ttk.Label(step2, textvariable=catalog_notice, foreground='#aa5700').pack(anchor='w')
-    ttk.Button(top, text='Issue Type / Tracker 조회', command=lambda: run('유형·Tracker 조회', select_project)).grid(row=2, column=0, pady=8)
+    ttk.Button(top, text='프로젝트 연결', command=lambda: run('프로젝트 연결', select_project)).grid(row=2, column=0, pady=8)
     def show_global_definitions():
         window = tk.Toplevel(root)
         window.title('Jira 전체 정의 — 프로젝트별 사용 가능 여부와 별개')
@@ -165,7 +167,7 @@ def launch(wizard, initial_projects=None):
         wizard.map_tracker(project, kind['id'], tracker, new_name.get())
         types.set(iid, 'tracker', tracker_box.get() if tracker else '신규: ' + new_name.get())
         scopes.configure(values=list(wizard.plan['scopes']))
-    map_button = ttk.Button(step2, text='Tracker 연결 저장',
+    map_button = ttk.Button(step2, text='Tracker 연결',
                             command=lambda: run('Tracker 매핑 저장', map_tracker), state='disabled')
     map_button.pack(anchor='w', pady=8)
     def selected_type_changed(event=None):
@@ -245,7 +247,7 @@ def launch(wizard, initial_projects=None):
     mapping_tabs.add(association_tab,text='관계 매핑')
     title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
     ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
-    ttk.Label(title,text='Jira 필드를 가져와 기존 Codebeamer 필드에 연결합니다. 대상 셀 클릭: 추천 필드 / 무시 / 신규 필드 생성.',style='WizardSub.TLabel').pack(anchor='w')
+    ttk.Label(title,text='Jira에서 사용 중인 필드를 가져와 기존 Codebeamer 필드와 비교합니다. 대상 셀 클릭: 추천 필드 / 무시 / 신규 생성. Xray 관계는 별도 관계 탭에서 연결합니다.',style='WizardSub.TLabel',wraplength=1050).pack(anchor='w')
     target_bar=ttk.LabelFrame(step3,text='대상 조합',padding=8);target_bar.pack(fill='x')
     scopes = ttk.Combobox(target_bar, state='readonly', width=42)
     scopes.pack(side='left',padx=(0,8))
@@ -259,7 +261,7 @@ def launch(wizard, initial_projects=None):
         scopes.configure(values=[scope]);scopes.set(scope)
         table.delete(*table.get_children())
     ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
-    ttk.Button(target_bar,text='선택 조합 분석',command=lambda:run('필드 분석',analyze)).pack(side='right')
+    ttk.Button(target_bar,text='데이터 가져오기 (GET)',command=lambda:run('Jira 사용 필드 가져오기',analyze)).pack(side='right')
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
     selected_only=tk.BooleanVar(value=True)
     ttk.Checkbutton(tools,text='선택 항목만 보기',variable=selected_only,command=lambda:display_scope()).pack(side='left')
@@ -279,7 +281,7 @@ def launch(wizard, initial_projects=None):
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
     table = ttk.Treeview(table_frame, columns=('selected','jira','group','kind','cb','options'),show='headings',selectmode='browse')
-    for column,text,width in (('selected','선택',55),('jira','Jira 필드',260),('group','처리 구분',120),('kind','Jira 타입',120),('cb','Codebeamer 필드 ▾ (클릭하여 변경)',380),('options','옵션 수',70)):
+    for column,text,width in (('selected','선택',55),('jira','Jira 필드',260),('group','처리 구분',120),('kind','Jira 타입',120),('cb','Codebeamer 필드 (추천/무시/생성 ▾)',380),('options','옵션 수',70)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
     table.configure(yscrollcommand=scrollbar.set)
@@ -542,10 +544,10 @@ def launch(wizard, initial_projects=None):
         candidates = wizard.mapping_candidates(scopes.get(),source)
         fields = [c['field'] for c in candidates]
         labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
-        labels = [('추천 · ' if not c['reason'] else '확인 · ')+label+
+        labels = [('추천 필드 · ' if not c['reason'] else '확인 필요 · ')+label+
                   (' — '+c['reason'] if c['reason'] else '')
                   for label,c in zip(labels,candidates)]
-        labels.extend(['⊘ 이 필드 무시 (Import 제외)','＋ 신규 필드 생성'])
+        labels.extend(['⊘ 필드 무시 (Import 제외)','＋ 신규 필드 생성'])
         if not labels:
             detail.set('호환 후보 없음: Jira '+str(kind)+' / 다중 선택 '+str(multiple)+
                        '; CB 타입·valueModel·다중 선택 정보 또는 Hidden 여부를 확인하세요.')
@@ -827,7 +829,7 @@ def launch_connected(config, state):
         ('Codebeamer 서버 URL','cb_url',config.get('codebeamer',{}).get('url',''),False),
         ('Codebeamer 아이디','cb_user','',False),
         ('Codebeamer 비밀번호','cb_password','',True),
-        ('Swagger URL (JSON 또는 editor.spr, 비우면 자동 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url',''),False))
+        ('Swagger URL (선택 사항, 비우면 자동 탐색)','swagger',config.get('codebeamer',{}).get('swagger_url',''),False))
     for index,(label,key,initial,secret) in enumerate(rows):
         ttk.Label(form,text=label).grid(row=index,column=0,sticky='w',pady=7,padx=(0,12))
         values[key]=tk.StringVar(value=initial)
