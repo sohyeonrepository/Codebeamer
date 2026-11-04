@@ -341,7 +341,7 @@ def suggest_values(samples, options, identity_key=None):
         if source is None:
             continue
         if isinstance(source, dict):
-            identity = str(source.get(identity_key)) if identity_key else str(source.get('accountId', source.get('name', source.get('id'))))
+            identity = str(source.get(identity_key)) if identity_key else str(source.get('accountId', source.get('id', source.get('value', source.get('name')))))
             label = source.get('name', source.get('value', source.get('displayName', '')))
         else:
             identity, label = str(source), str(source)
@@ -514,7 +514,7 @@ def source_choices(samples, identity_key=None):
             if value is None:
                 continue
             if isinstance(value, dict):
-                identity = value.get(identity_key) if identity_key else value.get('accountId', value.get('name', value.get('id')))
+                identity = value.get(identity_key) if identity_key else value.get('accountId', value.get('id', value.get('value', value.get('name'))))
                 label = value.get('name', value.get('value', value.get('displayName', identity)))
             else:
                 identity, label = value, value
