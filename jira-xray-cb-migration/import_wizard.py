@@ -335,7 +335,7 @@ def launch(wizard, initial_projects=None):
         type_names=list(profiles)
         type_box=ttk.Combobox(body,state='readonly',values=type_names,width=35);type_box.grid(row=2,column=1,sticky='ew',pady=5)
         if source_kind in type_names:type_box.set(source_kind)
-        multiple=tk.BooleanVar(value=bool(source_multiple))
+        multiple=tk.BooleanVar(value=bool(False if source_kind == 'text' and source_multiple else source_multiple))
         ttk.Checkbutton(body,text='다중 선택',variable=multiple,state='disabled').grid(row=3,column=1,sticky='w')
         ttk.Label(body,text='선택 옵션 (한 줄에 하나)').grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
         options=tk.Text(body,width=48,height=7)
