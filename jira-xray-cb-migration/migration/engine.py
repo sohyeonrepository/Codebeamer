@@ -103,6 +103,10 @@ class Engine:
             for spec in mapping.values():
                 if spec.get('binding'):
                     self.cb.config.setdefault('field_bindings', {})[spec['target']] = spec['binding']
+        from migration.system_fields import verify_reference_values
+        for spec in mapping.values():
+            if spec.get('reference_tracker_id'):
+                verify_reference_values(self.cb, spec)
         record = {'key': key, 'planned_fields': len(mapping), 'comments': len(issue['_comments']),
                   'worklogs': len(issue['_worklogs']), 'runs': len(issue['_runs']), 'status': 'planned'}
         self.report['issues'].append(record)

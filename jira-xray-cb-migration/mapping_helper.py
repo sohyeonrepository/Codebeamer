@@ -323,6 +323,7 @@ ALIASES = {
     '설명': 'description', '우선순위': 'priority', 'namedpriority': 'priority',
     '상태': 'status', '결과': 'result', 'resolutions': 'result',
     'assignee': 'assignedto', '담당자': 'assignedto',
+    'duedate': 'enddate', 'startdate': 'startdate', 'resolution': 'resolution',
     'reporter': 'submitter', 'submittedby': 'submitter',
     'created': 'submittedat', 'updated': 'modifiedat',
     'executedby': 'runby', 'finishedon': 'closedat', 'completedat': 'closedat',

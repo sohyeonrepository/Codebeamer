@@ -9,7 +9,7 @@ from migration.engine import Engine
 from mapping_helper import (field_identifier, label_tokens, build_spec, suggest_values,
                             source_choices)
 
-SPECIAL = {'attachment', 'comment', 'issuelinks', 'worklog'}
+SPECIAL = {'attachment', 'comment', 'issuelinks', 'worklog', 'changelog'}
 CONTEXT = {'issuetype', 'project'}
 
 
@@ -23,7 +23,7 @@ def managed_fields(definitions, configured=None):
         result.add(configured)
     for field in definitions:
         custom = field.get('schema', {}).get('custom', '').casefold()
-        if 'raven' in custom and 'testexec' in custom:
+        if 'raven' in custom and any(token in custom for token in ('testexec', 'testset', 'testplan', 'testrun')):
             result.add(field['id'])
     return result
 
@@ -169,10 +169,51 @@ def proposals(analysis, targets, config, existing=None):
     result = {}
     claimed = {str(s.get('field_id')) for s in existing.values()}
     for source, definition in analysis['fields'].items():
+        from migration.system_fields import field_policy
+        policy = field_policy(source, definition)
+        if policy in ('dedicated', 'relationship'):
+            continue
         kind, multiple = semantic_type(definition, True)
         candidates = [f for f in visible if label_tokens(source, definition) & label_tokens('', f)]
+        # Named payload bindings can identify the built-in field even when labels are localized.
+        builtin_key = {'summary':'name','description':'description','assignee':'assignedTo',
+                       'reporter':'submittedBy','duedate':'endDate','startdate':'startDate',
+                       'priority':'priority','status':'status'}.get(source)
+        bound = bindings.get(builtin_key, {})
+        verified = [f for f in visible if field_identifier(f) == bound.get('fieldId')
+                    and compatible(kind, multiple, f)] if bound else []
+        matching = [f for f in candidates if compatible(kind, multiple, f)]
+        if len(verified) == 1:
+            candidates = verified
+        elif len(matching) == 1:
+            candidates = matching
         entry = {'source': source, 'status': 'manual', 'mapping_mode': None,
                  'reason': '이름 또는 타입 확인 필요', 'spec': None}
+        if not kind:
+            entry['reason'] = 'Jira 원본 필드 타입 미확인: schema.type/items/custom 확인 필요'
+        elif not candidates:
+            preferred = {'summary': 'Name (Text)', 'description': 'Description (Text/WikiText)',
+                         'assignee': 'Assigned to (User/Members)'}.get(source)
+            entry['reason'] = ('대상 기본 필드 조회 안 됨: ' + preferred if preferred
+                               else '동일 이름/별칭 대상 필드 없음')
+        elif len(candidates) == 1 and not compatible(kind, multiple, candidates[0]):
+            target_kind, target_multiple = semantic_type(candidates[0])
+            entry['reason'] = ('대상 필드 타입/다중 여부 불일치: Jira '+
+                               str((kind, multiple))+' → Codebeamer '+
+                               str((target_kind, target_multiple)))
+        elif len(candidates) > 1:
+            entry['reason'] = '동일 이름 또는 별칭의 대상 후보가 여러 개: 명시적으로 선택 필요'
+        profile = config['migration'].get('catalog_reference_mapping', {}).get(source)
+        if profile:
+            from migration.system_fields import catalog_reference_spec
+            try:
+                target = next(f for f in targets if field_identifier(f) == profile.get('field_id'))
+                spec = catalog_reference_spec(source, definition, analysis['values'].get(source, []), target, profile)
+                entry.update(status='mapped', mapping_mode='manual', spec=spec, target=target, reason='명시적 원본 ID → Reference 매핑; Import 전 대상 조회 검증')
+            except (ApiError, ValueError, KeyError, StopIteration) as exc:
+                entry['reason'] = str(exc) or 'Reference 대상 필드 없음'
+            result[source] = entry
+            continue
         if source in existing:
             candidate = next((f for f in targets if str(field_identifier(f)) == str(existing[source]['field_id'])), None)
             spec=deepcopy(existing[source])
@@ -203,7 +244,7 @@ def proposals(analysis, targets, config, existing=None):
                 if kind in ('option', 'status') and unmatched:
                     raise ValueError('대상에 없는 원본 Choice 값: 수동 매핑 또는 선택지 준비 필요')
                 converter = text_conversion(kind, multiple, target)
-                spec = build_spec(source, target, converter, key, mapping)
+                spec = build_spec(source, target, converter, key, mapping, existing=not any(has_value(v) for v in analysis['values'].get(source, [])))
                 if source == 'components': spec['source_identity'] = 'id'
                 from migration.fields import convert
                 for v in analysis['values'].get(source, []):
@@ -215,13 +256,20 @@ def proposals(analysis, targets, config, existing=None):
             except (ValueError, ApiError, TypeError) as exc:
                 entry.update(target=target, reason=str(exc))
         elif not candidates:
+            if source in ('summary', 'description', 'assignee', 'reporter', 'priority', 'status'):
+                entry['reason'] = '기존 CB 기본 필드 확인 필요: ' + source
+                result[source] = entry
+                continue
             if kind is None or (multiple and kind not in ('text', 'option', 'status', 'user')):
                 entry.update(status='error', reason='지원하지 않는 원본 타입: 자동 변환하지 않음')
             else:
-                choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])), 'id' if source == 'components' else None)
+                choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])), 'id' if source in ('components','versions','fixVersions') else None) if kind in ('option','status') else {}
                 entry.update(status='create', mapping_mode='create', reason='Import 승인 후 생성', creation={
                     'label': definition.get('name', source), 'semantic_type': kind,
                     'multipleSelection': target_multiple_for(kind, multiple), 'choices': choices})
+        if entry.get('spec'):
+            entry['spec']['source_field_id'] = source
+        entry['field_policy'] = policy
         result[source] = entry
     # Do not let loop order choose the winner of an ambiguous many-to-one match.
     owners = {}
@@ -862,6 +910,12 @@ class ImportWizard:
                           and str(execution_type) in (str(entry['type']['id']), entry['type']['name'])}
         if context_scopes and self.config['migration'].get('mode') != 'full-xray':
             raise ApiError('Source-only Test Execution requires full-xray mode and verified Run context mapping; no target write attempted')
+        from migration.system_fields import verify_reference_values
+        for entry in self.plan['scopes'].values():
+            for row in entry.get('rows', {}).values():
+                spec = row.get('spec') or {}
+                if row.get('selected', True) and spec.get('reference_tracker_id'):
+                    verify_reference_values(self.cb, spec)
         self.ensure_write_contracts()
         errors = self.errors()
         if self.config['jira'].get('single_issue_key') and (len(self.plan['scopes']) != 1 or len(self.plan['projects']) != 1):
