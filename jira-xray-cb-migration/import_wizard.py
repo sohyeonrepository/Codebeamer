@@ -83,12 +83,14 @@ def launch(wizard, initial_projects=None):
     def show_evidence(report=None):
         evidence.delete('1.0', 'end')
         evidence.insert('end', json.dumps(report or wizard.plan['stages'], ensure_ascii=False, indent=2))
+    ttk.Label(step2, text='프로젝트 연결', style='WizardTitle.TLabel').pack(anchor='w',pady=(0,8))
     top = ttk.Frame(step2); top.pack(fill='x')
     jira_box = ttk.Combobox(top, state='readonly', width=35)
     cb_box = ttk.Combobox(top, state='readonly', width=45)
     ttk.Label(top, text='Jira 프로젝트').grid(row=0, column=0, sticky='w')
     ttk.Label(top, text='기존 Codebeamer 프로젝트').grid(row=0, column=1, sticky='w')
     jira_box.grid(row=1, column=0, padx=(0,12)); cb_box.grid(row=1, column=1)
+    ttk.Label(step2, text='Tracker 연결 · 선택한 Jira Issue Type → Codebeamer Tracker',style='WizardSub.TLabel').pack(anchor='w',pady=(14,0))
     types = ttk.Treeview(step2, columns=('id','kind','availability','tracker'), show='tree headings', selectmode='browse')
     types.heading('#0', text='Jira Issue Type 전체 목록')
     for column, label in [('id','Issue Type ID'),('kind','Regular / Sub-task'),('availability','프로젝트 적용')]:
@@ -163,7 +165,7 @@ def launch(wizard, initial_projects=None):
         wizard.map_tracker(project, kind['id'], tracker, new_name.get())
         types.set(iid, 'tracker', tracker_box.get() if tracker else '신규: ' + new_name.get())
         scopes.configure(values=list(wizard.plan['scopes']))
-    map_button = ttk.Button(step2, text='이 Issue Type의 Tracker 매핑 저장',
+    map_button = ttk.Button(step2, text='Tracker 연결 저장',
                             command=lambda: run('Tracker 매핑 저장', map_tracker), state='disabled')
     map_button.pack(anchor='w', pady=8)
     def selected_type_changed(event=None):
@@ -243,7 +245,7 @@ def launch(wizard, initial_projects=None):
     mapping_tabs.add(association_tab,text='관계 매핑')
     title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
     ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
-    ttk.Label(title,text='선택한 조합의 Jira 필드를 Codebeamer 필드와 매핑합니다.',style='WizardSub.TLabel').pack(anchor='w')
+    ttk.Label(title,text='Jira 필드를 가져와 기존 Codebeamer 필드에 연결합니다. 대상 셀 클릭: 추천 필드 / 무시 / 신규 필드 생성.',style='WizardSub.TLabel').pack(anchor='w')
     target_bar=ttk.LabelFrame(step3,text='대상 조합',padding=8);target_bar.pack(fill='x')
     scopes = ttk.Combobox(target_bar, state='readonly', width=42)
     scopes.pack(side='left',padx=(0,8))
@@ -277,7 +279,7 @@ def launch(wizard, initial_projects=None):
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
     table = ttk.Treeview(table_frame, columns=('selected','jira','group','kind','cb','options'),show='headings',selectmode='browse')
-    for column,text,width in (('selected','선택',55),('jira','Jira 필드',230),('group','처리 구분',170),('kind','Jira 타입',120),('cb','CB 생성 계획 ▾',350),('options','옵션 수',80)):
+    for column,text,width in (('selected','선택',55),('jira','Jira 필드',260),('group','처리 구분',120),('kind','Jira 타입',120),('cb','Codebeamer 필드 ▾ (클릭하여 변경)',380),('options','옵션 수',70)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
     table.configure(yscrollcommand=scrollbar.set)
@@ -527,7 +529,9 @@ def launch(wizard, initial_projects=None):
                 source=scope_rows[iid];row=wizard.plan['scopes'][scopes.get()]['rows'][source]
                 wizard.select_field(scopes.get(),source,not row.get('selected',True));display_scope()
             return
-        if table.identify_region(event.x,event.y) != 'cell' or table.identify_column(event.x) != '#4':return
+        # Treeview column indices: #1 selected, #2 Jira, #3 group, #4 type,
+        # #5 Codebeamer mapping. An earlier #4 check made the dropdown unusable.
+        if table.identify_region(event.x,event.y) != 'cell' or table.identify_column(event.x) != '#5':return
         iid = table.identify_row(event.y)
         if not iid:return
         table.selection_set(iid)
@@ -538,9 +542,10 @@ def launch(wizard, initial_projects=None):
         candidates = wizard.mapping_candidates(scopes.get(),source)
         fields = [c['field'] for c in candidates]
         labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
-        labels = [label+(' — '+c['reason'] if c['reason'] else '') for label,c in zip(labels,candidates)]
-        can_create = True
-        if can_create:labels.append('＋ 신규 필드 생성')
+        labels = [('추천 · ' if not c['reason'] else '확인 · ')+label+
+                  (' — '+c['reason'] if c['reason'] else '')
+                  for label,c in zip(labels,candidates)]
+        labels.extend(['⊘ 이 필드 무시 (Import 제외)','＋ 신규 필드 생성'])
         if not labels:
             detail.set('호환 후보 없음: Jira '+str(kind)+' / 다중 선택 '+str(multiple)+
                        '; CB 타입·valueModel·다중 선택 정보 또는 Hidden 여부를 확인하세요.')
@@ -556,7 +561,12 @@ def launch(wizard, initial_projects=None):
         def selected(event=None):
             index=editor.current();editor.destroy()
             if index < 0:return
-            if index == len(fields):run('신규 필드 설정',create_field_dialog);return
+            if index == len(fields):
+                wizard.select_field(scopes.get(),source,False)
+                display_scope()
+                detail.set('Jira 필드 '+source+'는 Import 대상에서 제외했습니다.')
+                return
+            if index == len(fields)+1:run('신규 필드 설정',create_field_dialog);return
             if candidates[index]['reason'] and '미확인' not in candidates[index]['reason']:
                 detail.set(candidates[index]['reason']);return
             target=fields[index]
