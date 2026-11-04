@@ -38,6 +38,8 @@ def migrate_full(engine):
                              (str(issue['fields']['issuetype']['id']), issue['fields']['issuetype']['name'])), None)
                 if kind is None:
                     raise ApiError('Unexpected source issue type')
+                if getattr(engine.xray, 'config', {}).get('source_reads'):
+                    issue = engine.xray.collect_issue_data(issue, kind)
                 issue['_runs'] = []
                 if kind == 'execution':
                     issue = jira.execution_context(issue)

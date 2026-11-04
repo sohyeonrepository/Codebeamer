@@ -144,7 +144,8 @@ class MappingHelperTests(unittest.TestCase):
         config = {'migration': {}}
         overlay = existing_overlay(config)
         kind = {'id': '1', 'name': 'Test', 'fields': {'summary': ['sample']}}
-        field = dict(FIELD, label='Name', name='name', options=[])
+        # A confirmed CB text type is required; numeric typeId alone is not portable.
+        field = dict(FIELD, label='Name', name='name', typeName='Text', multipleSelection=False, options=[])
         proposals = suggest_scope(kind, {'summary': {'name': 'Summary', 'schema': {'type': 'string'}}}, [field], config, {})
         self.assertTrue(proposals['summary']['ready'])
         self.assertEqual(overlay['migration']['field_mapping'], {})
@@ -166,6 +167,26 @@ class MappingHelperTests(unittest.TestCase):
         self.assertTrue(all(not p['ready'] for p in suggestions.values()))
         suggestions = suggest_scope({'fields': {'summary': ['x']}}, {}, [field], {}, {'other': {'field_id':5}})
         self.assertFalse(suggestions['summary']['ready'])
+
+    def test_user_mapping_uses_same_identifier_as_value_conversion(self):
+        from mapping_helper import suggest_values
+        from migration.fields import convert
+        source = {'id': '123', 'name': 'legacy.user', 'displayName': 'Legacy User'}
+        target = [{'id': 900, 'name': 'Legacy User'}]
+        values, missing = suggest_values([source], target)
+        self.assertEqual(missing, [])
+        self.assertEqual(values, {'legacy.user': {'id': 900}})
+        self.assertEqual(convert(source, 'user', values), {'id': 900})
+        # Existing mappings using the numeric ID must keep working too.
+        self.assertEqual(convert(source, 'user', {'123': {'id': 900}}), {'id': 900})
+
+    def test_choice_name_mapping_backwards_compatible(self):
+        from migration.fields import convert
+        choice = {'id': '100', 'name': 'Open'}
+        self.assertEqual(convert(choice, 'option', {'Open': {'id': 22}}), {'id': 22})
+        self.assertEqual(convert(choice, 'option', {'100': {'id': 22}}), {'id': 22})
+        with self.assertRaisesRegex(Exception, 'Conflicting'):
+            convert(choice, 'option', {'Open': {'id': 22}, '100': {'id': 23}})
 
     def test_value_suggestions_use_display_names_not_equal_ids(self):
         from mapping_helper import suggest_values
@@ -410,7 +431,7 @@ class MappingHelperTests(unittest.TestCase):
         settings={'migration':{'tracker_mapping':{'P:1':100}}}
         overlay=existing_overlay(settings)
         kind={'id':'1','name':'Test','fields':{'summary':['x']}}
-        applied=auto_connect_scope(overlay,{'key':'P'},kind,[dict(FIELD,label='Name',options=[])],{'summary':{'schema':{'type':'string'}}},settings)
+        applied=auto_connect_scope(overlay,{'key':'P'},kind,[dict(FIELD,label='Name',typeName='Text',multipleSelection=False,options=[])],{'summary':{'schema':{'type':'string'}}},settings)
         self.assertEqual(applied,['summary'])
         self.assertEqual(overlay['migration']['field_mapping']['P:1']['summary']['target'],'name')
 

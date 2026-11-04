@@ -38,13 +38,9 @@ def has_value(value):
 
 def semantic_type(field, jira=False):
     if jira:
-        schema = field.get('schema', {})
-        kind = schema.get('type')
-        multiple = kind == 'array'
-        kind = schema.get('items') if multiple else kind
-        return {'string': 'text', 'integer': 'number', 'number': 'number', 'boolean': 'boolean',
-                'date': 'date', 'datetime': 'datetime', 'option': 'option', 'priority': 'option',
-                'status': 'status', 'user': 'user', 'version': 'option', 'component': 'option', 'issue':'reference', 'issuelink':'reference'}.get(kind), multiple
+        from migration.field_semantics import jira_field_semantics
+        kind, multiple, evidence = jira_field_semantics(field)
+        return kind, multiple
     # Numeric type IDs are deployment-specific; require named server metadata.
     from clients.tracker_fields import normalize
     field = normalize(field)
@@ -55,6 +51,25 @@ def semantic_type(field, jira=False):
             'bool': 'boolean', 'boolean': 'boolean', 'date': 'date', 'datetime': 'datetime',
             'choice': 'option', 'option': 'option', 'status': 'status', 'user': 'user',
             'members': 'user', 'reference':'reference', 'references':'reference'}.get(str(kind).casefold()), field.get('multipleSelection')
+
+
+def text_conversion(kind, multiple, target=None):
+    """Choose a writable value encoding based on source/target cardinality.
+
+    Jira array[string] is distinct from the common Jira textarea (one string
+    containing line breaks). For scalar CB Text/WikiText, join array items with
+    newlines. Source arrays remain available in original extracted JSON.
+    """
+    if kind == 'text' and multiple:
+        if target is not None and semantic_type(target)[1] is True:
+            return 'text_list'
+        return 'text_multi'
+    return kind
+
+
+def target_multiple_for(kind, multiple):
+    # Multi-text arrays stored in a single CB Text/WikiText field.
+    return False if kind == 'text' and multiple else multiple
 
 
 def field_analysis(jira, project, issue_type):
@@ -162,7 +177,7 @@ def proposals(analysis, targets, config, existing=None):
             candidate = next((f for f in targets if str(field_identifier(f)) == str(existing[source]['field_id'])), None)
             spec=deepcopy(existing[source])
             if candidate:
-                refreshed=build_spec(source,candidate,kind or spec['type'],spec['target'],spec.get('value_mapping',{}),existing=True)
+                refreshed=build_spec(source,candidate,text_conversion(kind,multiple,candidate) or spec['type'],spec['target'],spec.get('value_mapping',{}),existing=True)
                 for key in list(spec):
                     if key.startswith('expected_') or key in ('missing_definition','selection_unverified'):spec.pop(key)
                 spec.update(refreshed)
@@ -187,11 +202,12 @@ def proposals(analysis, targets, config, existing=None):
             try:
                 if kind in ('option', 'status') and unmatched:
                     raise ValueError('대상에 없는 원본 Choice 값: 수동 매핑 또는 선택지 준비 필요')
-                spec = build_spec(source, target, kind, key, mapping)
+                converter = text_conversion(kind, multiple, target)
+                spec = build_spec(source, target, converter, key, mapping)
                 if source == 'components': spec['source_identity'] = 'id'
                 from migration.fields import convert
                 for v in analysis['values'].get(source, []):
-                    convert(v, kind, mapping, 'id' if source == 'components' else None)
+                    convert(v, converter, mapping, 'id' if source == 'components' else None)
                 if str(fid) in claimed:
                     raise ValueError('이미 다른 원본에 연결된 대상')
                 if key in bindings: spec['binding'] = deepcopy(bindings[key])
@@ -199,13 +215,13 @@ def proposals(analysis, targets, config, existing=None):
             except (ValueError, ApiError, TypeError) as exc:
                 entry.update(target=target, reason=str(exc))
         elif not candidates:
-            if kind is None or (multiple and kind not in ('option', 'status', 'user')):
+            if kind is None or (multiple and kind not in ('text', 'option', 'status', 'user')):
                 entry.update(status='error', reason='지원하지 않는 원본 타입: 자동 변환하지 않음')
             else:
                 choices = source_choices(list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', [])), 'id' if source == 'components' else None)
                 entry.update(status='create', mapping_mode='create', reason='Import 승인 후 생성', creation={
                     'label': definition.get('name', source), 'semantic_type': kind,
-                    'multipleSelection': multiple, 'choices': choices})
+                    'multipleSelection': target_multiple_for(kind, multiple), 'choices': choices})
         result[source] = entry
     # Do not let loop order choose the winner of an ambiguous many-to-one match.
     owners = {}
@@ -221,6 +237,10 @@ def proposals(analysis, targets, config, existing=None):
 
 def compatible(kind, multiple, target):
     target_kind, target_multiple = semantic_type(target)
+    if kind == 'text' and multiple and target_kind == 'text':
+        # A Jira multi-text array can be explicitly converted to CB scalar
+        # Text/WikiText, or kept as an array if the field supports it.
+        return type(target_multiple) is bool
     return bool(kind and (kind == target_kind or kind == 'status' and target_kind == 'option')
                 and type(target_multiple) is bool and multiple == target_multiple)
 
@@ -480,7 +500,7 @@ class ImportWizard:
         for other, row in entry['rows'].items():
             if other != source and row.get('spec') and (row['spec']['field_id'] == target_id or row['spec']['target'] == target_key):
                 raise ApiError('Destination already mapped to another Jira field')
-        spec = build_spec(source, target, kind or 'raw', target_key, values, existing=True)
+        spec = build_spec(source, target, text_conversion(kind,multiple,target) or 'raw', target_key, values, existing=True)
         if not compatible(kind,multiple,target):spec['selection_unverified']='타입/다중 선택 미확인'
         if detail_error:spec['selection_unverified']='상세 조회 실패: '+detail_error
         if kind=='reference':
@@ -490,7 +510,7 @@ class ImportWizard:
         from migration.fields import convert
         if kind!='reference' and not spec.get('selection_unverified'):
             for value in entry['analysis']['values'].get(source, []):
-                convert(value, kind, values, 'id' if source == 'components' else None)
+                convert(value, spec['type'], values, 'id' if source == 'components' else None)
         entry['rows'][source].pop('creation_saved',None)
         entry['rows'][source].pop('creation',None)
         entry['rows'][source].pop('creation_profile',None)
@@ -562,8 +582,8 @@ class ImportWizard:
         if not label:
             raise ApiError('신규 필드 이름을 입력하세요.')
         source_kind, source_multiple = semantic_type(entry['analysis']['fields'][source], True)
-        if semantic != source_kind or bool(multiple) != bool(source_multiple):
-            raise ApiError('Jira 원본 타입과 다중 선택 여부를 변경할 수 없습니다.')
+        if semantic != source_kind or bool(multiple) != bool(target_multiple_for(source_kind, source_multiple)):
+            raise ApiError('Jira 원본 타입에 호환되지 않는 대상 다중 선택 설정입니다.')
         profiles = entry.get('creation_profiles', self.config['migration'].get('wizard', {}).get('field_types', {}))
         if semantic not in profiles:
             raise ApiError('검증된 신규 필드 타입 설정이 없습니다: ' + semantic)
@@ -733,7 +753,9 @@ class ImportWizard:
         if proposal['semantic_type'] == 'user':
             mapping = deepcopy(self.config['migration'].get('user_mapping', {}))
         key = 'jira_' + source
-        spec = build_spec(source, actual, proposal['semantic_type'], key, mapping,existing=proposal['semantic_type']=='reference')
+        source_kind, source_multiple = semantic_type(self.plan['scopes'][scope]['analysis']['fields'][source], True)
+        conversion = text_conversion(source_kind, source_multiple, actual)
+        spec = build_spec(source, actual, conversion, key, mapping,existing=proposal['semantic_type']=='reference')
         if proposal['semantic_type']=='reference':
             spec['deferred_reference']=True
             spec.pop('missing_definition',None)

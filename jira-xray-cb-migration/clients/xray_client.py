@@ -6,6 +6,30 @@ class XrayClient:
     def __init__(self, http, config=None, archive=None):
         self.http, self.config, self.archive = http, config or {}, archive
 
+    def collect_issue_data(self, issue, kind):
+        """Optional verified DC reads; merge evidence without replacing Jira fields.
+
+        source_reads maps test/set/plan/execution to operation -> envelope profile.
+        No enabled operation is silently skipped on HTTP/schema failure.
+        """
+        from copy import deepcopy
+        from clients.xray_dc_contract import collect_xray_dc
+        profiles = self.config.get('source_reads', {}).get(kind, {})
+        if not profiles:
+            return issue
+        if self.config.get('api_family', 'server-dc') != 'server-dc':
+            raise ApiError('DC source reads cannot use Xray Cloud authentication/endpoints')
+        result = deepcopy(issue)
+        result.setdefault('_xray_dc', {})
+        for operation, profile in profiles.items():
+            if operation.startswith('test_run'):
+                raise ApiError('Run reads require a Run ID, not a Jira issue key')
+            result['_xray_dc'][operation] = collect_xray_dc(
+                self.http, operation, issue['key'], profile, self.archive)
+        if self.archive:
+            self.archive('source-xray-issue', issue['key'], result)
+        return result
+
     @staticmethod
     def identify_field(fields, override=None):
         if override:
@@ -38,16 +62,30 @@ class XrayClient:
         if not isinstance(value, list):
             raise ApiError('Unsupported Xray relationship value; raw issue retained')
         runs = []
+        seen = set()
         for reference in value:
             run_id = reference.get('testRunId') if isinstance(reference, dict) else None
             if run_id is None:
                 raise ApiError('Relationship entry has no testRunId; requires actual-response adapter')
+            if str(run_id) in seen:
+                raise ApiError('Duplicate Xray Run ID in Execution relationship: ' + str(run_id))
+            seen.add(str(run_id))
             run = self.http.request('GET', '/rest/raven/1.0/api/testrun/' + segment(run_id))
             if self.archive:
                 self.archive('source-run-details', run_id, run)
+            if not isinstance(run, dict):
+                raise ApiError('Xray Run detail must be an object')
             record = {'id': str(run_id), 'reference': reference, 'data': run}
             if str(run.get('id')) != str(run_id) or run.get('testKey') != reference.get('testKey') or run.get('testExecKey') != issue['key']:
                 raise ApiError('Run detail does not match Execution/Test relationship')
+            for operation, profile in self.config.get('source_reads', {}).get('run', {}).items():
+                from clients.xray_dc_contract import collect_xray_dc
+                if operation not in ('test_run_steps', 'test_run_evidence'):
+                    raise ApiError('Unverified Xray Run collection operation: ' + operation)
+                if self.config.get('api_family', 'server-dc') != 'server-dc':
+                    raise ApiError('DC source reads cannot use Xray Cloud endpoints')
+                record.setdefault('dc_collections', {})[operation] = collect_xray_dc(
+                    self.http, operation, run_id, profile, self.archive)
             if self.config.get('history_source') == 'execution-changelog':
                 from migration.execution_events import execution_events
                 context = execution_events(issue)
