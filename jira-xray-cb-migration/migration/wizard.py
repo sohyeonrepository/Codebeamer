@@ -173,6 +173,20 @@ def proposals(analysis, targets, config, existing=None):
         candidates = [f for f in visible if label_tokens(source, definition) & label_tokens('', f)]
         entry = {'source': source, 'status': 'manual', 'mapping_mode': None,
                  'reason': '이름 또는 타입 확인 필요', 'spec': None}
+        if not kind:
+            entry['reason'] = 'Jira 원본 필드 타입 미확인: schema.type/items/custom 확인 필요'
+        elif not candidates:
+            preferred = {'summary': 'Name (Text)', 'description': 'Description (Text/WikiText)',
+                         'assignee': 'Assigned to (User/Members)'}.get(source)
+            entry['reason'] = ('대상 기본 필드 조회 안 됨: ' + preferred if preferred
+                               else '동일 이름/별칭 대상 필드 없음')
+        elif len(candidates) == 1 and not compatible(kind, multiple, candidates[0]):
+            target_kind, target_multiple = semantic_type(candidates[0])
+            entry['reason'] = ('대상 필드 타입/다중 여부 불일치: Jira '+
+                               str((kind, multiple))+' → Codebeamer '+
+                               str((target_kind, target_multiple)))
+        elif len(candidates) > 1:
+            entry['reason'] = '동일 이름 또는 별칭의 대상 후보가 여러 개: 명시적으로 선택 필요'
         if source in existing:
             candidate = next((f for f in targets if str(field_identifier(f)) == str(existing[source]['field_id'])), None)
             spec=deepcopy(existing[source])
