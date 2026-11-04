@@ -39,7 +39,14 @@ def convert(value, kind, mapping, identity_key=None):
     if kind in ('user', 'status', 'option', 'reference'):
         if isinstance(value, list):
             return [convert(v, kind, mapping, identity_key) for v in value]
-        identity = str(value.get('accountId', value.get('name', value.get('id')))) if isinstance(value, dict) else str(value)
+        if isinstance(value, dict):
+            if kind in ('option', 'status'):
+                source_key = value.get('id', value.get('value', value.get('name')))
+            else:
+                source_key = value.get('accountId', value.get('name', value.get('id')))
+            identity = str(source_key)
+        else:
+            identity = str(value)
         if identity_key and isinstance(value,dict): identity = str(value.get(identity_key))
         if identity not in mapping:
             raise ApiError('Missing ' + kind + ' mapping: ' + identity)
