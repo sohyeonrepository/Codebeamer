@@ -458,7 +458,7 @@ def launch_live_setup(config, state_dir, prompt_auth=False):
                 Path(state_dir).mkdir(parents=True,exist_ok=True)
                 return Http(settings['url'],settings.get('token_env'),log=Path(state_dir)/'requests.jsonl',timeout=10,auth=settings.get('auth','bearer'),
                     username_env=settings.get('username_env'),password_env=settings.get('password_env'),
-                    allow_http=settings.get('allow_http',False),prompt_auth=prompt_auth,credential_prompt=prompt)
+                    allow_http=settings.get('allow_http',False),prompt_auth=True,credential_prompt=prompt)
             jira=JiraClient(http(current['jira']),current['jira'])
             cb=CodebeamerClient(http(cb_settings),cb_settings,False)
             def fetch():

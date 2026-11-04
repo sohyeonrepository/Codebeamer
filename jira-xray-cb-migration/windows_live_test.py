@@ -28,7 +28,7 @@ def main():
     from import_wizard import main as wizard_main
     root=Path(__file__).resolve().parent
     config=prepare_config(root)
-    return wizard_main(['--config',str(config),'--live-test',
+    return wizard_main(['--config',str(config),'--live-test','--prompt-auth',
                         '--test-state-dir',str(root/'.migration/windows-live-test')])
 
 if __name__=='__main__':
