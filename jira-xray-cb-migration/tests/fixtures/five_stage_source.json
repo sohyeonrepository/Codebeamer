@@ -1,0 +1,184 @@
+{
+  "synthetic": true,
+  "issues": [
+    {
+      "id": "1",
+      "key": "P-1",
+      "fields": {
+        "issuetype": {
+          "id": "1",
+          "name": "Test Plan"
+        },
+        "project": {
+          "key": "P"
+        },
+        "summary": "Test Plan",
+        "description": null,
+        "empty": null,
+        "hidden": null,
+        "xray": [],
+        "attachment": [],
+        "issuelinks": []
+      },
+      "changelog": {
+        "startAt": 0,
+        "total": 1,
+        "histories": [
+          {
+            "id": "h1",
+            "created": "2020-01-01T00:00:00Z",
+            "author": {
+              "name": "original"
+            },
+            "items": [
+              {
+                "fieldId": "summary",
+                "fromString": "old",
+                "toString": "Item 1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "2",
+      "key": "P-2",
+      "fields": {
+        "issuetype": {
+          "id": "2",
+          "name": "Test"
+        },
+        "project": {
+          "key": "P"
+        },
+        "summary": "Test",
+        "description": null,
+        "empty": null,
+        "hidden": null,
+        "xray": [],
+        "attachment": [],
+        "issuelinks": []
+      },
+      "changelog": {
+        "startAt": 0,
+        "total": 1,
+        "histories": [
+          {
+            "id": "h1",
+            "created": "2020-01-01T00:00:00Z",
+            "author": {
+              "name": "original"
+            },
+            "items": [
+              {
+                "fieldId": "summary",
+                "fromString": "old",
+                "toString": "Item 1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "3",
+      "key": "P-3",
+      "fields": {
+        "issuetype": {
+          "id": "3",
+          "name": "Test Set"
+        },
+        "project": {
+          "key": "P"
+        },
+        "summary": "Test Set",
+        "description": null,
+        "empty": null,
+        "hidden": null,
+        "xray": [],
+        "attachment": [],
+        "issuelinks": []
+      },
+      "changelog": {
+        "startAt": 0,
+        "total": 1,
+        "histories": [
+          {
+            "id": "h1",
+            "created": "2020-01-01T00:00:00Z",
+            "author": {
+              "name": "original"
+            },
+            "items": [
+              {
+                "fieldId": "summary",
+                "fromString": "old",
+                "toString": "Item 1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "4",
+      "key": "P-4",
+      "fields": {
+        "issuetype": {
+          "id": "4",
+          "name": "Test Execution"
+        },
+        "project": {
+          "key": "P"
+        },
+        "summary": "Test Execution",
+        "description": null,
+        "empty": null,
+        "hidden": null,
+        "xray": [
+          {
+            "testRunId": 77,
+            "testKey": "P-2"
+          }
+        ],
+        "attachment": [],
+        "issuelinks": []
+      },
+      "changelog": {
+        "startAt": 0,
+        "total": 1,
+        "histories": [
+          {
+            "id": "h1",
+            "created": "2020-01-01T00:00:00Z",
+            "author": {
+              "name": "original"
+            },
+            "items": [
+              {
+                "fieldId": "summary",
+                "fromString": "old",
+                "toString": "Item 1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "runs": [
+    {
+      "id": 77,
+      "testKey": "P-2",
+      "testExecKey": "P-4",
+      "status": "PASS",
+      "steps": [
+        {
+          "action": "check",
+          "result": "PASS"
+        }
+      ]
+    }
+  ]
+}

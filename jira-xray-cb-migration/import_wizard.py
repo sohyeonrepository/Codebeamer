@@ -717,7 +717,10 @@ def launch_connected(config, state):
                 cb.spec,cb.config['reused_successful_openapi']=saved
                 from clients.codebeamer_3007 import bind
                 bind(cb)
-            jira_projects=jira.projects();cb_projects=read_cb_projects(cb)
+            try:jira_projects=jira.projects()
+            except ApiError as exc:raise ApiError('Jira 프로젝트 GET: '+str(exc)) from None
+            try:cb_projects=read_cb_projects(cb)
+            except ApiError as exc:raise ApiError('Codebeamer 프로젝트 GET: '+str(exc)) from None
             if not isinstance(jira_projects,list) or not isinstance(cb_projects,list):
                 raise ApiError('프로젝트 조회 응답은 전체 배열이어야 합니다.')
             return current,jira,cb,{'jira':jira_projects,'codebeamer':cb_projects,

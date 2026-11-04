@@ -1,3 +1,5 @@
+> **현재 기준 실행본:** `feat/import-wizard-scoped-mapping` 브랜치의 이 폴더에서 **RUN_WINDOWS.bat**를 실행하세요. 기존 Wizard를 직접 엽니다. `--live-test`나 v04 실행본을 사용하지 않습니다. [복구 내역](docs/canonical-wizard-restoration.md)
+
 # Jira DC + Xray → Codebeamer Python 마이그레이터
 
 ## 실제 Codebeamer 3.0.0.7 테스트

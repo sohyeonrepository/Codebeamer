@@ -65,6 +65,8 @@ class JiraClient:
 
     def pages(self, path, key, params=None):
         start = 0
+        expected_total = None
+        seen = set()
         while True:
             q = dict(params or {}, startAt=start, maxResults=self.config.get('page_size', 100))
             page = self.http.request('GET', path + '?' + urllib.parse.urlencode(q))
@@ -73,6 +75,17 @@ class JiraClient:
                 raise ApiError(f'Missing pagination metadata for {key}')
             if page.get('startAt', start) != start:
                 raise ApiError('Server ignored pagination offset')
+            total=page['total']
+            if type(total) is not int or total < 0 or start+len(rows)>total:
+                raise ApiError('Invalid pagination total')
+            if expected_total is not None and total!=expected_total:
+                raise ApiError('Pagination total changed during export')
+            expected_total=total
+            for row in rows:
+                identity=row.get('id',row.get('key')) if isinstance(row,dict) else None
+                if identity is not None:
+                    if str(identity) in seen:raise ApiError('Duplicate record across pages')
+                    seen.add(str(identity))
             yield from rows
             start += len(rows)
             if start >= page['total']:

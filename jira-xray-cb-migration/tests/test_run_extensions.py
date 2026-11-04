@@ -53,7 +53,7 @@ class RunExtensions(unittest.TestCase):
                 self.config = copy.deepcopy(data)
                 return {}
         cb = CB()
-        settings = {'field_sync': {'enabled': True, 'unrestricted_permission': 'Unrestricted',
+        settings = {'field_sync': {'enabled': True, 'apply_permission_to_all_fields': True, 'unrestricted_permission': 'Unrestricted',
                     'definitions': [{'label': 'status', 'typeId': 1, 'mandatory': True}, {'label': 'new', 'typeId': 2}]}}
         plan = sync_run_fields(cb, self.state, 7, settings, False)
         self.assertEqual(cb.writes, 0)
@@ -72,7 +72,7 @@ class RunExtensions(unittest.TestCase):
             def call(self, *args):
                 raise AssertionError('No writes allowed')
         with self.assertRaises(ApiError):
-            sync_run_fields(CB(), self.state, 7, {'field_sync': {'enabled': True, 'unrestricted_permission': 'Unrestricted',
+            sync_run_fields(CB(), self.state, 7, {'field_sync': {'enabled': True, 'apply_permission_to_all_fields': True, 'unrestricted_permission': 'Unrestricted',
                 'definitions': [{'label': 'x', 'typeId': 2}]}}, True)
 
     def test_history_and_non_field_activity_generate_real_revisions_and_resume(self):
@@ -198,7 +198,7 @@ class RunExtensions(unittest.TestCase):
                 self.config = copy.deepcopy(data)
                 return {}
         cb = CB()
-        settings = {'field_sync': {'enabled': True, 'unrestricted_permission': 'Unrestricted',
+        settings = {'field_sync': {'enabled': True, 'apply_permission_to_all_fields': True, 'unrestricted_permission': 'Unrestricted',
                                   'definitions': [{'label': 'new', 'typeId': 2}]}}
         sync_run_fields(cb, self.state, 7, settings, True)
         self.assertEqual(cb.config['fields'][1]['permission'], {'type': 'UNRESTRICTED'})

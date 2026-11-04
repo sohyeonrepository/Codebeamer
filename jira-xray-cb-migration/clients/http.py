@@ -87,11 +87,15 @@ class Http:
                 return content if raw else (json.loads(content) if content else {})
             except urllib.error.HTTPError as exc:
                 status = exc.code
+                failure_body=exc.read(8192)
+                content_type=exc.headers.get('Content-Type','') if exc.headers else ''
+                login_reason=exc.headers.get('X-Seraph-LoginReason','') if exc.headers else ''
+                detail=http_failure_detail(failure_body,content_type,login_reason)
                 exc.close()
                 if method == 'GET' and status in (429, 502, 503, 504) and attempt < 2:
                     time.sleep(min(2 ** attempt, 4))
                     continue
-                raise ApiError(f'{method} request failed: HTTP {status}') from None
+                raise ApiError(f'{method} {urllib.parse.urlsplit(url).path} failed: HTTP {status}; {detail}') from None
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 raise ApiError(f'{method} transport failure ({type(exc).__name__}); write outcome may be unknown') from None
             finally:
@@ -103,3 +107,23 @@ class Http:
                              'elapsed_ms': round((time.monotonic() - start) * 1000)}
                     with self.log.open('a', encoding='utf-8') as f:
                         f.write(json.dumps(entry) + '\n')
+
+
+def http_failure_detail(body, content_type, login_reason):
+    """Describe actual response signals without exposing arbitrary server text or credentials."""
+    if login_reason in ('AUTHENTICATION_DENIED','AUTHENTICATED_FAILED'):
+        return 'Jira X-Seraph-LoginReason='+login_reason+'; 계정 잠금/CAPTCHA/인증 정책 확인 필요'
+    text=body.decode('utf-8',errors='replace').lower()
+    if 'text/html' in content_type or '<html' in text:
+        return 'HTML 응답: 로그인 페이지 또는 프록시/접근 차단 페이지; JSON API 응답 아님'
+    if 'application/json' in content_type:
+        try:
+            value=json.loads(body)
+            messages=json.dumps(value.get('errorMessages',value.get('message',''))).lower() if isinstance(value,dict) else ''
+        except (ValueError,UnicodeError):return 'JSON Content-Type이지만 본문 JSON 해석 실패'
+        if any(word in messages for word in ('permission','forbidden','not authorized','not permitted')):
+            return 'JSON 오류 응답에 권한/접근 거부 메시지 포함'
+        if any(word in messages for word in ('token','authentication','authenticated','credentials')):
+            return 'JSON 오류 응답에 인증/토큰 관련 메시지 포함'
+        return 'JSON 오류 응답; 원인 자동 분류 불가 (민감정보 보호를 위해 원문 생략)'
+    return '원인 미확인: 응답에 분류 가능한 오류 정보 없음'
