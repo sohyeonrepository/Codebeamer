@@ -167,6 +167,26 @@ class MappingHelperTests(unittest.TestCase):
         suggestions = suggest_scope({'fields': {'summary': ['x']}}, {}, [field], {}, {'other': {'field_id':5}})
         self.assertFalse(suggestions['summary']['ready'])
 
+    def test_user_mapping_uses_same_identifier_as_value_conversion(self):
+        from mapping_helper import suggest_values
+        from migration.fields import convert
+        source = {'id': '123', 'name': 'legacy.user', 'displayName': 'Legacy User'}
+        target = [{'id': 900, 'name': 'Legacy User'}]
+        values, missing = suggest_values([source], target)
+        self.assertEqual(missing, [])
+        self.assertEqual(values, {'legacy.user': {'id': 900}})
+        self.assertEqual(convert(source, 'user', values), {'id': 900})
+        # Existing mappings using the numeric ID must keep working too.
+        self.assertEqual(convert(source, 'user', {'123': {'id': 900}}), {'id': 900})
+
+    def test_choice_name_mapping_backwards_compatible(self):
+        from migration.fields import convert
+        choice = {'id': '100', 'name': 'Open'}
+        self.assertEqual(convert(choice, 'option', {'Open': {'id': 22}}), {'id': 22})
+        self.assertEqual(convert(choice, 'option', {'100': {'id': 22}}), {'id': 22})
+        with self.assertRaisesRegex(Exception, 'Conflicting'):
+            convert(choice, 'option', {'Open': {'id': 22}, '100': {'id': 23}})
+
     def test_value_suggestions_use_display_names_not_equal_ids(self):
         from mapping_helper import suggest_values
         values, missing = suggest_values([{'id': '1', 'name': 'Passed'}, {'id': '2', 'name': 'Unknown'}],
