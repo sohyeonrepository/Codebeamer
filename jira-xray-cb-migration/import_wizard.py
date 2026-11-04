@@ -507,40 +507,63 @@ def launch(wizard, initial_projects=None):
         ttk.Label(body,text='필드 타입 *').grid(row=2,column=0,sticky='w',pady=5)
         type_names=list(profiles)
         type_box=ttk.Combobox(body,state='readonly',values=type_names,width=35);type_box.grid(row=2,column=1,sticky='ew',pady=5)
-        if source_kind in type_names:type_box.set(source_kind)
+        recommended = {'number': 'integer', 'boolean': 'boolean',
+                       'text': 'text', 'option': 'option', 'status': 'option'}.get(source_kind,source_kind)
+        if recommended in type_names:
+            type_box.set(recommended)
+        elif source_kind in type_names:
+            type_box.set(source_kind)
+        elif type_names:
+            type_box.set(type_names[0])
         multiple=tk.BooleanVar(value=bool(source_multiple))
-        ttk.Checkbutton(body,text='다중 선택',variable=multiple,state='disabled').grid(row=3,column=1,sticky='w')
+        multi_check=ttk.Checkbutton(body,text='다중 값',variable=multiple)
+        multi_check.grid(row=3,column=1,sticky='w')
         # Show Choice options ONLY for selectable source types. Standard
         # Summary/Description/Assignee/Date do not require choice options.
         option_label=ttk.Label(body,text='선택 옵션 (Choice/Status 전용, 한 줄에 하나)')
         options=tk.Text(body,width=48,height=7)
         initial=list(dict.fromkeys(row.get('creation',{}).get('choices',{}).values()))
         options.insert('1.0','\n'.join(initial))
-        if choice_input(source_kind):
-            option_label.grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
-            options.grid(row=5,column=0,columnspan=2,sticky='nsew')
-        else:
-            options.configure(state='disabled')
-            ttk.Label(body,text='이 Jira 필드는 선택 옵션 입력이 필요하지 않습니다. '+
-                ('사용자 ID 매핑은 기존 필드 연결 및 사용자 검증 단계에서 확인합니다.' if source_kind=='user'
-                 else '기존 대상 필드가 있으면 신규 생성 대신 필드 연결을 사용하세요.'),
-                wraplength=430).grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
+        conversion_notice=ttk.Label(body,text='',wraplength=430)
+        conversion_notice.grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
         if any(not profile.get('binding') for profile in profiles.values()):
             ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
         reference_box=None
         reference_trackers=wizard.plan['projects'][entry['project']]['trackers']
-        if source_kind=='reference':
-            ttk.Label(body,text='참조 대상 Tracker').grid(row=8,column=0,sticky='w')
-            reference_box=ttk.Combobox(body,state='readonly',values=[t.get('name',str(t['id']))+' · ID '+str(t['id']) for t in reference_trackers])
-            reference_box.grid(row=8,column=1,sticky='ew')
-            saved=row.get('creation',{}).get('reference_tracker_id')
-            index=next((i for i,t in enumerate(reference_trackers) if t['id']==saved),None)
-            if index is not None:reference_box.current(index)
+        reference_label=ttk.Label(body,text='참조 대상 Tracker')
+        reference_box=ttk.Combobox(body,state='readonly',values=[
+            t.get('name',str(t['id']))+' · ID '+str(t['id']) for t in reference_trackers])
+        saved=row.get('creation',{}).get('reference_tracker_id')
+        index=next((i for i,t in enumerate(reference_trackers) if t['id']==saved),None)
+        if index is not None:reference_box.current(index)
+        def selected_type_changed(event=None):
+            chosen=type_box.get()
+            from migration.wizard import selected_conversion
+            conversion=selected_conversion(source_kind,bool(source_multiple),chosen,multiple.get())
+            conversion_notice.configure(text='Jira '+str(source_kind)+' → Codebeamer '+chosen+
+                                        ' · '+('변환: '+conversion if conversion else '이 조합은 값 변환을 지원하지 않음'))
+            option_label.grid_remove();options.grid_remove()
+            reference_label.grid_remove();reference_box.grid_remove()
+            if chosen in ('option','status'):
+                option_label.grid(row=5,column=0,columnspan=2,sticky='w',pady=(8,4))
+                options.grid(row=6,column=0,columnspan=2,sticky='nsew')
+            if chosen=='reference':
+                reference_label.grid(row=8,column=0,sticky='w')
+                reference_box.grid(row=8,column=1,sticky='ew')
+            multi_check.configure(state='normal' if chosen in ('option','status','user','reference') else 'disabled')
+            if chosen not in ('option','status','user','reference'):
+                multiple.set(False)
+        type_box.bind('<<ComboboxSelected>>',selected_type_changed)
+        selected_type_changed()
         def save_creation():
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
             originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]), 'id' if source == 'components' else None)
             lines=[line.strip() for line in options.get('1.0','end').splitlines() if line.strip()]
+            if type_box.get() in ('option','status') and not lines:
+                lines=list(originals.values())
+                options.delete('1.0','end')
+                options.insert('1.0','\\n'.join(lines))
             choices={}
             if type_box.get() in ('option','status'):
                 if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
