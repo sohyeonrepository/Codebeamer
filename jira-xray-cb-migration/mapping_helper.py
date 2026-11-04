@@ -213,7 +213,7 @@ def build_spec(source, target, conversion, target_key, values, existing=False):
         raise ValueError('대상 payload 키를 입력하세요.')
     if not isinstance(values, dict):
         raise ValueError('값 매핑은 JSON 객체여야 합니다.')
-    if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference'):
+    if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference', 'jira_checklist'):
         raise ValueError('지원하지 않는 변환입니다.')
     if not existing and conversion in ('user', 'status', 'option', 'reference') and not values:
         raise ValueError('선택지/사용자/참조 변환은 값 매핑이 필요합니다.')
@@ -1098,7 +1098,7 @@ def main():
         field_box=ttk.Combobox(row,state='readonly',width=37);field_box.pack(side='left',fill='x',expand=True)
         advanced=ttk.Frame(editor);advanced.pack(fill='both',expand=True)
         advanced_row=ttk.Frame(advanced);advanced_row.pack(fill='x')
-        conversion=ttk.Combobox(advanced_row,state='readonly',width=12,values=['text','json','raw','number','boolean','date','datetime','user','status','option','reference']);conversion.pack(side='left',padx=8)
+        conversion=ttk.Combobox(advanced_row,state='readonly',width=12,values=['text','json','raw','number','boolean','date','datetime','user','status','option','reference','jira_checklist']);conversion.pack(side='left',padx=8)
         target_key=ttk.Entry(advanced_row,width=22);target_key.pack(side='left')
         ttk.Label(advanced_row,text='변환 / API 키',style='Note.TLabel').pack(side='left',padx=8)
         tabs=ttk.Notebook(advanced);tabs.pack(fill='x',pady=5)
