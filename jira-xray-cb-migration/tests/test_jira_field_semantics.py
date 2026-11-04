@@ -76,6 +76,27 @@ class JiraFieldSemanticTests(unittest.TestCase):
                                  {"Low": {"id": 1}, "High": {"id": 2}}),
                          [{"id": 1}, {"id": 2}])
 
+    def test_choice_option_value_only_identity(self):
+        from mapping_helper import source_choices, suggest_values
+        source_options = [{"value": "Low"}, {"value": "High"}]
+        self.assertEqual(source_choices(source_options), {"Low": "Low", "High": "High"})
+        matches, missing = suggest_values(
+            [["Low", "High"]], [{"id": 10, "name": "Low"}, {"id": 20, "name": "High"}]
+        )
+        self.assertEqual(missing, [])
+        self.assertEqual(matches, {"Low": {"id": 10}, "High": {"id": 20}})
+        self.assertEqual(
+            convert([{"value": "Low"}, {"value": "High"}], "option", matches),
+            [{"id": 10}, {"id": 20}],
+        )
+
+    def test_missing_or_conflicting_choice_metadata(self):
+        unknown = source({"type": "array", "items": "custom_object"})
+        self.assertEqual(semantic_type(unknown, True), (None, True))
+        conflicting = source({"type": "array", "items": "user",
+                              "custom": "com.atlassian.jira.plugin.system.customfieldtypes:multiselect"})
+        self.assertEqual(semantic_type(conflicting, True), (None, True))
+
     def test_freeform_multitext_conversion_is_distinct(self):
         text_target = {"typeName": "Text", "multipleSelection": False}
         choice_target = {"typeName": "Choice", "multipleSelection": True}
