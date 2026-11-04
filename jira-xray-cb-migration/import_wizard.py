@@ -194,8 +194,34 @@ def launch(wizard, initial_projects=None):
     xray_tab=ttk.Frame(mapping_tabs,padding=8)
     mapping_tabs.add(xray_tab,text='Xray 관계 / 실행 결과 검수')
     ttk.Label(xray_tab,text='Issue는 Key로, Test Run은 별도 숫자 Run ID로 조회합니다. 집계 PASS/FAIL은 개별 Run이 아닙니다.',wraplength=950).pack(anchor='w')
+    # Xray memberships are not ordinary Jira fields and cannot be inferred
+    # from Jira Issue Link Type names or automatically converted to a text field.
+    xray_relationships={
+        'test': [('Test Sets','test_sets_for_test','Test Set 구성원 관계'),
+                 ('Test Plans','test_plans_for_test','Test Plan 대상 Test 관계')],
+        'set': [('Tests','test_set_tests','Test Set → Test Case Reference')],
+        'plan': [('Tests','test_plan_tests','Test Plan → Test Case Reference'),
+                 ('Test Executions','test_plan_executions','계획 → 실행 맥락')],
+        'execution': [('Tests','test_execution_tests','실행 → Test Case'),
+                      ('Runs','runs','개별 Test Run ID 필요')],
+        'run': [('Test Case / Execution','run','Test/Execution Key가 포함된 Run 상세'),
+                ('Steps / Evidence','test_run_steps','Run 결과 및 증빙')]
+    }
+    relation_guide=ttk.Treeview(xray_tab,columns=('source','operation','target'),show='headings',height=4)
+    for column,label,width in (('source','Xray 관계',180),('operation','원본 API 조회 항목',220),('target','Codebeamer 관계 처리',330)):
+        relation_guide.heading(column,text=label);relation_guide.column(column,width=width)
+    relation_guide.pack(fill='x',pady=(8,6))
+    ttk.Label(xray_tab,text='Xray 관계는 원본 API로 조회한 ID를 사용합니다. Tracker/Reference ID가 확인되기 전에는 관계 생성으로 처리하지 않습니다.',
+              wraplength=950).pack(anchor='w')
     xray_kind=ttk.Combobox(xray_tab,state='readonly',values=list(TITLES.values()),width=42)
     xray_kind.pack(anchor='w');xray_kind.set(TITLES['test'])
+    def show_xray_relations(event=None):
+        relation_guide.delete(*relation_guide.get_children())
+        selected=next((k for k,v in TITLES.items() if v==xray_kind.get()),'test')
+        for source,operation,target in xray_relationships.get(selected,[]):
+            relation_guide.insert('','end',values=(source,operation,target))
+    xray_kind.bind('<<ComboboxSelected>>',show_xray_relations)
+    show_xray_relations()
     ttk.Label(xray_tab,text='원본 Issue Key 또는 Run ID').pack(anchor='w')
     xray_identifier=ttk.Entry(xray_tab,width=40);xray_identifier.pack(anchor='w')
     xray_output=tk.Text(xray_tab,width=100,height=12);xray_output.pack(fill='both',expand=True)
@@ -317,7 +343,9 @@ def launch(wizard, initial_projects=None):
         entry = wizard.plan['scopes'][scopes.get()]
         category=issue_kind(entry['type'],wizard.config['migration'])
         scope_title.set((TITLES.get(category,'Jira Issue')+' · ')+scope_names(entry))
-        if category:xray_kind.set(TITLES[category])
+        if category:
+            xray_kind.set(TITLES[category])
+            show_xray_relations()
         scope_rows.clear(); table.delete(*table.get_children())
         query=search.get().strip().casefold()
         for index,(source,row) in enumerate(entry.get('rows',{}).items()):
@@ -542,6 +570,15 @@ def launch(wizard, initial_projects=None):
         entry = wizard.plan['scopes'][scopes.get()]
         kind, multiple = semantic_type(entry['analysis']['fields'][source], True)
         candidates = wizard.mapping_candidates(scopes.get(),source)
+        from mapping_helper import normalized_label
+        jira_name=entry['analysis']['fields'][source].get('name',source)
+        # Put compatible exact-name or alias matches first. Unverified and
+        # incompatible choices stay visible with explicit warnings.
+        candidates.sort(key=lambda c: (
+            bool(c['reason']),
+            normalized_label(c['field'].get('label') or c['field'].get('name')) not in
+                {normalized_label(jira_name),normalized_label(source)},
+            str(c['field'].get('label',c['field'].get('name','')))))
         fields = [c['field'] for c in candidates]
         labels = [f.get('label',f.get('name',''))+' ('+str(f.get('typeName',f.get('type','?')))+') · ID '+str(field_identifier(f)) for f in fields]
         labels = [('추천 필드 · ' if not c['reason'] else '확인 필요 · ')+label+
