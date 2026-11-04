@@ -289,7 +289,7 @@ def launch(wizard, initial_projects=None):
     ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
     ttk.Button(target_bar,text='데이터 가져오기 (GET)',command=lambda:run('Jira 사용 필드 가져오기',analyze)).pack(side='right')
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
-    selected_only=tk.BooleanVar(value=True)
+    selected_only=tk.BooleanVar(value=False)
     ttk.Checkbutton(tools,text='선택 항목만 보기',variable=selected_only,command=lambda:display_scope()).pack(side='left')
     # Default to fields actually populated in this Jira Issue Type, plus core
     # and required fields. The full metadata catalog is still available.
