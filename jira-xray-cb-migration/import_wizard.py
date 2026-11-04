@@ -261,6 +261,17 @@ def launch(wizard, initial_projects=None):
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
     selected_only=tk.BooleanVar(value=True)
     ttk.Checkbutton(tools,text='선택 항목만 보기',variable=selected_only,command=lambda:display_scope()).pack(side='left')
+    # Default to fields actually populated in this Jira Issue Type, plus core
+    # and required fields. The full metadata catalog is still available.
+    field_visibility=tk.StringVar(value='used')
+    ttk.Label(tools,text='Jira 필드 범위').pack(side='left',padx=(14,4))
+    field_filter=ttk.Combobox(tools,state='readonly',width=20,
+                              values=['사용 중 + 기본/필수','프로젝트 설정 필드','전체 조회 필드'])
+    field_filter.current(0);field_filter.pack(side='left')
+    def set_field_visibility(event=None):
+        field_visibility.set(('used','configured','all')[field_filter.current()])
+        display_scope()
+    field_filter.bind('<<ComboboxSelected>>',set_field_visibility)
     search=tk.StringVar()
     ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
@@ -306,6 +317,9 @@ def launch(wizard, initial_projects=None):
         scope_rows.clear(); table.delete(*table.get_children())
         query=search.get().strip().casefold()
         for index,(source,row) in enumerate(entry.get('rows',{}).items()):
+            definition=entry['analysis']['fields'][source]
+            if field_visibility.get()=='used' and not definition.get('show_by_default',True):continue
+            if field_visibility.get()=='configured' and not (definition.get('configured') or definition.get('default_selected')):continue
             if selected_only.get() and not row.get('selected',True):continue
             target=row.get('target') or {}
             left=''
@@ -318,7 +332,6 @@ def launch(wizard, initial_projects=None):
                     left=field.get('label',field.get('name',row.get('creation',{}).get('label','')))+' · ID '+str(phase[1]['field_id'])
                 elif row.get('creation'):
                     left=row['creation']['label']+' (신규 생성 예정)'
-            definition=entry['analysis']['fields'][source]
             right=definition.get('name',source)+(' ('+source+')' if source.startswith('customfield_') else '')
             if definition.get('required') is True:right += ' [필수]'
             if query and query not in (left+' '+right).casefold():continue
