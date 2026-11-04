@@ -92,7 +92,7 @@ def launch(wizard, initial_projects=None):
     ttk.Label(top, text='기존 Codebeamer 프로젝트').grid(row=0, column=1, sticky='w')
     jira_box.grid(row=1, column=0, padx=(0,12)); cb_box.grid(row=1, column=1)
     ttk.Label(step2, text='Tracker 연결',style='WizardTitle.TLabel').pack(anchor='w',pady=(14,0))
-    ttk.Label(step2, text='선택한 Jira Issue Type별로 대상 Tracker를 지정하세요.',style='WizardSub.TLabel').pack(anchor='w',pady=(2,4))
+    ttk.Label(step2, text='이관할 Jira Issue Type만 Tracker에 연결하세요. 연결하지 않은 타입은 Import하지 않습니다.',style='WizardSub.TLabel').pack(anchor='w',pady=(2,4))
     types = ttk.Treeview(step2, columns=('id','kind','availability','tracker'), show='tree headings', selectmode='browse')
     types.heading('#0', text='Jira Issue Type 전체 목록')
     for column, label in [('id','Issue Type ID'),('kind','Regular / Sub-task'),('availability','프로젝트 적용')]:
@@ -158,6 +158,7 @@ def launch(wizard, initial_projects=None):
             wizard.map_execution_context(project, kind['id'])
             types.set(iid, 'tracker', '원본 맥락 보존 · 대상 Tracker 없음')
             scopes.configure(values=list(wizard.plan['scopes']))
+            scopes.set(project + ':' + str(kind['id']))
             return
         if tracker_box.current() < 0:
             raise ValueError('대상 Tracker를 선택하세요.')
@@ -167,9 +168,31 @@ def launch(wizard, initial_projects=None):
         wizard.map_tracker(project, kind['id'], tracker, new_name.get())
         types.set(iid, 'tracker', tracker_box.get() if tracker else '신규: ' + new_name.get())
         scopes.configure(values=list(wizard.plan['scopes']))
+        scopes.set(project + ':' + str(kind['id']))
+        selection_info.set('현재 이관 대상: '+', '.join(
+            wizard.plan['scopes'][k]['type']['name'] for k in wizard.plan['scopes']))
+    selection_info=tk.StringVar(value='Tracker에 연결한 Issue Type만 이관합니다.')
+    ttk.Label(step2,textvariable=selection_info,wraplength=1000,
+              style='WizardSub.TLabel').pack(anchor='w',pady=(4,4))
     map_button = ttk.Button(step2, text='Tracker 연결',
                             command=lambda: run('Tracker 매핑 저장', map_tracker), state='disabled')
     map_button.pack(anchor='w', pady=8)
+    def unmap_tracker():
+        if not types.selection():
+            raise ValueError('연결을 해제할 Issue Type을 선택하세요.')
+        project, kind = type_rows[types.selection()[0]]
+        scope=project+':'+str(kind['id'])
+        if scope not in wizard.plan['scopes']:
+            return
+        wizard.plan['scopes'].pop(scope)
+        wizard.state.save('wizard','plan',wizard.plan)
+        types.set(types.selection()[0],'tracker','미선택')
+        scopes.configure(values=list(wizard.plan['scopes']))
+        if scopes.get()==scope:scopes.set('')
+        selection_info.set('현재 이관 대상: '+(', '.join(e['type']['name'] for e in wizard.plan['scopes'].values()) or '없음'))
+        table.delete(*table.get_children())
+    ttk.Button(step2,text='선택한 Issue Type 연결 해제 (Import 제외)',
+               command=lambda:run('Issue Type 이관 제외',unmap_tracker)).pack(anchor='w',pady=(0,8))
     def selected_type_changed(event=None):
         selected = types.selection()
         allowed = bool(selected and type_rows[selected[0]][1].get('project_available'))
@@ -650,6 +673,15 @@ def launch(wizard, initial_projects=None):
         # Destroying here used to discard the user's choice before save.
     table.bind('<ButtonRelease-1>',row_action)
     def import_now():
+        if not scopes.get() or scopes.get() not in wizard.plan['scopes']:
+            raise ApiError('이관할 Jira Issue Type과 Codebeamer Tracker를 먼저 선택하세요.')
+        active_scope=scopes.get()
+        if current_only.get():
+            if wizard.config['migration'].get('mode') == 'full-xray':
+                raise ApiError('Full Xray는 Test/Plan/Set/Execution 종속성이 필요합니다. 단일 Issue Type 모드를 해제하고 관련 조합을 분석하세요.')
+            wizard.keep_only_scope(active_scope)
+            scopes.configure(values=[active_scope])
+            scopes.set(active_scope)
         planned=[r for r in wizard.creation_review() if r['selected']]
         preview=tk.Toplevel(root);preview.title('생성 예정 내역 확인')
         text=tk.Text(preview,width=100,height=25);text.pack(fill='both',expand=True)
@@ -677,7 +709,10 @@ def launch(wizard, initial_projects=None):
         show_evidence(report); tabs.select(step4)
         if not report['complete']: status.set('Import 미완료: 오류·누락·보존 결과를 확인한 후 재시도하세요.')
     footer=ttk.Frame(step3);footer.pack(fill='x',pady=(8,0))
-    ttk.Label(footer,text='필드는 Import 승인 후 실제 Codebeamer에 생성됩니다.',style='WizardSub.TLabel').pack(side='left')
+    current_only=tk.BooleanVar(value=True)
+    ttk.Checkbutton(footer,text='현재 선택한 Jira Issue Type만 Import (이전 매핑 조합 제외)',
+                    variable=current_only).pack(side='left')
+    ttk.Label(footer,text='신규 필드는 Import 승인 후 생성',style='WizardSub.TLabel').pack(side='left',padx=14)
     ttk.Button(footer,text='다음 (Import 승인)  ›',command=lambda:run('Import',import_now)).pack(side='right')
     relation_rows={}
     relation_catalog=[None]
