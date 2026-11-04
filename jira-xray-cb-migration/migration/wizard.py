@@ -878,19 +878,21 @@ class ImportWizard:
         errors = []
         if not self.plan['projects']:
             errors.append('프로젝트를 선택하세요.')
+        if not self.plan['scopes']:
+            errors.append('이관할 Jira Issue Type과 Tracker를 선택하세요.')
         if self.plan['scopes'] and not any(e.get('analysis', {}).get('issue_count', 0) for e in self.plan['scopes'].values()):
             errors.append('이관할 실제 Issue가 없습니다.')
         # Only explicitly mapped Tracker scopes are Import candidates.
         # Jira project issue_types() is a catalog, not a user selection.
         for scope, entry in self.plan['scopes'].items():
-                if 'analysis' not in entry:
-                    errors.append(scope + ': 분석 필요')
-                    continue
-                if entry.get('source_only'):
-                    continue
-                if entry['analysis']['risks'] or entry.get('target_risks'):
-                    errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
-                for source, row in entry['rows'].items():
+            if 'analysis' not in entry:
+                errors.append(scope + ': 분석 필요')
+                continue
+            if entry.get('source_only'):
+                continue
+            if entry['analysis']['risks'] or entry.get('target_risks'):
+                errors.append(scope + ': Hidden 필드에 실제 값이 있어 누락 위험 해결 필요')
+            for source, row in entry['rows'].items():
                     if not row.get('selected',True):continue
                     spec=row.get('spec') or {}
                     if spec.get('missing_definition') or spec.get('selection_unverified'):
