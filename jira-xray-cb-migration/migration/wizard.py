@@ -1103,10 +1103,24 @@ class ImportWizard:
                 entry = self.plan['scopes'].get(scope)
                 if entry is None:
                     raise ApiError('Unmapped Issue Type in source selection')
-                missing = {f for f, v in issue['fields'].items() if f not in entry['rows']
-                           and f not in SPECIAL | CONTEXT | set(entry['analysis']['managed_fields']) and has_value(v)}
-                if missing and not entry.get('source_only'):
-                    raise ApiError('Unmapped source values before Import: ' + ', '.join(sorted(missing)))
+                # A type-scoped user selection is authoritative: fields not in
+                # the selected mapping (including excluded/unconfigured fields)
+                # must not block Item Import or become new target fields.
+                # Preserve the source bundle for audit without writing them.
+                ignored = {f for f, v in issue['fields'].items()
+                           if f not in entry['rows'] or not entry['rows'][f].get('selected', True)}
+                selected_fields = {f for f,r in entry['rows'].items() if r.get('selected', True)}
+                required_missing = {f for f in selected_fields if f not in issue['fields']
+                                    and not entry.get('source_only')}
+                if required_missing:
+                    raise ApiError('Selected source fields absent from Issue '+issue['key']+': '+
+                                   ', '.join(sorted(required_missing)))
+                if ignored:
+                    self.state.save('wizard-excluded-fields', issue['key'],
+                                    {'scope':scope,'fields':sorted(ignored)})
+                # The original bundle remains intact for History/attachments/Xray
+                # source preservation. The migration field_mapping below is
+                # restricted to explicitly selected rows.
                 from migration.preservation import rewrite_description
                 files = issue['fields'].get('attachment', [])
                 rewrite_description(issue['fields'].get('description'), files,
