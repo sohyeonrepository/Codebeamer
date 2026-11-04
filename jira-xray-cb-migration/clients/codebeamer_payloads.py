@@ -7,6 +7,41 @@ from copy import deepcopy
 from clients.http import ApiError
 
 
+def native_field_property(spec, create_operation, source, target, update_operation=None):
+    """Return a server-verified native Item property for a known system field.
+
+    Never infer writability from a tracker Field ID or UI label alone.
+    A source-to-native mapping is allowed only when the field label matches,
+    the exact property is writable in both Item POST and PUT request schemas,
+    and a Choice value can be represented as an object with an ID.
+    """
+    from mapping_helper import normalized_label, request_schema, schema_object
+    candidate = {'resolution': 'resolution', 'status': 'status',
+                 'priority': 'priority'}.get(source)
+    if not candidate or normalized_label(target.get('label') or target.get('name') or '') != candidate:
+        return None
+    if not update_operation:
+        return None
+    try:
+        for operation in (create_operation, update_operation):
+            body = request_schema(spec, operation)
+            property_schema = body.get('properties', {}).get(candidate)
+            if not isinstance(property_schema, dict):
+                return None
+            if property_schema.get('readOnly') is True:
+                return None
+            field = schema_object(spec, property_schema)
+            if field.get('type') != 'object':
+                return None
+            # Conversion of Jira Choice values produces {"id": N}.
+            props = field.get('properties', {})
+            if 'id' not in props or props['id'].get('readOnly') is True:
+                return None
+    except (KeyError, TypeError, ApiError):
+        return None
+    return candidate
+
+
 def field_values(values, bindings):
     result = []
     for key, value in values.items():
