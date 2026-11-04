@@ -208,8 +208,10 @@ def migrate_relations(cb,state,bundles,settings):
         identity=row['jira_link_id']
         state.save('source-relations',identity,row)
         selected=mappings.get(row['jira_link_type_id'])
-        if selected is None and not row.get('collection_error'):
-            row.update(status='excluded',reason='No user-selected mapping for this Jira Link Type')
+        if selected is None:
+            # Explicitly unmapped types are ignored, even if their source
+            # representation is incomplete. They must not block chosen links.
+            row.update(status='excluded',reason='Excluded by user: no mapping selected for this Jira Link Type')
         else:
             report['selected']+=1
             try:
