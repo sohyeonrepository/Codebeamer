@@ -38,13 +38,9 @@ def has_value(value):
 
 def semantic_type(field, jira=False):
     if jira:
-        schema = field.get('schema', {})
-        kind = schema.get('type')
-        multiple = kind == 'array'
-        kind = schema.get('items') if multiple else kind
-        return {'string': 'text', 'integer': 'number', 'number': 'number', 'boolean': 'boolean',
-                'date': 'date', 'datetime': 'datetime', 'option': 'option', 'priority': 'option',
-                'status': 'status', 'user': 'user', 'version': 'option', 'component': 'option', 'issue':'reference', 'issuelink':'reference'}.get(kind), multiple
+        from migration.field_semantics import jira_field_semantics
+        kind, multiple, evidence = jira_field_semantics(field)
+        return kind, multiple
     # Numeric type IDs are deployment-specific; require named server metadata.
     from clients.tracker_fields import normalize
     field = normalize(field)
