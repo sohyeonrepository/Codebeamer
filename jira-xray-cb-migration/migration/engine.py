@@ -56,6 +56,13 @@ class Engine:
                     key = summary['key']
                     try:
                         bundle = self.jira.bundle(key)
+                        if self.wizard and (
+                            project['key'] + ':' + str(bundle['fields']['issuetype']['id'])
+                            not in self.settings.get('field_mapping', {})
+                        ):
+                            # The project's other Jira Issue Types are not
+                            # selected by the Wizard; never import them.
+                            continue
                         self.state.save('source', key, bundle)
                         bundle['_runs'] = self.xray.runs(bundle, run_field) if run_field or self.wizard else []
                         self.state.save('source', key, bundle)
