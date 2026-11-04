@@ -144,7 +144,8 @@ class MappingHelperTests(unittest.TestCase):
         config = {'migration': {}}
         overlay = existing_overlay(config)
         kind = {'id': '1', 'name': 'Test', 'fields': {'summary': ['sample']}}
-        field = dict(FIELD, label='Name', name='name', options=[])
+        # A confirmed CB text type is required; numeric typeId alone is not portable.
+        field = dict(FIELD, label='Name', name='name', typeName='Text', multipleSelection=False, options=[])
         proposals = suggest_scope(kind, {'summary': {'name': 'Summary', 'schema': {'type': 'string'}}}, [field], config, {})
         self.assertTrue(proposals['summary']['ready'])
         self.assertEqual(overlay['migration']['field_mapping'], {})
@@ -430,7 +431,7 @@ class MappingHelperTests(unittest.TestCase):
         settings={'migration':{'tracker_mapping':{'P:1':100}}}
         overlay=existing_overlay(settings)
         kind={'id':'1','name':'Test','fields':{'summary':['x']}}
-        applied=auto_connect_scope(overlay,{'key':'P'},kind,[dict(FIELD,label='Name',options=[])],{'summary':{'schema':{'type':'string'}}},settings)
+        applied=auto_connect_scope(overlay,{'key':'P'},kind,[dict(FIELD,label='Name',typeName='Text',multipleSelection=False,options=[])],{'summary':{'schema':{'type':'string'}}},settings)
         self.assertEqual(applied,['summary'])
         self.assertEqual(overlay['migration']['field_mapping']['P:1']['summary']['target'],'name')
 
