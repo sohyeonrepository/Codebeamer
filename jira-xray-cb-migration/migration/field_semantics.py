@@ -43,6 +43,12 @@ def jira_field_semantics(definition):
     item_type = schema.get("items") if multiple else typ
     kind = _GENERIC.get(item_type)
     custom = str(schema.get("custom") or "").casefold().strip()
+    # The packaged Codebeamer Jira Connector uses a per-add-on
+    # CustomFieldPlugin registry. Such fields cannot be treated as a
+    # generic Choice solely because they expose allowedValues.
+    # The published Intland Checklist extension has this exact plugin ID.
+    if custom == "com.okapya.jira.checklist:checklist":
+        return None, multiple, "Jira Checklist add-on requires explicit jira_checklist adapter and compatible target WikiText plugin"
     explicit_choice = custom in _JIRA_SELECT_CUSTOM_TYPES
     allowed = definition.get("allowedValues")
     choices_present = isinstance(allowed, list) and bool(allowed)
