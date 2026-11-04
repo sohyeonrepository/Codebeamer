@@ -31,6 +31,9 @@ class MockJiraDCXray(fixtures.Source):
 class FiveStageE2E(unittest.TestCase):
     setUp=fixtures.WizardTests.setUp
     def test_four_categories_review_import_readback_restart(self):
+        # Explicit legacy opt-in: this regression exercises four destination categories.
+        self.config['migration'].setdefault('full_xray', {})['create_execution_items'] = True
+        self.wizard.config['migration'].setdefault('full_xray', {})['create_execution_items'] = True
         self.source=MockJiraDCXray();self.wizard.jira=JiraClient(self.source,self.jira_config,self.state.save)
         self.wizard.discover();self.wizard.select_project('P',10)
         for typ in self.source.types:

@@ -83,7 +83,7 @@ def test_run(cb, state, settings, source_http, issue, item_id, run):
         test_id = test[1]['id']
     source['_executionItem'] = {'id': item_id} if item_id is not None else None
     if item_id is None:
-        source['_executionSource'] = {'id': issue['id'], 'key': issue['key']}
+        source['_executionSource'] = issue.get('_executionSourceContext', {'id': issue['id'], 'key': issue['key']})
         if adapter.get('execution_mode') != 'source_metadata':
             raise ApiError('No destination Execution Item: set run_adapter.execution_mode=source_metadata and map _executionSource/_executionItem explicitly')
     parameters = {'trackerId': tracker_id, 'executionId': item_id, 'testId': test_id}

@@ -336,6 +336,10 @@ class ImportWizard:
                 raise ApiError('Single-Issue test scope is fixed; start a separate test session to change its Tracker')
         selection = self.plan['projects'][project]
         kind = next(t for t in selection['types'] if str(t['id']) == str(type_id))
+        policy = self.config['migration'].get('full_xray', {})
+        execution_type = policy.get('issue_types', {}).get('execution', 'Test Execution')
+        if tracker is None and not policy.get('create_execution_items', False) and str(execution_type) in (str(kind['id']), kind['name']):
+            raise ApiError('Test Execution is source context only; automatic Tracker creation is disabled. Use full-xray source metadata policy.')
         if tracker is not None and tracker not in [t['id'] for t in selection['trackers']]:
             raise ApiError('Tracker must belong to the selected existing project')
         if tracker is None and not (name and name.strip()):
@@ -836,6 +840,13 @@ class ImportWizard:
             raise ApiError('Explicit Import approval is required')
         if self.visibility_review() and visibility_review != self.visibility_review():
             raise ApiError('표시 상태 미확인: 현재 분석 범위와 누락 가능성을 검토하고 명시적으로 확인하세요.')
+        policy = self.config['migration'].get('full_xray', {})
+        execution_type = policy.get('issue_types', {}).get('execution', 'Test Execution')
+        context_scopes = {scope for scope, entry in self.plan['scopes'].items()
+                          if not policy.get('create_execution_items', False)
+                          and str(execution_type) in (str(entry['type']['id']), entry['type']['name'])}
+        if context_scopes and self.config['migration'].get('mode') != 'full-xray':
+            raise ApiError('Source-only Test Execution requires full-xray mode and verified Run context mapping; no target write attempted')
         self.ensure_write_contracts()
         errors = self.errors()
         if self.config['jira'].get('single_issue_key') and (len(self.plan['scopes']) != 1 or len(self.plan['projects']) != 1):
@@ -933,6 +944,8 @@ class ImportWizard:
         self.cb.write = True
         try:
             for scope, entry in self.plan['scopes'].items():
+                if scope in context_scopes:
+                    continue  # Execution fields/Tracker are not destination objects.
                 project_id = entry['project_id']
                 settings['project_mapping'][entry['project']] = project_id
                 # Re-read membership at the time of Import, not just during analysis.
@@ -1006,6 +1019,8 @@ class ImportWizard:
                 self.config['migration'][section] = deepcopy(settings[section])
             self.config['codebeamer']['field_bindings'] = deepcopy(self.cb.config.get('field_bindings', {}))
             for scope, entry in self.plan['scopes'].items():
+                if scope in context_scopes:
+                    continue
                 entry['tracker'] = settings['tracker_mapping'][scope]
                 entry['new_tracker'] = None
                 entry['target_fields'] = target_fields(self.cb, entry['tracker'])
