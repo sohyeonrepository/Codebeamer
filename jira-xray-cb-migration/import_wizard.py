@@ -528,7 +528,7 @@ def launch(wizard, initial_projects=None):
         conversion_notice.grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
         body.columnconfigure(1,weight=1);body.rowconfigure(5,weight=1)
         if any(not profile.get('binding') for profile in profiles.values()):
-            ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=7,column=0,columnspan=2,sticky='w')
+            ttk.Label(body,text='필드 생성 계약과 값 쓰기 계약은 별도입니다. 값 모델 미확인 시 필드 생성 후 Item 이관은 미완료로 표시됩니다.',wraplength=420).grid(row=9,column=0,columnspan=2,sticky='w')
         reference_box=None
         reference_trackers=wizard.plan['projects'][entry['project']]['trackers']
         reference_label=ttk.Label(body,text='참조 대상 Tracker')
@@ -563,7 +563,7 @@ def launch(wizard, initial_projects=None):
             if type_box.get() in ('option','status') and not lines:
                 lines=list(originals.values())
                 options.delete('1.0','end')
-                options.insert('1.0','\\n'.join(lines))
+                options.insert('1.0','\n'.join(lines))
             choices={}
             if type_box.get() in ('option','status'):
                 if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
@@ -572,7 +572,7 @@ def launch(wizard, initial_projects=None):
             wizard.configure_creation(scope,source,name.get(),type_box.get(),multiple.get(),choices,
                 reference_tracker=reference_trackers[reference_box.current()]['id'] if reference_box is not None and reference_box.current()>=0 else None)
             display_scope();dialog.destroy()
-        footer=ttk.Frame(body);footer.grid(row=6,column=0,columnspan=2,sticky='e',pady=(14,0))
+        footer=ttk.Frame(body);footer.grid(row=10,column=0,columnspan=2,sticky='e',pady=(14,0))
         ttk.Button(footer,text='취소',command=dialog.destroy).pack(side='left',padx=4)
         ttk.Button(footer,text='생성 설정 저장',command=lambda:run('신규 필드 설정 저장',save_creation)).pack(side='left')
     manual_button.configure(command=lambda:run('수동 매핑',edit))
