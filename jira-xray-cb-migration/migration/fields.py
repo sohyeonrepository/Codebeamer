@@ -17,6 +17,13 @@ def convert(value, kind, mapping, identity_key=None):
         if not isinstance(value, str):
             raise ApiError('Non-text source requires explicit conversion')
         return value
+    if kind in ('text_multi', 'text_list'):
+        if not isinstance(value, list) or any(not isinstance(part, str) for part in value):
+            raise ApiError('Jira multi-text requires an array of strings; values cannot be silently dropped')
+        if kind == 'text_list':
+            return list(value)
+        # Codebeamer Text/WikiText is a single text value; keep line breaks and source JSON.
+        return '\n'.join(value)
     if kind == 'number':
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ApiError('Expected numeric source')
