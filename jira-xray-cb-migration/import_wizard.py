@@ -37,7 +37,7 @@ def reference_field_rows(fields):
 
 
 def relation_display(saved, catalog, references):
-    if not saved:return '', '', ''
+    if not saved:return '이관하지 않음', '무시', '—'
     from migration.relation_mapping import normalize
     value=normalize(saved)
     mode=value['mode']
@@ -369,7 +369,9 @@ def launch(wizard, initial_projects=None):
             if query and query not in (left+' '+right).casefold():continue
             iid='field-'+str(index);scope_rows[iid]=source
             kind,multiple=semantic_type(definition,True)
-            table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,field_group(source,definition),str(kind)+(' / Multi' if multiple else ''),left or row.get('reason','검증 필요'),len(row.get('creation',{}).get('choices',{}))))
+            table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,field_group(source,definition),str(kind)+(' / Multi' if multiple else ''),
+                (left or row.get('reason','검증 필요')) if row.get('selected',True) else '이관하지 않음 (제외)',
+                len(row.get('creation',{}).get('choices',{}))))
         if entry.get('source_only'):
             detail.set('Test Execution의 모든 원본 필드·환경·관계는 Run 맥락으로 보존합니다. 일반 필드 생성/매핑 대상이 아닙니다.')
             warning.set('Xray 관계 / 실행 결과 검수에서 개별 Run ID와 결과를 확인하세요.')
@@ -687,7 +689,7 @@ def launch(wizard, initial_projects=None):
     reference_target.grid(row=2,column=1,columnspan=3,sticky='ew',padx=6,pady=4)
     selectors.columnconfigure(3,weight=1)
     ttk.Checkbutton(association_tab,text='방향 반전: 정규화된 Jira outward → inward를 반대로 적용',variable=relation_reverse).pack(anchor='w')
-    reference_info=tk.StringVar(value='미매핑 관계는 빈칸으로 유지하며 Import 결과에서 제외 건수와 원본을 확인할 수 있습니다.')
+    reference_info=tk.StringVar(value='기본값은 이관하지 않음입니다. 원하는 Jira Link Type만 Association 또는 Reference에 매핑하세요. 미선택 관계는 CB에 생성되지 않습니다.')
     ttk.Label(association_tab,textvariable=reference_info,wraplength=1040).pack(anchor='w',pady=4)
     detail_panel=ttk.Frame(association_tab);detail_panel.pack(fill='x')
     reference_detail=tk.Text(detail_panel,height=4,wrap='word',state='disabled')
@@ -827,7 +829,7 @@ def launch(wizard, initial_projects=None):
     ttk.Button(controls,text='Reference 필드 새로 조회',command=lambda:run('Reference Field 조회',lambda:load_reference_fields(refresh=True))).pack(side='left',padx=4)
     ttk.Button(controls,text='＋ 신규 Reference 필드',command=lambda:run('Reference 생성 설정',create_relation_reference)).pack(side='left',padx=4)
     ttk.Button(controls,text='관계 매핑 저장',command=lambda:run('관계 매핑 저장',save_relation)).pack(side='left',padx=4)
-    ttk.Button(controls,text='매핑 해제 (제외)',command=lambda:run('관계 매핑 해제',clear_relation)).pack(side='left',padx=4)
+    ttk.Button(controls,text='무시 (이관 제외)',command=lambda:run('관계 매핑 제외',clear_relation)).pack(side='left',padx=4)
     ttk.Button(controls,text='오류 복사',command=lambda:(root.clipboard_clear(),root.clipboard_append(status.get()))).pack(side='right')
     saved_catalog=wizard.state.load('wizard','relation-catalog')
     if saved_catalog:
