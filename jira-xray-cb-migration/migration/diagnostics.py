@@ -29,7 +29,6 @@ def _schema_summary(spec, model):
 
 def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
     """Write minimal safe metadata needed to reproduce a contract failure."""
-    from clients.codebeamer_payloads import native_field_property
     from clients.tracker_fields import binding
     spec = wizard.cb.spec
     scopes = {}
@@ -43,10 +42,9 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
             target = row.get('target') or {}
             selected = row.get('spec') or {}
             fid = selected.get('field_id')
-            if field_id is not None and str(fid) != str(field_id):
-                continue
             model = target.get('valueModel')
             field_rows.append({
+                'blocking_field': field_id is not None and str(fid) == str(field_id),
                 'jira_field_id': source, 'jira_field_name': entry.get('analysis', {}).get('fields', {}).get(source, {}).get('name'),
                 'mapping_status': row.get('status'),
                 'cb_field_id': fid,
@@ -93,7 +91,7 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
                 'method': op['method'], 'path': path,
                 'request_properties': sorted(raw.get('properties', {})),
             }
-        except (KeyError, TypeError, ValueError, Exception) as exc:
+        except Exception as exc:
             document['operations'][operation_name] = {'inspection_error': type(exc).__name__}
     folder = Path(wizard.state.root) / 'logs'
     folder.mkdir(parents=True, exist_ok=True)
