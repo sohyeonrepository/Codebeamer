@@ -85,8 +85,12 @@ def migrate_full(engine):
             issue['_executionSourceContext'] = context
             engine.state.save('source-execution-context', issue['key'], issue)
             report['source_executions'].append({'id': issue['id'], 'key': issue['key'], 'status': 'source-preserved'})
+            if not issue['_runs']:
+                report['limitations'].append({'source':issue['key'], 'reason':'Individual Test Runs not collected; aggregate results do not verify migration'})
             for run in issue['_runs']:
                 data = run['data']
+                if data.get('status') is None:
+                    raise ApiError('Individual Run status unavailable; aggregate results cannot substitute')
                 if str(run['id']) in seen_runs or data.get('testExecKey') != issue['key'] or str(data.get('id')) != str(run['id']):
                     raise ApiError('Duplicate or inconsistent Xray Run identity')
                 seen_runs.add(str(run['id']))

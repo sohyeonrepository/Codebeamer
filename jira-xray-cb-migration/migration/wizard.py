@@ -613,7 +613,9 @@ class ImportWizard:
             self.state.save('wizard','field-type-catalog',catalog)
         for template in creation_templates(template_configuration, fields):
             definition = template['definition']
-            representative = next((f for f in fields if f.get('typeId') == definition['typeId']), None)
+            from mapping_helper import field_type_label
+            representative = next((f for f in fields if f.get('typeId') == definition['typeId']
+                                   and field_type_label(f) == template['name']), None)
             if not representative: continue
             kind, _ = semantic_type(representative)
             if not kind or not template['type_verified']: continue

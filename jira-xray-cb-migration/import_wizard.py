@@ -12,6 +12,7 @@ from migration.state import State
 from migration.wizard import ImportWizard, field_identifier, semantic_type, hidden, compatible
 from mapping_helper import label_tokens, source_choices
 from migration.system_fields import choice_input
+from migration.xray_review import field_group, issue_kind, TITLES, collect_review
 
 
 def issue_type_display(kind):
@@ -175,6 +176,25 @@ def launch(wizard, initial_projects=None):
     step3=ttk.Frame(mapping_tabs,padding=4)
     association_tab=ttk.Frame(mapping_tabs,padding=8)
     mapping_tabs.add(step3,text='필드 매핑')
+    xray_tab=ttk.Frame(mapping_tabs,padding=8)
+    mapping_tabs.add(xray_tab,text='Xray 관계 / 실행 결과 검수')
+    ttk.Label(xray_tab,text='Issue는 Key로, Test Run은 별도 숫자 Run ID로 조회합니다. 집계 PASS/FAIL은 개별 Run이 아닙니다.',wraplength=950).pack(anchor='w')
+    xray_kind=ttk.Combobox(xray_tab,state='readonly',values=list(TITLES),width=20)
+    xray_kind.pack(anchor='w');xray_kind.set('test')
+    ttk.Label(xray_tab,text='원본 Issue Key 또는 Run ID').pack(anchor='w')
+    xray_identifier=ttk.Entry(xray_tab,width=40);xray_identifier.pack(anchor='w')
+    xray_output=tk.Text(xray_tab,width=100,height=22);xray_output.pack(fill='both',expand=True)
+    def inspect_xray_source():
+        from clients.xray_client import XrayClient
+        identifier=xray_identifier.get().strip()
+        if not identifier:raise ApiError('원본 Key/Run ID를 입력하세요.')
+        report=collect_review(wizard.jira,XrayClient(wizard.jira.http,wizard.jira.config,wizard.state.save),
+                              identifier,xray_kind.get(),wizard.config['migration'])
+        xray_output.delete('1.0','end')
+        xray_output.insert('end',json.dumps(report,ensure_ascii=False,indent=2))
+    ttk.Button(xray_tab,text='원본 전용 API 조회 · 쓰기 없음',
+               command=lambda:run('Xray 원본 검수',inspect_xray_source)).pack(anchor='w')
+
     mapping_tabs.add(association_tab,text='관계 매핑')
     title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
     ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
@@ -200,8 +220,8 @@ def launch(wizard, initial_projects=None):
     ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
     search_entry=ttk.Entry(tools,textvariable=search,width=28);search_entry.pack(side='right')
     table_frame=ttk.Frame(step3);table_frame.pack(fill='both',expand=True)
-    table = ttk.Treeview(table_frame, columns=('selected','jira','kind','cb','options'),show='headings',selectmode='browse')
-    for column,text,width in (('selected','선택',55),('jira','Jira 필드',230),('kind','Jira 타입',120),('cb','CB 생성 계획 ▾',350),('options','옵션 수',80)):
+    table = ttk.Treeview(table_frame, columns=('selected','jira','group','kind','cb','options'),show='headings',selectmode='browse')
+    for column,text,width in (('selected','선택',55),('jira','Jira 필드',230),('group','처리 구분',170),('kind','Jira 타입',120),('cb','CB 생성 계획 ▾',350),('options','옵션 수',80)):
         table.heading(column,text=text);table.column(column,width=width,anchor='w')
     scrollbar=ttk.Scrollbar(table_frame,orient='vertical',command=table.yview)
     table.configure(yscrollcommand=scrollbar.set)
@@ -233,7 +253,9 @@ def launch(wizard, initial_projects=None):
         if not scopes.get() or scopes.get() not in wizard.plan['scopes']:
             table.delete(*table.get_children());return
         entry = wizard.plan['scopes'][scopes.get()]
-        scope_title.set(scope_names(entry))
+        category=issue_kind(entry['type'],wizard.config['migration'])
+        scope_title.set((TITLES.get(category,'Jira Issue')+' · ')+scope_names(entry))
+        if category:xray_kind.set(category)
         scope_rows.clear(); table.delete(*table.get_children())
         query=search.get().strip().casefold()
         for index,(source,row) in enumerate(entry.get('rows',{}).items()):
@@ -251,13 +273,14 @@ def launch(wizard, initial_projects=None):
                     left=row['creation']['label']+' (신규 생성 예정)'
             definition=entry['analysis']['fields'][source]
             right=definition.get('name',source)+(' ('+source+')' if source.startswith('customfield_') else '')
+            if definition.get('required') is True:right += ' [필수]'
             if query and query not in (left+' '+right).casefold():continue
             iid='field-'+str(index);scope_rows[iid]=source
             kind,multiple=semantic_type(definition,True)
-            table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,str(kind)+(' / Multi' if multiple else ''),left or row.get('reason','검증 필요'),len(row.get('creation',{}).get('choices',{}))))
+            table.insert('','end',iid=iid,values=('☑' if row.get('selected',True) else '☐',right,field_group(source,definition),str(kind)+(' / Multi' if multiple else ''),left or row.get('reason','검증 필요'),len(row.get('creation',{}).get('choices',{}))))
         risks=entry['analysis']['risks']+entry.get('target_risks',[])
         api_warnings=wizard.cb.config.get('tracker_field_evidence',{}).get(str(entry.get('tracker') or entry.get('template_tracker')),{}).get('warnings',[])
-        detail.set(str(sum(r.get('selected',True) for r in entry['rows'].values()))+' / '+str(len(entry['rows']))+' 선택 · 조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Attachment · Comment · Association · History는 별도 자동 처리')
+        detail.set(str(sum(r.get('selected',True) for r in entry['rows'].values()))+' / '+str(len(entry['rows']))+' 선택 · 조회 Issue '+str(entry['analysis']['issue_count'])+'건 · Comment · Attachment · History는 별도 보존/검증 · Xray 관계/Run은 별도 검수')
         warning.set(('⚠ Hidden 필드에 실제 값이 남아 있어 누락 위험 '+str(len(risks))+'건: '+
                      ', '.join(r['field'] for r in risks)) if risks else '')
         if entry['analysis'].get('visibility_unknown') or entry['analysis'].get('configuration_status') == 'unavailable':

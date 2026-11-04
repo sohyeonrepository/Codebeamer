@@ -8,7 +8,7 @@ from migration.state import State
 
 
 class FullXrayTests(unittest.TestCase):
-    def run_profile(self, missing=False, fail=False, write=True, with_run=False, missing_contract=False, context_edge=False):
+    def run_profile(self, missing=False, fail=False, write=True, with_run=False, missing_contract=False, context_edge=False, duplicate_plan=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         state = State(temporary.name)
@@ -17,6 +17,7 @@ class FullXrayTests(unittest.TestCase):
         for i, kind in enumerate(('Test', 'Test Execution', 'Test Set', 'Test Plan'), 1):
             objects.append({'id': str(i), 'key': 'P-' + str(i), 'fields': {
                 'issuetype': {'id': str(i), 'name': kind}, 'members': []}, '_runs': []})
+        if duplicate_plan: objects.append(objects[-1])
         objects[-1]['fields']['members'] = ['P-404' if missing else 'P-1']
         class Jira:
             def __init__(self, *args): pass
@@ -41,7 +42,7 @@ class FullXrayTests(unittest.TestCase):
             settings['full_xray']['relationships'].append({'from':'plan','to':'execution',
                 'path':'fields.executions','identity_path':'$'})
         cb = SimpleNamespace(discover=lambda: None, operation=lambda name: {})
-        engine = Engine(SimpleNamespace(http=None, config={}), SimpleNamespace(runs=lambda *args: ([{'id':'7','data':{'id':7,'testKey':'P-1','testExecKey':'P-2'}}] if with_run else [])), cb, state, settings, write)
+        engine = Engine(SimpleNamespace(http=None, config={}), SimpleNamespace(runs=lambda *args: ([{'id':'7','data':{'id':7,'testKey':'P-1','testExecKey':'P-2','status':'PASS'}}] if with_run else [])), cb, state, settings, write)
         writes = []
         def issue(project, obj, definitions):
             if fail and obj['key'] == 'P-1': raise ApiError('bad mapping')
@@ -63,7 +64,8 @@ class FullXrayTests(unittest.TestCase):
 
     def test_plan_first_then_memberships(self):
         report, writes, calls = self.run_profile()
-        self.assertTrue(report['complete'])
+        self.assertFalse(report['complete'])  # Execution has no individual Run details.
+        self.assertTrue(any('Individual Test Runs' in r['reason'] for r in report['limitations']))
         self.assertEqual(writes, ['Test Plan', 'Test', 'Test Set'])
         self.assertEqual(calls, 1)
         self.assertEqual(report['relationships'][0]['status'], 'verified')
@@ -124,3 +126,10 @@ class FullXrayTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError, 'requires full-xray mode'):
             wizard.execute(approved=True)
         self.assertFalse(wizard.cb.write)
+
+    def test_duplicate_plan_export_does_not_create_a_second_object(self):
+        report, writes, calls = self.run_profile(duplicate_plan=True)
+        self.assertFalse(report['complete'])
+        self.assertEqual(writes, [])
+        self.assertEqual(calls, 0)
+        self.assertIn('Duplicate source identity', report['errors'][0]['error'])

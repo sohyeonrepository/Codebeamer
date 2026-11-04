@@ -57,6 +57,22 @@ class XrayClient:
     def runs(self, issue, field):
         field = self.relationship_field(issue, field)
         value = issue['fields'].get(field)
+        discovery = self.config.get('run_discovery')
+        if (value is None or value == []) and discovery:
+            from clients.xray_dc_contract import collect_xray_dc
+            configured_type = discovery.get('execution_issue_type')
+            actual_type = issue['fields'].get('issuetype', {})
+            if configured_type is None or str(configured_type) not in (str(actual_type.get('id')), actual_type.get('name')):
+                raise ApiError('Run discovery requires a verified Execution Issue Type')
+            collected = collect_xray_dc(self.http, 'test_execution_tests', issue['key'], discovery, self.archive)
+            run_key, test_key = discovery.get('run_id_key'), discovery.get('test_key_key')
+            if not run_key or not test_key:
+                raise ApiError('Configure actual Run ID and Test key members of Execution response')
+            value = []
+            for record in collected['items']:
+                if record.get(run_key) is None or not record.get(test_key):
+                    raise ApiError('Execution member lacks Run ID/Test key; cannot infer Runs from counts')
+                value.append({'testRunId':record[run_key], 'testKey':record[test_key]})
         if value is None:
             return []
         if not isinstance(value, list):
@@ -70,7 +86,8 @@ class XrayClient:
             if str(run_id) in seen:
                 raise ApiError('Duplicate Xray Run ID in Execution relationship: ' + str(run_id))
             seen.add(str(run_id))
-            run = self.http.request('GET', '/rest/raven/1.0/api/testrun/' + segment(run_id))
+            from clients.xray_dc_contract import dc_read_path
+            run = self.http.request('GET', dc_read_path('test_run', run_id))
             if self.archive:
                 self.archive('source-run-details', run_id, run)
             if not isinstance(run, dict):

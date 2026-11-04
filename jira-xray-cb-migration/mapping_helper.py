@@ -592,7 +592,7 @@ TYPE_LABELS = {
     'integer': 'Integer (정수)', 'decimal': 'Decimal (소수)',
     'bool': 'Bool (예/아니오)', 'boolean': 'Bool (예/아니오)',
     'choice': 'Choice (선택)', 'user': 'User (사용자)',
-    'members': 'Members (사용자 목록)', 'users': 'Members (사용자 목록)', 'date': 'Date (날짜)',
+    'members': 'Members (사용자 목록)', 'users': 'Members (사용자 목록)', 'date': 'Date (날짜)', 'datetime': 'Datetime (날짜/시간)',
     'duration': 'Duration (기간)', 'table': 'Table (테이블)',
     'references': 'References (참조)', 'reference': 'References (참조)',
     'wikilink': 'Wiki Link / URL (링크)', 'url': 'Wiki Link / URL (링크)',

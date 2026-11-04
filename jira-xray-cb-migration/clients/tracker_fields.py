@@ -6,7 +6,7 @@ from mapping_helper import field_identifier, schema_object
 
 TYPES = {'TextField':'Text', 'WikiTextField':'Wikitext', 'WikitextField':'Wikitext',
          'IntegerField':'Integer', 'DecimalField':'Decimal', 'BooleanField':'Boolean',
-         'BoolField':'Boolean', 'DateField':'Date', 'DateTimeField':'Datetime',
+         'BoolField':'Boolean', 'DateField':'Date', 'DateTimeField':'Datetime', 'DatetimeField':'Datetime',
          'OptionChoiceField':'Choice', 'UserChoiceField':'User',
          'TrackerItemChoiceField':'Reference', 'ReferenceField':'Reference'}
 
@@ -20,7 +20,8 @@ def normalize(field):
     if not result.get('typeName'):
         model = str(field.get('valueModel', '')).split('<', 1)[0]
         models = {'TextFieldValue':'Text','WikiTextFieldValue':'Wikitext','IntegerFieldValue':'Integer',
-                  'DecimalFieldValue':'Decimal','BooleanFieldValue':'Boolean','DateFieldValue':'Date'}
+                  'DecimalFieldValue':'Decimal','BooleanFieldValue':'Boolean','DateFieldValue':'Date',
+                  'DateTimeFieldValue':'Datetime','DatetimeFieldValue':'Datetime'}
         if model in models: result['typeName'] = models[model]
     if type(field.get('multipleValues')) is bool: result['multipleSelection'] = field['multipleValues']
     return result
