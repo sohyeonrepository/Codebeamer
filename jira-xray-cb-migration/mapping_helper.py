@@ -213,7 +213,7 @@ def build_spec(source, target, conversion, target_key, values, existing=False):
         raise ValueError('대상 payload 키를 입력하세요.')
     if not isinstance(values, dict):
         raise ValueError('값 매핑은 JSON 객체여야 합니다.')
-    if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference', 'jira_checklist'):
+    if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference', 'jira_checklist', 'text_multi', 'text_list'):
         raise ValueError('지원하지 않는 변환입니다.')
     if not existing and conversion in ('user', 'status', 'option', 'reference') and not values:
         raise ValueError('선택지/사용자/참조 변환은 값 매핑이 필요합니다.')
