@@ -161,7 +161,12 @@ def field_analysis(jira, project, issue_type):
         if key not in visible and key not in excluded:
             definition = definitions.get(key)
             if definition:
-                visible[key] = dict(definition, visibility='unknown', configured=False,
+                normalized = dict(definition)
+                # Jira's two standard textual fields have fixed Jira data
+                # semantics even when /field omits the schema object.
+                if not isinstance(normalized.get('schema'),dict) or not normalized['schema'].get('type'):
+                    normalized['schema'] = {'type':'string'}
+                visible[key] = dict(normalized, visibility='unknown', configured=False,
                                     has_value=False, used_in_issues=False,
                                     default_selected=True, show_by_default=True)
     return {'fields': visible, 'values': values, 'risks': risks, 'excluded':excluded,'issue_count': count,
@@ -266,6 +271,15 @@ def proposals(analysis, targets, config, existing=None):
                 entry['reason'] = str(exc) or 'Reference 대상 필드 없음'
             result[source] = entry
             continue
+        # Older Wizard plans may contain stale auto-generated mappings.
+        # For the two core text fields a unique, type-compatible built-in
+        # match supersedes an invalid saved Field ID, without silently
+        # replacing an otherwise valid user-selected mapping.
+        if source in ('summary', 'description') and source in existing and len(candidates) == 1:
+            saved = next((f for f in visible if str(field_identifier(f)) == str(existing[source].get('field_id'))), None)
+            if saved is None or not compatible(kind, multiple, saved):
+                existing = dict(existing)
+                existing.pop(source)
         if source in existing:
             candidate = next((f for f in targets if str(field_identifier(f)) == str(existing[source]['field_id'])), None)
             spec=deepcopy(existing[source])
