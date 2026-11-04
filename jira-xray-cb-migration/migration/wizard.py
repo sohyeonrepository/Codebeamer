@@ -1052,6 +1052,9 @@ class ImportWizard:
         settings.setdefault('tracker_mapping', {})
         settings.setdefault('field_mapping', {})
         settings.setdefault('wizard', {})['enabled'] = True
+        # The UI is opt-in: only explicitly checked fields may be written.
+        # An unselected Jira field is intentionally outside import scope.
+        settings['wizard']['selected_fields_only'] = True
         if settings.get('mode') == 'test-runs':
             # Import Wizard imports the selected issues, unlike the preserved Run-only CLI.
             settings['mode'] = 'issues'
