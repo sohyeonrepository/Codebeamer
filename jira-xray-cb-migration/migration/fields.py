@@ -13,6 +13,23 @@ def convert(value, kind, mapping, identity_key=None):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     if kind == 'raw':
         return value
+    if kind == 'stringify':
+        # Explicit conversion to a scalar Text/WikiText/Wiki Link field.
+        # Unlike "raw", this never sends a numeric or structured payload
+        # into a string-only Codebeamer FieldValue.
+        import json
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            return str(value).lower() if isinstance(value, bool) else str(value)
+        if isinstance(value, list):
+            return '\\n'.join(convert(part, 'stringify', mapping) for part in value)
+        if isinstance(value, dict):
+            for key in ('value', 'name', 'displayName', 'key'):
+                if isinstance(value.get(key), (str, int, float)):
+                    return str(value[key])
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        raise ApiError('Unsupported source for explicit Text conversion')
     if kind == 'text':
         if not isinstance(value, str):
             raise ApiError('Non-text source requires explicit conversion')
