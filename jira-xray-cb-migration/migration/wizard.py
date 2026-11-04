@@ -880,10 +880,9 @@ class ImportWizard:
             errors.append('프로젝트를 선택하세요.')
         if self.plan['scopes'] and not any(e.get('analysis', {}).get('issue_count', 0) for e in self.plan['scopes'].values()):
             errors.append('이관할 실제 Issue가 없습니다.')
-        for project, selected in self.plan['projects'].items():
-            for kind in selected['types']:
-                scope = project + ':' + str(kind['id'])
-                entry = self.plan['scopes'].get(scope, {})
+        # Only explicitly mapped Tracker scopes are Import candidates.
+        # Jira project issue_types() is a catalog, not a user selection.
+        for scope, entry in self.plan['scopes'].items():
                 if 'analysis' not in entry:
                     errors.append(scope + ': 분석 필요')
                     continue
@@ -1175,12 +1174,14 @@ class ImportWizard:
         for project in config['jira']['projects']:
             for summary in jira.issues(project):
                 issue = jira.bundle(summary['key'])
-                from migration.preservation import collect_r4j
-                collect_r4j(jira, issue, settings, self.state)
                 scope = project + ':' + str(issue['fields']['issuetype']['id'])
                 entry = self.plan['scopes'].get(scope)
                 if entry is None:
-                    raise ApiError('Unmapped Issue Type in source selection')
+                    # Jira returns every Issue Type in the project. Unselected
+                    # types must not become Import errors or target objects.
+                    continue
+                from migration.preservation import collect_r4j
+                collect_r4j(jira, issue, settings, self.state)
                 # A type-scoped user selection is authoritative: fields not in
                 # the selected mapping (including excluded/unconfigured fields)
                 # must not block Item Import or become new target fields.
