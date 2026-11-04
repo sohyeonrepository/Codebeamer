@@ -115,12 +115,38 @@ def collect_catalog(jira, cb, trackers, sample_limit=20):
         config.pop('execution_issue_types', None)
         reader = JiraClient(jira.http, config)
         samples = read_stage('Jira 프로젝트 이슈 표본 검색', lambda: list(islice(reader.issues(project['key']), sample_limit)))
+        # Enumerate actual project Issue Type definitions. A sample of 20
+        # issues is NOT an issue-type catalog; uncommon or empty types vanish.
         types = {}
+        project_types = getattr(jira, 'project_issue_type_catalog', None)
+        if project_types is None:
+            project_types = getattr(jira, 'issue_types', None)
+        if project_types is not None:
+            try:
+                listed = read_stage('Jira 프로젝트별 Issue Type 전체 목록',
+                                    lambda: project_types(project['key']))
+                for kind in listed:
+                    if not isinstance(kind, dict) or kind.get('id') is None or not kind.get('name'):
+                        raise ApiError('Incomplete Issue Type metadata for ' + project['key'])
+                    type_id = str(kind['id'])
+                    if type_id in types:
+                        raise ApiError('Duplicate Jira Issue Type ID in project: ' + type_id)
+                    types[type_id] = {'id': type_id, 'name': kind['name'], 'fields': {},
+                                      'subtask': bool(kind.get('subtask', False)),
+                                      'sample_count': 0, 'metadata_only': True}
+            except ApiError as exc:
+                # Do not report a limited sample as complete discovery.
+                warnings.append('Jira Issue Type 전체 조회 실패 (' + project['key'] + '): ' + str(exc))
+        else:
+            warnings.append('Jira Issue Type 정의 조회 기능 없음: 이슈 표본만 표시됩니다.')
         run_samples = {}
         for issue in samples:
             issue_type = issue['fields']['issuetype']
             type_id = str(issue_type['id'])
-            entry = types.setdefault(type_id, {'id': type_id, 'name': issue_type['name'], 'fields': {}})
+            entry = types.setdefault(type_id, {'id': type_id, 'name': issue_type['name'],
+                                                'fields': {}, 'sample_count': 0, 'metadata_only': True})
+            entry['sample_count'] += 1
+            entry['metadata_only'] = False
             for key, value in issue['fields'].items():
                 values = entry['fields'].setdefault(key, [])
                 if value not in values and len(values) < 5:
@@ -137,7 +163,12 @@ def collect_catalog(jira, cb, trackers, sample_limit=20):
                     run_samples.setdefault(key, [])
         if jira.http is not None:
             for entry in types.values():
-                representative = next(issue for issue in samples if str(issue['fields']['issuetype']['id']) == entry['id'])
+                representative = next((issue for issue in samples
+                                       if str(issue['fields']['issuetype']['id']) == entry['id']), None)
+                if representative is None:
+                    # No Issue exists in this bounded sample. The type is real,
+                    # but we must not invent editmeta fields for it.
+                    continue
                 try:
                     from clients.jira_client import segment
                     metadata = read_stage('Jira 유형별 편집 화면 필드', lambda: jira.http.request('GET', '/rest/api/2/issue/' + segment(representative['key']) + '/editmeta'))
