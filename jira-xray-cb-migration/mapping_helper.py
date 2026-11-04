@@ -371,21 +371,31 @@ def suggest_mapping(source, definition, samples, target_fields, settings, manual
     if len(candidates) != 1:
         return {'field': None, 'reason': '같은 이름의 대상이 여러 개: 직접 선택' if candidates else '대상 직접 선택 필요', 'ready': False}
     field = candidates[0]
-    schema = definition.get('schema', {})
-    kind = schema.get('type')
+    from migration.field_semantics import jira_field_semantics
+    kind, multiple, semantic_evidence = jira_field_semantics(definition)
     aliases = tokens
     if aliases & {'submittedat', 'modifiedat', 'closedat', 'runby', 'submitter'}:
         system_note = ' · 시스템 필드 쓰기 권한 확인 필요'
     else:
         system_note = ''
-    conversion = {'string': 'text', 'number': 'number', 'integer': 'number', 'boolean': 'boolean',
-                  'date': 'date', 'datetime': 'datetime', 'user': 'user', 'option': 'option',
-                  'priority': 'option', 'status': 'status'}.get(kind)
-    if kind == 'array':
-        conversion = {'option': 'option', 'user': 'user', 'version': 'option'}.get(schema.get('items'))
-    if conversion is None and samples:
-        nonnull = next((s for s in samples if s is not None), None)
-        conversion = 'text' if isinstance(nonnull, str) else ('boolean' if isinstance(nonnull, bool) else ('number' if isinstance(nonnull, (int, float)) else None))
+    # Use authoritative Jira metadata instead of guessing from sample values.
+    # A multi-text array may be safely serialized only when the destination
+    # is confirmed to be Text/WikiText; Choice arrays require value-ID mapping.
+    conversion = kind
+    if kind == 'text' and multiple:
+        from migration.wizard import text_conversion, semantic_type
+        conversion = text_conversion(kind, multiple, field)
+    else:
+        from migration.wizard import semantic_type
+    target_kind, target_multiple = semantic_type(field)
+    if kind is None or target_kind is None or not isinstance(target_multiple, bool):
+        conversion = None
+    elif kind == 'option' and (target_kind != 'option' or multiple != target_multiple):
+        conversion = None
+    elif kind == 'text' and target_kind != 'text':
+        conversion = None
+    elif kind not in ('option', 'text') and (kind != target_kind or multiple != target_multiple):
+        conversion = None
     fid = field_identifier(field)
     bindings = settings.get('codebeamer', {}).get('field_bindings', {})
     keys = [key for key, binding in bindings.items() if str(binding.get('fieldId')) == str(fid)]
@@ -395,6 +405,8 @@ def suggest_mapping(source, definition, samples, target_fields, settings, manual
         target_key = canonical
     values, unmatched = suggest_values(samples, field.get('options'))
     reason = ('사용자 선택 대상' if manual else ('유사 이름 후보 · 확인 필요' if fuzzy else '이름/알려진 별칭 일치')) + system_note
+    if conversion is None:
+        reason += ' · Jira ' + str(kind) + '/' + ('Multi' if multiple else 'Single') + ' 와 Codebeamer 대상 타입 불일치 또는 메타데이터 미확인: ' + semantic_evidence
     if conversion in ('option', 'status', 'user', 'reference') and unmatched:
         reason += ' · 값 확인 ' + str(len(unmatched)) + '개'
     if not target_key:
