@@ -5,6 +5,9 @@ from clients.http import ApiError
 def convert(value, kind, mapping, identity_key=None):
     if value is None:
         return None
+    if kind == 'jira_checklist':
+        from migration.jira_connector_custom_fields import to_codebeamer_wiki
+        return to_codebeamer_wiki(value, priority_mapping=mapping)
     if kind == 'json':
         import json
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
