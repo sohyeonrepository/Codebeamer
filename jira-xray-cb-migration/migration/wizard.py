@@ -1069,15 +1069,37 @@ class ImportWizard:
             success=[value for code,value in responses.items() if str(code).startswith('2') and isinstance(value,dict)]
             if not success:raise ApiError('Item create success response schema missing')
             from clients.tracker_fields import binding
+            from clients.codebeamer_payloads import native_field_property
             for entry in self.plan['scopes'].values():
-                for row in entry.get('rows', {}).values():
-                    if not row.get('selected',True):continue
+                for source, row in entry.get('rows', {}).items():
+                    if not row.get('selected', True):
+                        continue
                     selected = row.get('spec')
-                    if not selected or selected.get('deferred_reference') or not (selected['target'].startswith('cb_field_') or selected.get('value_contract_unverified')):continue
-                    target = row.get('target', {})
+                    if not selected or selected.get('deferred_reference'):
+                        continue
+                    if not (selected['target'].startswith('cb_field_') or selected.get('value_contract_unverified')):
+                        continue
+                    target = row.get('target') or {}
+                    # A built-in Jira/CB field should use the native Item
+                    # property ONLY when the current create/update Swagger
+                    # contract explicitly exposes that property. Field ID
+                    # alone is never sufficient to infer a writable model.
+                    native = native_field_property(self.cb.spec, api, source, target)
+                    if native:
+                        selected['target'] = native
+                        selected.pop('binding', None)
+                        selected.pop('value_contract_unverified', None)
+                        self.state.save('wizard-native-binding', entry['project']+':'+str(entry['type']['id'])+':'+source,
+                                        {'field_id':selected['field_id'],'property':native})
+                        continue
                     confirmed = selected.get('binding') or binding(self.cb.spec, target)
                     if not confirmed:
-                        raise ApiError('Field '+str(selected['field_id'])+': valueModel의 writable FieldValue schema 미확인')
+                        name = target.get('label',target.get('name',source))
+                        model = target.get('valueModel','not provided by field detail')
+                        raise ApiError('Codebeamer Field '+str(selected['field_id'])+' ('+str(name)+
+                                       '): native Item property not found and writable FieldValue schema unverified. '+
+                                       'valueModel='+str(model)+'. Check actual Item POST and Field Detail GET; '+
+                                       'no target write attempted.')
                     selected['binding'] = confirmed
                     selected.pop('value_contract_unverified', None)
             result={'openapi_source':self.cb.config.get('reused_successful_openapi',self.cb.config.get('discovered_swagger_url')),
