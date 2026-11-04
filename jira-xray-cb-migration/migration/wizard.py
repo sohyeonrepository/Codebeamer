@@ -538,6 +538,24 @@ class ImportWizard:
             'tracker': tracker, 'new_tracker': name.strip() if tracker is None else None}
         self.state.save('wizard', 'plan', self.plan)
 
+    def keep_only_scope(self, scope):
+        """Remove stale GUI mapping selections from the active Import plan.
+
+        This does not delete Jira issues, Codebeamer trackers, or saved source
+        history. It only narrows the current session's selected Issue Types.
+        """
+        if scope not in self.plan['scopes']:
+            raise ApiError('선택한 Issue Type의 Tracker 매핑이 없습니다: '+scope)
+        selected = self.plan['scopes'][scope]
+        project = selected['project']
+        if project not in self.plan['projects']:
+            raise ApiError('선택한 프로젝트를 찾을 수 없습니다.')
+        self.plan['scopes'] = {scope:selected}
+        self.plan['projects'] = {project:self.plan['projects'][project]}
+        self.plan['projects'][project]['types'] = [deepcopy(selected['type'])]
+        self.state.save('wizard','plan',self.plan)
+        return scope
+
     def map_execution_context(self, project, type_id):
         """Select an actual project Execution type without assigning a target Tracker."""
         if self.config['jira'].get('single_issue_key'):
