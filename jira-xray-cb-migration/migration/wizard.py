@@ -98,7 +98,7 @@ def field_analysis(jira, project, issue_type):
         if key in configured_ids:
             raise ApiError('Duplicate Field Configuration entry')
         configured_ids.add(key)
-        fields[key] = dict(definitions.get(key, {}), **f)
+        fields[key] = dict(fields.get(key, definitions.get(key, {})), **f)
         fields[key]['visibility'] = ('hidden' if hidden(f) else 'visible') if any(
             type(f.get(flag)) is bool for flag in ('hidden', 'isHidden', 'visible')) else 'unknown'
     # Complete type-specific scan, including nulls; never use a capped sample as coverage.
@@ -132,6 +132,10 @@ def field_analysis(jira, project, issue_type):
             if remaining:
                 risks.append({'field': key, 'reason': 'hidden-source-with-values'})
         else:
+            field['configured'] = key in configured_ids or key in screen_fields
+            field['has_value'] = any(has_value(v) for v in values.get(key, []))
+            field['default_selected'] = bool(field['configured'] or field['has_value'] or field.get('required')
+                                             or key in ('summary','description','assignee','reporter','priority','status'))
             visible[key] = field
     if 'components' in visible:
         components = {}
@@ -160,6 +164,20 @@ def target_fields(cb, tracker):
     fields, configuration = cb.fields(tracker), cb.configuration(tracker)
     by_id = {str(field_identifier(f)): f for f in configuration['fields']}
     return [normalize(dict(f, **by_id.get(str(field_identifier(f)), {}))) for f in fields]
+
+
+def checked_value(value, kind, mapping, target, identity=None):
+    from migration.fields import convert
+    converted = convert(value, kind, mapping, identity)
+    if kind in ('option', 'status') and has_value(converted):
+        options = target.get('options')
+        if not isinstance(options, list):
+            raise ApiError('실제 대상 Choice 옵션 목록을 확인할 수 없습니다.')
+        allowed = {str(o['id']) for o in options if isinstance(o,dict) and o.get('id') is not None}
+        for selected in converted if isinstance(converted,list) else [converted]:
+            if not isinstance(selected,dict) or str(selected.get('id')) not in allowed:
+                raise ApiError('실제 대상 옵션 목록에 없는 선택지 ID입니다.')
+    return converted
 
 
 def proposals(analysis, targets, config, existing=None):
@@ -224,6 +242,12 @@ def proposals(analysis, targets, config, existing=None):
                 spec.update(refreshed)
                 if spec.get('deferred_reference'):spec.pop('missing_definition',None)
                 if not compatible(kind,multiple,candidate) or hidden(candidate):spec['selection_unverified']='Hidden 또는 타입/다중 선택 미확인·불일치'
+                if not spec.get('selection_unverified') and not spec.get('deferred_reference'):
+                    try:
+                        for sample in analysis['values'].get(source, []):
+                            checked_value(sample,spec['type'],spec.get('value_mapping',{}),candidate,spec.get('source_identity'))
+                    except ApiError as exc:
+                        spec['selection_unverified'] = str(exc)
                 entry.update(status='mapped', mapping_mode='manual', spec=spec,target=candidate,reason='저장된 선택')
             else:
                 spec['selection_unverified']='선택한 Field ID가 현재 Tracker에 없음'
@@ -234,27 +258,31 @@ def proposals(analysis, targets, config, existing=None):
             keys = [k for k, b in bindings.items() if b.get('fieldId') == fid]
             canonical = label_tokens(source, definition) & label_tokens('', target) & {'name', 'description'}
             key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(fid))
-            vals = list(analysis['values'].get(source, [])) + list(definition.get('allowedValues', []))
+            vals = list(analysis['values'].get(source, []))
             mapping, unmatched = suggest_values(vals, target.get('options'), 'id' if source == 'components' else None)
             if kind == 'user':
-                mapping = deepcopy(config['migration'].get('user_mapping', {}))
+                # Match observed usernames only; never infer identity from displayName or equal numeric IDs.
+                usernames = []
+                for sample in vals:
+                    for user in sample if isinstance(sample,list) else [sample]:
+                        if isinstance(user,dict) and user.get('name'):
+                            usernames.append({k:user[k] for k in ('accountId','name','id') if k in user})
+                mapping, _ = suggest_values(usernames, target.get('options'))
+                mapping.update(deepcopy(config['migration'].get('user_mapping', {})))
             if kind == 'status':
                 mapping.update(config['migration'].get('status_mapping', {}))
             try:
-                if kind in ('option', 'status') and unmatched:
-                    raise ValueError('대상에 없는 원본 Choice 값: 수동 매핑 또는 선택지 준비 필요')
                 converter = text_conversion(kind, multiple, target)
-                spec = build_spec(source, target, converter, key, mapping, existing=not any(has_value(v) for v in analysis['values'].get(source, [])))
+                spec = build_spec(source, target, converter, key, mapping, existing=True)
                 if source == 'components': spec['source_identity'] = 'id'
-                from migration.fields import convert
                 for v in analysis['values'].get(source, []):
-                    convert(v, converter, mapping, 'id' if source == 'components' else None)
+                    checked_value(v, converter, mapping, target, 'id' if source == 'components' else None)
                 if str(fid) in claimed:
                     raise ValueError('이미 다른 원본에 연결된 대상')
                 if key in bindings: spec['binding'] = deepcopy(bindings[key])
                 entry.update(status='mapped', mapping_mode='auto', spec=spec, target=target, reason='이름·타입 일치')
             except (ValueError, ApiError, TypeError) as exc:
-                entry.update(target=target, reason=str(exc))
+                entry.update(target=target, reason=('사용자 식별자 매핑 필요: ' if kind == 'user' else '') + str(exc))
         elif not candidates:
             if source in ('summary', 'description', 'assignee', 'reporter', 'priority', 'status'):
                 entry['reason'] = '기존 CB 기본 필드 확인 필요: ' + source
@@ -470,8 +498,18 @@ class ImportWizard:
             if row.get('creation_saved') and not row.get('spec') and source in entry['rows']:
                 entry['rows'][source].update(status='create',spec=None,creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')),creation_token=row.get('creation_token'))
         for source,row in entry['rows'].items():
-            row['selected']=old_rows.get(source,{}).get('selected',True)
+            row['selected']=old_rows.get(source,{}).get('selected', bool(existing.get(source)) or analysis['fields'][source].get('default_selected',True))
             if row.get('creation'):row['creation_saved']=True
+        if getattr(self.cb, 'spec', None) is not None and any(r.get('selected') and r.get('creation') and not r.get('creation_profile') for r in entry['rows'].values()):
+            try:
+                profiles = self.creation_profiles(scope)
+                for row in entry['rows'].values():
+                    if row.get('creation') and not row.get('creation_profile'):
+                        profile = profiles.get(row['creation']['semantic_type'])
+                        if profile:
+                            row['creation_profile'] = deepcopy(profile)
+            except ApiError as exc:
+                entry['creation_diagnostics'] = [str(exc)]
         entry['target_risks'] = [{'field': source, 'reason': 'hidden-target-with-source-values'}
             for source, definition in analysis['fields'].items()
             if any(has_value(v) for v in analysis['values'].get(source, []))
@@ -598,10 +636,9 @@ class ImportWizard:
             spec['deferred_reference']=True
             spec.pop('missing_definition',None)
         if source == 'components': spec['source_identity'] = 'id'
-        from migration.fields import convert
         if kind!='reference' and not spec.get('selection_unverified'):
             for value in entry['analysis']['values'].get(source, []):
-                convert(value, spec['type'], values, 'id' if source == 'components' else None)
+                checked_value(value, spec['type'], values, target, 'id' if source == 'components' else None)
         entry['rows'][source].pop('creation_saved',None)
         entry['rows'][source].pop('creation',None)
         entry['rows'][source].pop('creation_profile',None)
@@ -618,7 +655,8 @@ class ImportWizard:
         from clients.codebeamer_3007 import configuration_field_contract
         entry = self.plan['scopes'][scope]
         tracker = entry['tracker'] or entry.get('template_tracker')
-        profiles = deepcopy(self.config['migration'].get('wizard', {}).get('field_types', {}))
+        profiles = {kind:deepcopy(profile) for kind,profile in self.config['migration'].get('wizard', {}).get('field_types', {}).items()
+                    if profile.get('source_tracker_id', tracker) == tracker}
         if getattr(self.cb, 'spec', None) is None:
             self.cb.discover()
         fields = target_fields(self.cb, tracker)
@@ -646,16 +684,22 @@ class ImportWizard:
             candidate_binding = binding(getattr(self.cb, 'spec', None), representative)
             if not candidate_binding:
                 reasons.append(template['name'] + ': writable FieldValue schema 미확인')
+            probe = dict(definition, label='Migration field contract check')
+            method = 'configuration'
             try:
-                probe = dict(definition, label='Migration field contract check')
                 configuration_field_contract(self.cb, probe, tracker)
-            except ApiError as exc:
-                reasons.append(template['name'] + ': ' + str(exc))
-                continue
+            except ApiError as config_error:
+                from mapping_helper import dedicated_field_contract
+                try:
+                    dedicated_field_contract(self.cb, probe, tracker)
+                    method = 'dedicated'
+                except ApiError as exc:
+                    reasons.append(template['name'] + ': ' + str(config_error) + '; ' + str(exc))
+                    continue
             if candidate_binding: candidate_binding.pop('fieldId', None)
             profiles.setdefault(kind, {'type_name':representative.get('typeName'),
                                       'definition':definition, 'binding':candidate_binding,
-                                      'creation_method':'configuration',
+                                      'creation_method':method, 'source_tracker_id':tracker,
                                       'definition_contract':'verified',
                                       'value_contract':'verified' if candidate_binding else 'unverified'})
         self.config['migration'].setdefault('wizard', {})['field_types'] = profiles
@@ -760,6 +804,10 @@ class ImportWizard:
         profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal['semantic_type'])
         if not profile:
             raise ApiError('Configure a verified wizard.field_types template for ' + proposal['semantic_type'])
+        entry = self.plan['scopes'][scope]
+        template_tracker = entry.get('template_tracker') if entry.get('tracker') is None and entry.get('new_tracker') else tracker
+        if profile.get('source_tracker_id', tracker) not in (tracker, template_tracker):
+            raise ApiError('Field creation template belongs to another Tracker; analyze the selected Tracker again')
         definition = deepcopy(profile['definition'])
         definition.update(label=proposal['label'], multipleSelection=proposal['multipleSelection'])
         if proposal['semantic_type'] in ('option', 'status'):
@@ -850,7 +898,7 @@ class ImportWizard:
         key = 'jira_' + source
         source_kind, source_multiple = semantic_type(self.plan['scopes'][scope]['analysis']['fields'][source], True)
         conversion = text_conversion(source_kind, source_multiple, actual)
-        spec = build_spec(source, actual, conversion, key, mapping,existing=proposal['semantic_type']=='reference')
+        spec = build_spec(source, actual, conversion, key, mapping,existing=True)
         if proposal['semantic_type']=='reference':
             spec['deferred_reference']=True
             spec.pop('missing_definition',None)

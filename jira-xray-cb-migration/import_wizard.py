@@ -259,7 +259,7 @@ def launch(wizard, initial_projects=None):
     ttk.Button(target_bar,text='1건 범위 설정',command=lambda:run('1건 범위 설정',bound_issue)).pack(side='left',padx=6)
     ttk.Button(target_bar,text='선택 조합 분석',command=lambda:run('필드 분석',analyze)).pack(side='right')
     tools=ttk.Frame(step3);tools.pack(fill='x',pady=(10,4))
-    selected_only=tk.BooleanVar(value=False)
+    selected_only=tk.BooleanVar(value=True)
     ttk.Checkbutton(tools,text='선택 항목만 보기',variable=selected_only,command=lambda:display_scope()).pack(side='left')
     search=tk.StringVar()
     ttk.Label(tools,text='필드 검색').pack(side='right',padx=(8,4))
@@ -392,11 +392,19 @@ def launch(wizard, initial_projects=None):
             if box.current() < 0: return
             target = fields[box.current()]
             kind, _ = semantic_type(entry['analysis']['fields'][source], True)
-            if kind in ('option','status'):
+            if kind in ('option','status','user'):
                 options = target.get('options') or []
-                values = source_choices(entry['analysis']['values'].get(source, []) + entry['analysis']['fields'][source].get('allowedValues', []), 'id' if source == 'components' else None)
+                values = source_choices(entry['analysis']['values'].get(source, []), 'id' if source == 'components' else None)
                 for identity, label in values.items():
                     ttk.Label(value_frame, text=label).pack(anchor='w')
+                    if kind == 'user' and not options:
+                        ttk.Label(value_frame,text='대상 CB 사용자 ID (사용자 목록 미조회: 직접 확인한 ID)').pack(anchor='w')
+                        choice = ttk.Entry(value_frame)
+                        saved = (entry['rows'][source].get('spec') or {}).get('value_mapping', {})
+                        previous = saved.get(identity,wizard.config['migration'].get('user_mapping',{}).get(identity,{}))
+                        if isinstance(previous,dict) and previous.get('id') is not None:choice.insert(0,str(previous['id']))
+                        choice.pack(fill='x');choices.append((identity,choice,None))
+                        continue
                     choice = ttk.Combobox(value_frame, state='readonly', values=[str(o.get('name',o.get('label',''))) for o in options])
                     choice.pack(fill='x'); choices.append((identity,choice,options))
                     saved = (entry['rows'][source].get('spec') or {})
@@ -420,7 +428,14 @@ def launch(wizard, initial_projects=None):
             key = keys[0] if len(keys) == 1 else (next(iter(canonical)) if canonical else 'cb_field_'+str(fid))
             kind, _ = semantic_type(entry['analysis']['fields'][source], True)
             mapping = dict(wizard.config['migration'].get('user_mapping' if kind == 'user' else 'status_mapping', {}))
+            previous = entry['rows'][source].get('spec') or {}
+            if previous.get('field_id') == fid: mapping.update(previous.get('value_mapping', {}))
             for identity, choice, options in choices:
+                if options is None:
+                    value=choice.get().strip()
+                    if not value.isdigit() or int(value)<=0:raise ValueError('실제 CB 사용자 ID를 입력하세요.')
+                    mapping[identity]={'id':int(value)}
+                    continue
                 if choice.current() < 0: raise ValueError('모든 원본 선택지의 대상을 선택하세요.')
                 mapping[identity] = {'id': options[choice.current()]['id']}
             wizard.manual_mapping(scope,source,fid,key,mapping)

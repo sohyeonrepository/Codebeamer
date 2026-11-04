@@ -265,6 +265,10 @@ def build_spec(source, target, conversion, target_key, values, existing=False):
     if field_id is None:
         raise ValueError('대상 API 필드 ID가 없습니다.')
     required = ('typeId', 'mandatory', 'multipleSelection', 'options', 'reference')
+    if existing:
+        required = ('typeId', 'mandatory', 'multipleSelection')
+        if conversion in ('option','status'): required += ('options',)
+        if conversion == 'reference': required += ('reference',)
     missing=[key for key in required if key not in target]
     if missing and not existing:
         raise ValueError('대상 정의에 타입/필수/다중/선택지/참조 정보가 누락됐습니다. 실제 API 정의를 확인하세요.')
