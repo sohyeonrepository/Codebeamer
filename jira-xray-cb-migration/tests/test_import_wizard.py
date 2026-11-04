@@ -49,6 +49,7 @@ class Source:
         if path == '/binary': return b'abc'
         if path == '/rest/api/2/field': return deepcopy(self.definitions)
         if path == '/rest/api/2/project': return [{'key':'P'}]
+        if path == '/rest/api/2/issuetype': return self.types
         if path.startswith('/rest/api/2/issue/createmeta?'): raise ApiError('HTTP 404')
         if path == '/rest/api/2/project/P': return {'key':'P','issueTypes':self.types}
         if path.startswith('/field-config/'):

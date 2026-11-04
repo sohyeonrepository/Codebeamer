@@ -27,7 +27,7 @@ class JiraClient:
             self.archive('source-project-issue-types', str(project), detail)
         return types
 
-    def global_catalog(self):
+    def global_catalog(self, categories=None):
         """Read Jira DC global definitions, not project-scoped availability.
 
         Permissions may restrict some endpoints. Security Levels are scoped by
@@ -39,6 +39,10 @@ class JiraClient:
             'statuses': '/rest/api/2/status',
             'resolutions': '/rest/api/2/resolution',
         }
+        if categories is not None:
+            if any(key not in paths for key in categories):
+                raise ApiError('Unknown Jira global catalog category')
+            paths = {key: paths[key] for key in categories}
         result = {}
         for key, path in paths.items():
             values = self.http.request('GET', path)

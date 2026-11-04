@@ -324,7 +324,20 @@ class ImportWizard:
         types = self.jira.issue_types(project)
         if not isinstance(trackers, list):
             raise ApiError('trackers_get must normalize a complete project tracker array')
-        self.plan['projects'][project] = {'target': target, 'types': types, 'trackers': trackers}
+        catalog, warnings = [], []
+        try:
+            catalog = self.jira.global_catalog(categories=['issue_types'])['issue_types']
+        except ApiError as exc:
+            warnings.append('Jira 전체 Issue Type 조회 실패: ' + str(exc))
+        except AttributeError:
+            warnings.append('Jira 전체 Issue Type 조회 기능 미지원')
+        project_ids = {str(t['id']) for t in types}
+        display = [dict(t, project_available=True) for t in types]
+        display.extend(dict(t, project_available=False) for t in catalog if str(t['id']) not in project_ids)
+        self.plan['projects'][project] = {'target': target, 'types': types, 'trackers': trackers,
+                                         'display_types': display, 'catalog_warnings': warnings,
+                                         'global_types': catalog}
+
         # A changed project invalidates all previous scope choices for that project.
         self.plan['scopes'] = {k: v for k, v in self.plan['scopes'].items() if v['project'] != project}
         return self.stage('trackers', trackers)
@@ -335,7 +348,9 @@ class ImportWizard:
             if project != allowed['project'] or str(type_id) != str(allowed['type']['id']) or tracker != allowed['tracker']:
                 raise ApiError('Single-Issue test scope is fixed; start a separate test session to change its Tracker')
         selection = self.plan['projects'][project]
-        kind = next(t for t in selection['types'] if str(t['id']) == str(type_id))
+        kind = next((t for t in selection['types'] if str(t['id']) == str(type_id)), None)
+        if kind is None:
+            raise ApiError('프로젝트 미적용 Issue Type은 Tracker에 매핑할 수 없습니다: ' + str(type_id))
         policy = self.config['migration'].get('full_xray', {})
         execution_type = policy.get('issue_types', {}).get('execution', 'Test Execution')
         if tracker is None and not policy.get('create_execution_items', False) and str(execution_type) in (str(kind['id']), kind['name']):

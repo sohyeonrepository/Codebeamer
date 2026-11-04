@@ -13,6 +13,13 @@ from migration.wizard import ImportWizard, field_identifier, semantic_type, hidd
 from mapping_helper import label_tokens, source_choices
 
 
+def issue_type_display(kind):
+    subtask = kind.get('subtask')
+    return (str(kind['id']), 'Sub-task' if subtask is True else 'Regular' if subtask is False else '미확인',
+            '프로젝트 사용 가능' if kind.get('project_available') is True else '프로젝트 미적용',
+            '미선택' if kind.get('project_available') is True else '매핑 불가')
+
+
 def relation_tracker_rows(plan):
     """Keep actual selected-project catalog entries; never infer Tracker IDs."""
     result={}
@@ -80,9 +87,13 @@ def launch(wizard, initial_projects=None):
     ttk.Label(top, text='Jira 프로젝트').grid(row=0, column=0, sticky='w')
     ttk.Label(top, text='기존 Codebeamer 프로젝트').grid(row=0, column=1, sticky='w')
     jira_box.grid(row=1, column=0, padx=(0,12)); cb_box.grid(row=1, column=1)
-    types = ttk.Treeview(step2, columns=('tracker',), show='tree headings', selectmode='browse')
+    types = ttk.Treeview(step2, columns=('id','kind','availability','tracker'), show='tree headings', selectmode='browse')
     types.heading('#0', text='Jira Issue Type 전체 목록')
+    for column, label in [('id','Issue Type ID'),('kind','Regular / Sub-task'),('availability','프로젝트 적용')]:
+        types.heading(column, text=label)
+        types.column(column, width=130)
     types.heading('tracker', text='Codebeamer Tracker')
+    types.tag_configure('unavailable', foreground='#777777')
     types.pack(fill='both', expand=True, pady=12)
     tracker_box = ttk.Combobox(step2, state='readonly', width=65)
     tracker_box.pack(anchor='w')
@@ -108,13 +119,30 @@ def launch(wizard, initial_projects=None):
         target = projects['codebeamer'][cb_box.current()]['id']
         trackers = wizard.select_project(project, target)
         type_rows.clear(); types.delete(*types.get_children())
-        for index, kind in enumerate(wizard.plan['projects'][project]['types']):
+        for index, kind in enumerate(wizard.plan['projects'][project]['display_types']):
             iid = 'type-' + str(index); type_rows[iid] = (project, kind)
-            types.insert('', 'end', iid=iid, text=kind['name'], values=('미선택',))
+            types.insert('', 'end', iid=iid, text=kind['name'], values=issue_type_display(kind), tags=(() if kind['project_available'] else ('unavailable',)))
         tracker_box.configure(values=[str(t['id']) + ' / ' + t.get('name','') for t in trackers] + ['＋ 새 Tracker 생성'])
         tracker_box.set('')
+        catalog_notice.set(' / '.join(wizard.plan['projects'][project]['catalog_warnings']))
         scopes.configure(values=[]); scopes.set(''); table.delete(*table.get_children())
+    catalog_notice = tk.StringVar()
+    ttk.Label(step2, textvariable=catalog_notice, foreground='#aa5700').pack(anchor='w')
     ttk.Button(top, text='Issue Type / Tracker 조회', command=lambda: run('유형·Tracker 조회', select_project)).grid(row=2, column=0, pady=8)
+    def show_global_definitions():
+        window = tk.Toplevel(root)
+        window.title('Jira 전체 정의 — 프로젝트별 사용 가능 여부와 별개')
+        output = tk.Text(window, width=90, height=25)
+        output.pack(fill='both', expand=True)
+        for category in ('priorities', 'statuses', 'resolutions'):
+            try:
+                values = wizard.jira.global_catalog(categories=[category])[category]
+                output.insert('end', category + '\n' + json.dumps(values, ensure_ascii=False, indent=2) + '\n')
+            except ApiError as exc:
+                output.insert('end', category + ': 조회 실패: ' + str(exc) + '\n')
+        output.configure(state='disabled')
+    ttk.Button(top, text='Priority / Status / Resolution 정의',
+               command=lambda: run('전체 정의 조회', show_global_definitions)).grid(row=2, column=1, pady=8)
     def map_tracker():
         if not types.selection() or tracker_box.current() < 0:
             raise ValueError('Issue Type과 Tracker를 선택하세요.')
@@ -126,7 +154,15 @@ def launch(wizard, initial_projects=None):
         wizard.map_tracker(project, kind['id'], tracker, new_name.get())
         types.set(iid, 'tracker', tracker_box.get() if tracker else '신규: ' + new_name.get())
         scopes.configure(values=list(wizard.plan['scopes']))
-    ttk.Button(step2, text='이 Issue Type의 Tracker 매핑 저장', command=lambda: run('Tracker 매핑 저장', map_tracker)).pack(anchor='w', pady=8)
+    map_button = ttk.Button(step2, text='이 Issue Type의 Tracker 매핑 저장',
+                            command=lambda: run('Tracker 매핑 저장', map_tracker), state='disabled')
+    map_button.pack(anchor='w', pady=8)
+    def selected_type_changed(event=None):
+        selected = types.selection()
+        allowed = bool(selected and type_rows[selected[0]][1].get('project_available'))
+        map_button.configure(state='normal' if allowed else 'disabled')
+    types.bind('<<TreeviewSelect>>', selected_type_changed)
+
     style=ttk.Style(root)
     style.configure('WizardTitle.TLabel',font=('',17,'bold'))
     style.configure('WizardSub.TLabel',foreground='#485568')
