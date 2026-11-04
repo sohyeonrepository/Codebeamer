@@ -1084,7 +1084,12 @@ class ImportWizard:
                     # property ONLY when the current create/update Swagger
                     # contract explicitly exposes that property. Field ID
                     # alone is never sufficient to infer a writable model.
-                    native = native_field_property(self.cb.spec, api, source, target)
+                    try:
+                        update_op=self.cb.operation('item_update')
+                        update_api=self.cb.spec['paths'][update_op['path']][update_op['method'].lower()]
+                    except (ApiError, KeyError, TypeError):
+                        update_api=None
+                    native = native_field_property(self.cb.spec, api, source, target, update_api)
                     if native:
                         selected['target'] = native
                         selected.pop('binding', None)
