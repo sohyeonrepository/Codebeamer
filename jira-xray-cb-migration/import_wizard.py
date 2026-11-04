@@ -83,14 +83,14 @@ def launch(wizard, initial_projects=None):
             message = str(exc) if isinstance(exc, (ApiError, ValueError)) else type(exc).__name__
             # The diagnostic is local-only: no source data, tokens, or raw
             # request bodies are included. Do not mask the original exception.
-            match = re.search(r'(?:Codebeamer )?Field\\s+(\\d+)', message)
+            match = re.search(r'(?:Codebeamer )?Field\s+(\d+)', message)
             field_id = int(match.group(1)) if match else None
             try:
                 path = write_diagnostic(wizard, label, exc, field_id=field_id)
                 status.set(label + ' 실패: ' + message + ' | 진단 로그: ' + str(path))
                 evidence.delete('1.0', 'end')
-                evidence.insert('end', '오류: '+message+'\\n진단 로그: '+str(path)+
-                                '\\n\\n로그에는 선택한 필드 ID/타입/쓰기 계약만 기록됩니다.')
+                evidence.insert('end', '오류: '+message+'\n진단 로그: '+str(path)+
+                                '\n\n로그에는 선택한 필드 ID/타입/쓰기 계약만 기록됩니다.')
                 tabs.select(step4)
             except Exception as log_error:
                 status.set(label + ' 실패: ' + message + ' | 로그 저장 실패: ' + type(log_error).__name__)
