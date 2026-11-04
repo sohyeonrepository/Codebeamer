@@ -357,11 +357,16 @@ def suggest_values(samples, options, identity_key=None):
             else:
                 identity = str(source.get('displayName'))
             label = source.get('name', source.get('value', source.get('displayName', '')))
+            labels = [source.get(k) for k in ('name', 'value', 'displayName')]
         else:
             identity, label = str(source), str(source)
+            labels = [label]
+        # Jira User login/name and displayName may differ. Only use a match
+        # when all available labels resolve to exactly one CB destination.
+        label_tokens = {normalized_label(v) for v in labels if isinstance(v, str) and v.strip()}
         matches = [option for option in options if isinstance(option, dict) and option.get('id') is not None
-                   and normalized_label(option.get('name', option.get('label', option.get('value', '')))) == normalized_label(label)]
-        if len(matches) == 1 and label:
+                   and normalized_label(option.get('name', option.get('label', option.get('value', '')))) in label_tokens]
+        if len(matches) == 1 and label_tokens:
             proposed = {'id': matches[0]['id']}
             if identity in output and output[identity] != proposed:
                 unmatched.append(identity)
