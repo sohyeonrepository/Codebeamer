@@ -709,7 +709,7 @@ def launch(wizard, initial_projects=None):
         show_evidence(report); tabs.select(step4)
         if not report['complete']: status.set('Import 미완료: 오류·누락·보존 결과를 확인한 후 재시도하세요.')
     footer=ttk.Frame(step3);footer.pack(fill='x',pady=(8,0))
-    current_only=tk.BooleanVar(value=True)
+    current_only=tk.BooleanVar(value=wizard.config['migration'].get('mode') != 'full-xray')
     ttk.Checkbutton(footer,text='현재 선택한 Jira Issue Type만 Import (이전 매핑 조합 제외)',
                     variable=current_only).pack(side='left')
     ttk.Label(footer,text='신규 필드는 Import 승인 후 생성',style='WizardSub.TLabel').pack(side='left',padx=14)
