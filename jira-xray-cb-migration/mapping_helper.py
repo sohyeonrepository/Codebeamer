@@ -257,7 +257,7 @@ def build_spec(source, target, conversion, target_key, values, existing=False):
         raise ValueError('대상 payload 키를 입력하세요.')
     if not isinstance(values, dict):
         raise ValueError('값 매핑은 JSON 객체여야 합니다.')
-    if conversion not in ('text', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference', 'jira_checklist', 'text_multi', 'text_list'):
+    if conversion not in ('text', 'stringify', 'json', 'raw', 'number', 'boolean', 'date', 'datetime', 'user', 'status', 'option', 'reference', 'jira_checklist', 'text_multi', 'text_list'):
         raise ValueError('지원하지 않는 변환입니다.')
     if not existing and conversion in ('user', 'status', 'option', 'reference') and not values:
         raise ValueError('선택지/사용자/참조 변환은 값 매핑이 필요합니다.')
@@ -600,6 +600,11 @@ TYPE_LABELS = {
     'duration': 'Duration (기간)', 'table': 'Table (테이블)',
     'references': 'References (참조)', 'reference': 'References (참조)',
     'wikilink': 'Wiki Link / URL (링크)', 'url': 'Wiki Link / URL (링크)',
+    'color': 'Color (색상)', 'language': 'Language (언어)',
+    'country': 'Country (국가)', 'project': 'Projects (프로젝트)',
+    'projects': 'Projects (프로젝트)', 'tracker': 'Trackers (트래커)',
+    'trackers': 'Trackers (트래커)', 'repository': 'Repositories (저장소)',
+    'repositories': 'Repositories (저장소)', 'workconfigitems': 'Work/Config items (아이템)',
 }
 
 
