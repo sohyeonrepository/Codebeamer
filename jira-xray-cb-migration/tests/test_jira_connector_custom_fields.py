@@ -12,7 +12,7 @@ from migration.jira_connector_custom_fields import (
 class JiraChecklistAdapterTests(unittest.TestCase):
     def test_checklist_import_does_not_modify_source(self):
         source = [{
-            "name": "Check this\\n>>description", "isHeader": True,
+            "name": "Check this\n>>description", "isHeader": True,
             "option": True, "rank": 4, "priorityId": 3,
             "dueDate": "15/Oct/2026",
             "status": {"id": "blocked"},
@@ -27,6 +27,8 @@ class JiraChecklistAdapterTests(unittest.TestCase):
         self.assertEqual(result[0]["status"], {"name": "Blocked", "style": "blocked"})
         self.assertEqual(result[0]["endDate"], "2026-10-15T00:00:00")
         self.assertNotIn("rank", result[0])
+        self.assertEqual(result[0]["name"], "Check this")
+        self.assertEqual(result[0]["description"], "description")
 
     def test_wiki_payload_and_explicit_field_conversion(self):
         source = [{"name": "First", "priorityId": 4}]
