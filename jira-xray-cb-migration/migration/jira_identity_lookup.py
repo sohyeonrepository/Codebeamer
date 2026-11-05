@@ -221,11 +221,21 @@ def item_identity(item, field_id):
     return value
 
 
-def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100):
+def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100, index_cache=None):
     """Enumerate the whole Tracker, then inspect Item detail for exact identity."""
     if type(tracker_id) is not int or type(field_id) is not int or not isinstance(jira_key,str) or not jira_key:
         raise ApiError("JIRA_LOOKUP_INVALID_INPUT: Tracker/Field ID 또는 Jira Key가 잘못됐습니다.")
+    cache_key = (tracker_id, field_id)
+    if index_cache is not None and cache_key in index_cache:
+        item_id = index_cache[cache_key].get(jira_key)
+        return [{"id": item_id}] if item_id is not None else []
     matches, visited = [], set()
+    collected = {}
+    def finish():
+        # Only publish a complete scan; partial failures must not be cached.
+        if index_cache is not None:
+            index_cache[cache_key] = collected
+        return matches
     base = "/v3/trackers/" + segment(tracker_id) + "/items"
     for page in range(1, 10002):
         cb.last_api_call = {"capability": "jira_identity_lookup", "phase": "list",
@@ -245,7 +255,7 @@ def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100):
         if not items:
             if total is not None and len(visited)<total:
                 raise ApiError("JIRA_LOOKUP_INCOMPLETE: 목록 조회가 전체 건수보다 먼저 종료됐습니다.")
-            return matches
+            return finish()
         for ref in items:
             item_id = ref.get("id") if isinstance(ref,dict) else ref
             if type(item_id) is not int:
@@ -259,14 +269,17 @@ def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100):
             item = cb.call("item_get", {"itemId":item_id})
             if item.get("id")!=item_id:
                 raise ApiError("JIRA_LOOKUP_ITEM_MISMATCH: GET Item 상세 ID가 참조 ID와 다릅니다.")
-            if item_identity(item,field_id)==jira_key:
-                matches.append({"id":item_id})
-                if len(matches)>1:
+            observed_key = item_identity(item,field_id)
+            if observed_key is not None:
+                if observed_key in collected:
                     raise ApiError("JIRA_LOOKUP_DUPLICATE: 같은 Jira Key를 가진 CB Item이 둘 이상 존재합니다.")
+                collected[observed_key] = item_id
+                if observed_key == jira_key:
+                    matches.append({"id":item_id})
         if total is not None and len(visited)>=total:
             if len(visited)!=total:
                 raise ApiError("JIRA_LOOKUP_COUNT_MISMATCH: 반환 목록 개수가 전체 건수와 다릅니다.")
-            return matches
+            return finish()
         if len(items)<page_size and total is None:
             # Without a confirmed total, request the next page until empty;
             # never silently regard a short page as the last page.
