@@ -21,7 +21,7 @@ _JIRA_SELECT_CUSTOM_TYPES = frozenset({
 _GENERIC = {
     "string": "text", "integer": "number", "number": "number",
     "boolean": "boolean", "date": "date", "datetime": "datetime",
-    "option": "option", "priority": "option", "resolution": "option", "status": "status",
+    "option": "option", "priority": "option", "resolution": "option", "securitylevel": "option", "status": "status",
     "user": "user", "version": "option", "component": "option",
     "issue": "reference", "issuelink": "reference",
 }
