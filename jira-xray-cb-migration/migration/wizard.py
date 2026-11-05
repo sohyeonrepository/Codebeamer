@@ -1199,7 +1199,7 @@ class ImportWizard:
                 identity = {'pending_creation': True, 'profile': deepcopy(profile)}
             selected_ids = {str((r.get('spec') or {}).get('field_id'))
                             for r in entry.get('rows',{}).values() if r.get('selected')}
-            if str(identity['field_id']) in selected_ids:
+            if not identity.get('pending_creation') and str(identity['field_id']) in selected_ids:
                 raise ApiError('JIRA_IDENTITY_DUPLICATE_MAPPING: Jira Key 필드는 중복 검사에서 '
                                '자동 관리됩니다. 사용자 필드 매핑에서 선택을 해제하세요.')
             identity_bindings[scope] = identity
