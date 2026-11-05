@@ -1106,6 +1106,8 @@ class ImportWizard:
                     native = native_field_property(self.cb.spec, api, source, target, update_api)
                     if native:
                         selected['target'] = native
+                        if source == 'resolution' and native == 'resolutions':
+                            selected['native_array'] = True
                         selected.pop('binding', None)
                         selected.pop('value_contract_unverified', None)
                         self.state.save('wizard-native-binding', entry['project']+':'+str(entry['type']['id'])+':'+source,
