@@ -87,6 +87,50 @@ class IdentityLookupTest(unittest.TestCase):
             with self.assertRaisesRegex(ApiError,"JIRA_IDENTITY_CREATE_UNVERIFIED"):
                 text_creation_profile(cb,500,fields)
 
+    def test_existing_jira_key_field_uses_verified_scalar_schema_without_enum(self):
+        from migration.jira_identity_lookup import identity_field
+        cb=Mock()
+        cb.spec={"components":{"schemas":{"TextFieldValue":{
+            "type":"object","properties":{
+                "type":{"type":"string"},"value":{"type":"string"}}}}}}
+        field={"id":10006,"name":"jira key","typeName":"Text",
+               "valueModel":"TextFieldValue","multipleSelection":False}
+        found=identity_field(cb,[field])
+        self.assertEqual(found["field_id"],10006)
+        self.assertEqual(found["binding"]["type"],"TextFieldValue")
+        self.assertEqual(found["binding"]["value_property"],"value")
+
+    def test_existing_jirakey_alias_reuses_without_creation(self):
+        from migration.jira_identity_lookup import identity_field
+        cb=Mock()
+        cb.spec={"components":{"schemas":{"TextFieldValue":{
+            "type":"object","properties":{
+                "value":{"type":"string"}}}}}}
+        field={"id":10006,"name":"jirakey","typeName":"Text",
+               "multipleSelection":False}
+        found=identity_field(cb,[field])
+        self.assertEqual(found["field_id"],10006)
+
+    def test_duplicate_normalized_jira_key_fields_fail_closed(self):
+        from migration.jira_identity_lookup import identity_field
+        cb=Mock()
+        cb.spec={"components":{"schemas":{}}}
+        with self.assertRaisesRegex(ApiError,"JIRA_IDENTITY_FIELD_REQUIRED"):
+            identity_field(cb,[{"id":10006,"name":"Jira Key"},
+                               {"id":10007,"name":"jirakey"}])
+
+    def test_conflicting_textfieldvalue_type_is_rejected(self):
+        from migration.jira_identity_lookup import identity_field
+        cb=Mock()
+        cb.spec={"components":{"schemas":{"TextFieldValue":{
+            "type":"object","properties":{
+                "value":{"type":"string"},
+                "type":{"type":"string","enum":["NumberFieldValue"]}}}}}}
+        field={"id":10006,"name":"Jira Key","typeName":"Text",
+               "valueModel":"TextFieldValue","multipleSelection":False}
+        with self.assertRaisesRegex(ApiError,"JIRA_IDENTITY_WRITE_UNVERIFIED"):
+            identity_field(cb,[field])
+
     def test_java_style_name_based_fieldvalue_readback(self):
         actual={"id":14,"customFields":[{"name":"Jira Key","type":"TextFieldValue","value":"TEST-14"}]}
         self.assertEqual(item_identity(actual,17),"TEST-14")
