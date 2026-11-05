@@ -17,6 +17,21 @@ class Engine:
 
     def ensure(self, kind, key, spec):
         if isinstance(spec, int):
+            if kind == 'tracker' and self.wizard:
+                # Codebeamer 3.0.0.7 discovery verifies the project-scoped
+                # Tracker list as trackers_get, not a nonexistent tracker_get.
+                project_key = key.split(':', 1)[0]
+                project_id = self.settings.get('project_mapping', {}).get(project_key)
+                if type(project_id) is not int or project_id <= 0:
+                    raise ApiError('Selected Tracker verification requires an approved project ID: '+project_key)
+                tracked = self.cb.call('trackers_get', {'projectId': project_id})
+                if not isinstance(tracked, list) or any(
+                    not isinstance(row, dict) or type(row.get('id')) is not int for row in tracked
+                ):
+                    raise ApiError('Tracker project membership response must contain complete integer IDs')
+                if spec not in {row['id'] for row in tracked}:
+                    raise ApiError('Selected Tracker not found in the approved project: '+str(spec))
+                return spec
             existing = self.cb.call(kind + '_get', {kind + 'Id': spec})
             if existing.get('id') != spec:
                 raise ApiError(kind + ' mapping verification failed')
