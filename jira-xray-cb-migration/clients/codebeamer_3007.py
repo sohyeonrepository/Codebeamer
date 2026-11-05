@@ -124,7 +124,7 @@ def bind(cb):
     # resource name or a generic {id} parameter. Bind only documented GETs.
     if 'tracker_get' not in operations:
         paths = [p for p, methods in cb.spec['paths'].items()
-                 if re.fullmatch(r'(?:/v3)?/trackers?/\\{(?:trackerId|id)\\}/?', p)
+                 if re.fullmatch(r'(?:/v3)?/trackers?/\{(?:trackerId|id)\}/?', p)
                  and isinstance(methods.get('get'), dict)]
         v3 = [p for p in paths if p.startswith('/v3/')]
         candidates = v3 or prefer_v3_aliases(paths)
