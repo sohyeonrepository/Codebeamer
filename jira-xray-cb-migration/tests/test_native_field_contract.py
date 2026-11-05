@@ -23,6 +23,26 @@ class NativeFieldContractTests(unittest.TestCase):
                                   {'id': 15, 'label': 'Resolution'}, self.good),
             'resolution')
 
+    def test_native_resolution_array_from_server_item_schema(self):
+        shape = {'resolutions': {'type': 'array',
+                 'items': {'$ref': '#/components/schemas/ChoiceOptionReference'}}}
+        operation = request(shape)
+        self.assertEqual(native_field_property(self.spec, operation, 'resolution',
+                                               {'id': 15, 'label': 'Resolution'}, operation),
+                         'resolutions')
+
+    def test_resolution_array_must_be_writable_and_id_sufficient(self):
+        from copy import deepcopy
+        operation = request({'resolutions': {'type': 'array',
+                             'items': {'$ref': '#/components/schemas/ChoiceOptionReference'}}})
+        readonly = request({'resolutions': {'type': 'array', 'readOnly': True,
+                            'items': {'$ref': '#/components/schemas/ChoiceOptionReference'}}})
+        self.assertIsNone(native_field_property(self.spec, readonly, 'resolution',
+                          {'id': 15, 'label': 'Resolution'}, operation))
+        self.spec['components']['schemas']['ChoiceOptionReference']['required'] = ['id', 'type']
+        self.assertIsNone(native_field_property(self.spec, operation, 'resolution',
+                          {'id': 15, 'label': 'Resolution'}, operation))
+
     def test_no_field_id_shortcut_or_schema_guess(self):
         self.assertIsNone(native_field_property(self.spec, self.good, 'resolution',
                           {'id': 15, 'label': 'Other'}, self.good))
