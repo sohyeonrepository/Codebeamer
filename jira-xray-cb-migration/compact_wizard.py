@@ -83,6 +83,19 @@ def launch(wizard, projects):
         log_text.configure(state="disabled")
 
     ttk.Button(result_tab, text="로그 지우기", command=clear_log).pack(anchor="e")
+    # Visible deployment marker: the active Windows source can be checked
+    # without requiring Git, a terminal, or exposing credentials.
+    from pathlib import Path
+    source_file = str(Path(__file__).resolve())
+    engine_file = str((Path(__file__).resolve().parent / "migration" / "engine.py"))
+    from migration.engine import Engine
+    import inspect
+    active_engine_source = inspect.getsource(Engine.issue)
+    branch_guard_present = "JIRA_IDENTITY_BINDING_MISSING" in active_engine_source
+    append_log("실행 버전", "wizard-key-lookup-guard-20261105 · "
+               + ("신규 엔진 검증됨" if branch_guard_present else "이전 엔진 감지됨"))
+    append_log("실행 경로", source_file)
+    append_log("엔진 경로", engine_file)
     append_log("준비", "Import 대기 중 · 프로젝트와 필드를 선택하세요.")
 
     # Page 2 of the sketches: project first, followed by source type and target tracker.
