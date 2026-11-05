@@ -51,6 +51,20 @@ class IdentityLookupTest(unittest.TestCase):
         cb=self.fake_cb({"page=1":{"itemRefs":[],"total":0}}, {})
         self.assertEqual(lookup_by_jira_key(cb,500,"TEST-1",17),[])
 
+    def test_java_style_name_based_fieldvalue_readback(self):
+        actual={"id":14,"customFields":[{"name":"Jira Key","type":"TextFieldValue","value":"TEST-14"}]}
+        self.assertEqual(item_identity(actual,17),"TEST-14")
+
+    def test_identity_field_accepts_verified_text_binding_when_server_omits_details(self):
+        from migration.jira_identity_lookup import identity_field
+        field={"id":42,"name":"Jira Key","typeName":"Text","multipleSelection":False}
+        cb=Mock(spec=["spec"])
+        cb.spec={"components":{"schemas":{}}}
+        actual=identity_field(cb,[field],{"type":"TextFieldValue","value_property":"value"})
+        self.assertEqual(actual["field_id"],42)
+        self.assertEqual(actual["binding"]["fieldId"],42)
+
+
 
 if __name__ == "__main__":
     unittest.main()
