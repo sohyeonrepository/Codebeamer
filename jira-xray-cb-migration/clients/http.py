@@ -97,7 +97,16 @@ class Http:
                     continue
                 raise ApiError(f'{method} {urllib.parse.urlsplit(url).path} failed: HTTP {status}; {detail}') from None
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                raise ApiError(f'{method} transport failure ({type(exc).__name__}); write outcome may be unknown') from None
+                # GET is read-only; distinguish it from an uncertain POST/PUT.
+                # On failures, preserve only bounded metadata (never URLs,
+                # headers, credentials or source values).
+                if method.upper() == 'GET':
+                    if attempt < 2:
+                        continue
+                    raise ApiError('GET transport failure ('+type(exc).__name__+
+                                   '); read request timed out or connection failed; no write from this GET') from None
+                raise ApiError(method.upper()+' transport failure ('+type(exc).__name__+
+                               '); write outcome may be unknown; reconcile before retry') from None
             finally:
                 if self.log:
                     self.log.parent.mkdir(parents=True, exist_ok=True)
