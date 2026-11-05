@@ -111,6 +111,14 @@ def payload(fields, mappings, settings):
             continue
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
+        # A Jira null means no assigned source value. Never synthesize a
+        # Codebeamer Choice/User/Date/Text payload value from it. On Item
+        # creation, omit optional null fields. On updates the Engine must
+        # separately reject stale target values until clearing is verified.
+        if fields[source] is None and settings.get('wizard',{}).get('selected_fields_only'):
+            if spec.get('expected_mandatory') is True:
+                raise ApiError('Mandatory Codebeamer field has a null Jira value: '+source)
+            continue
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
         converted = convert(fields[source], spec['type'],
                             spec.get('value_mapping', settings.get(group, {})),
