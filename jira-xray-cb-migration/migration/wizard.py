@@ -1156,17 +1156,26 @@ class ImportWizard:
         # Import uses an external Jira identity to reconcile retries. A missing
         # lookup is not an HTTP POST error and cannot safely mean "no match".
         # Check before Tracker/Field POSTs to prevent partial writes.
-        if 'lookup' not in self.cb.config.get('operations', {}):
-            raise ApiError(
-                'LOOKUP_NOT_CONFIGURED: Jira 원본 ID로 기존 Codebeamer Item을 찾는 '
-                '중복 확인 기능이 설정되지 않았습니다. POST 요청은 아직 실행되지 않았습니다. '
-                'Summary/Description만 매핑하면 원본 식별값이 Codebeamer Item에 '
-                '저장되지 않으므로 재실행 시 중복 생성 여부를 확인할 수 없습니다. '
-                'Jira Key/원본 ID 저장 필드와 해당 필드의 정확한 조회 계약을 설정해야 합니다.'
-            )
-        lookup=self.cb.operation('lookup')
-        if lookup['method'].upper()!='GET':
-            raise ApiError('LOOKUP_INVALID: 중복 확인 기능은 검증된 GET API여야 합니다.')
+        # Java migrator's page-by-page Item scan is used rather than a
+        # synthetic Codebeamer 'lookup' REST capability.  Verify the exact
+        # per-Tracker Jira Key field and its writable contract before writes.
+        from migration.jira_identity_lookup import identity_field
+        identity_bindings = {}
+        for scope, entry in self.plan['scopes'].items():
+            if entry.get('source_only'):
+                continue
+            if type(entry.get('tracker')) is not int:
+                raise ApiError('JIRA_IDENTITY_TRACKER_REQUIRED: 신규 Tracker를 사용하려면 '
+                               '먼저 실제 Jira Key 필드가 있는 Tracker를 구성해야 합니다.')
+            actual_fields = target_fields(self.cb, entry['tracker'])
+            identity = identity_field(self.cb, actual_fields)
+            selected_ids = {str((r.get('spec') or {}).get('field_id'))
+                            for r in entry.get('rows',{}).values() if r.get('selected')}
+            if str(identity['field_id']) in selected_ids:
+                raise ApiError('JIRA_IDENTITY_DUPLICATE_MAPPING: Jira Key 필드는 중복 검사에서 '
+                               '자동 관리됩니다. 사용자 필드 매핑에서 선택을 해제하세요.')
+            identity_bindings[scope] = identity
+        self.config['migration'].setdefault('wizard', {})['identity_bindings'] = identity_bindings
         try:
             from mapping_helper import request_schema,schema_object
             item=self.cb.operation('item_create');readback=self.cb.operation('item_get')
