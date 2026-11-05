@@ -840,8 +840,22 @@ class ImportWizard:
                        'bool':'boolean', 'wikilink':'text'}.get(semantic, semantic)
         target_cardinality = bool(multiple)
         conversion = selected_conversion(source_kind, source_multiple, semantic, target_cardinality)
+        if conversion is None and source_kind is None and semantic in ('option', 'status'):
+            # Jira Security Level and some add-on fields can omit schema.type.
+            # Permit an EXPLICIT Choice decision only when each observed
+            # identity is covered by the user's option mapping; do not
+            # silently assume that an unknown Jira field is a Choice.
+            observed = source_choices(
+                entry['analysis'].get('values', {}).get(source, []) +
+                entry['analysis']['fields'][source].get('allowedValues', []))
+            if observed and isinstance(choices, dict) and all(key in choices for key in observed):
+                conversion = 'option'
         if conversion is None:
-            raise ApiError('지원하지 않는 값 변환: Jira '+str(source_kind)+' → Codebeamer '+semantic)
+            jira_schema = entry['analysis']['fields'][source].get('schema') or {}
+            raise ApiError('지원하지 않는 값 변환: Jira '+str(source_kind)+' → Codebeamer '+semantic+
+                           '; Jira schema.type='+str(jira_schema.get('type'))+
+                           ', schema.items='+str(jira_schema.get('items'))+
+                           '. Jira Choice 메타데이터를 확인하거나 원본 값과 선택 옵션을 명시적으로 매핑하세요.')
         if source_multiple and not multiple and target_kind not in ('text',):
             raise ApiError('원본 다중 값을 단일 필드로 변환하면 데이터가 손실됩니다.')
         actual_kind = semantic_type(dict(selected_profile['definition'], typeName=selected_profile['type_name']))[0]
