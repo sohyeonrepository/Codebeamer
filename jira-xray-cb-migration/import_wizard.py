@@ -54,6 +54,16 @@ def relation_display(saved, catalog, references):
 def launch(wizard, initial_projects=None):
     import tkinter as tk
     from tkinter import ttk, messagebox
+    # The UI always opens with zero checked fields. Saved mapping definitions
+    # stay available, but a previous test's Import scope is not silently reused.
+    selection_reset=False
+    for entry in wizard.plan.get('scopes', {}).values():
+        for row in entry.get('rows', {}).values():
+            if row.get('selected',False):
+                row['selected']=False
+                selection_reset=True
+    if selection_reset:
+        wizard.state.save('wizard','plan',wizard.plan)
     root = tk.Tk()
     root.title('Jira → Codebeamer Import Wizard')
     root.geometry('1120x800')
@@ -311,7 +321,8 @@ def launch(wizard, initial_projects=None):
     mapping_tabs.add(association_tab,text='관계 매핑')
     title=ttk.Frame(step3);title.pack(fill='x',pady=(0,10))
     ttk.Label(title,text='STEP 3. 필드 매핑',style='WizardTitle.TLabel').pack(anchor='w')
-    ttk.Label(title,text='Jira에서 사용 중인 필드를 가져와 기존 Codebeamer 필드와 비교합니다. 대상 셀 클릭: 추천 필드 / 무시 / 신규 생성. Xray 관계는 별도 관계 탭에서 연결합니다.',style='WizardSub.TLabel',wraplength=1050).pack(anchor='w')
+    ttk.Label(title,text='처음에는 모두 미선택입니다. 이관할 필드만 체크하세요. Summary → Name은 Item 생성에 필요하므로 반드시 체크해야 합니다.',style='WizardSub.TLabel',wraplength=1050).pack(anchor='w')
+    ttk.Label(title,text='대상 셀 클릭: 기존 필드 연결 / 이관 제외 / 신규 생성. Xray 관계는 별도 관계 탭에서 매핑합니다.',style='WizardSub.TLabel',wraplength=1050).pack(anchor='w')
     target_bar=ttk.LabelFrame(step3,text='대상 조합',padding=8);target_bar.pack(fill='x')
     scopes = ttk.Combobox(target_bar, state='readonly', width=42)
     scopes.pack(side='left',padx=(0,8))
