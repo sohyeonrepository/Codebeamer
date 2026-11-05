@@ -1197,7 +1197,11 @@ class ImportWizard:
             # Import Wizard imports the selected issues, unlike the preserved Run-only CLI.
             settings['mode'] = 'issues'
         config['jira']['projects'] = list(self.plan['projects'])
-        config['jira'].pop('execution_issue_types', None)
+        # Only fetch selected Issue Types during Import. The previous code
+        # removed this filter and repeatedly retrieved every Issue Type in
+        # the Jira project even when a single Tracker was selected.
+        config['jira']['execution_issue_types'] = list(dict.fromkeys(
+            str(entry['type']['id']) for entry in self.plan['scopes'].values()))
         jira = JiraClient(self.jira.http, config['jira'], self.state.save)
         identity = {'jira': config['jira']['url'], 'codebeamer': config['codebeamer']['url']}
         prior = self.state.get('environment-binding')
