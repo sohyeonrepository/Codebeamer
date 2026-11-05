@@ -43,6 +43,16 @@ class NativeFieldContractTests(unittest.TestCase):
         self.assertIsNone(native_field_property(self.spec, operation, 'resolution',
                           {'id': 15, 'label': 'Resolution'}, operation))
 
+    def test_native_resolution_payload_omits_null_and_wraps_choice_id(self):
+        from migration.fields import payload
+        mapping = {'resolution': {
+            'type': 'option', 'target': 'resolutions', 'native_array': True,
+            'value_mapping': {'Done': {'id': 42}}
+        }}
+        self.assertEqual(payload({'resolution': None}, mapping, {}), {})
+        self.assertEqual(payload({'resolution': {'name': 'Done'}}, mapping, {}),
+                         {'resolutions': [{'id': 42}]})
+
     def test_no_field_id_shortcut_or_schema_guess(self):
         self.assertIsNone(native_field_property(self.spec, self.good, 'resolution',
                           {'id': 15, 'label': 'Other'}, self.good))
