@@ -303,7 +303,7 @@ def launch(wizard, projects):
             return
         root.destroy()
         from import_wizard import launch as legacy_launch
-        legacy_launch(wizard, projects)
+        legacy_launch(wizard, projects, reset_field_selection=False)
     ttk.Button(bottom, text="Xray / Reference 고급 설정", command=advanced).pack(side="left", padx=8)
     ttk.Button(bottom, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right")
     root.mainloop()
