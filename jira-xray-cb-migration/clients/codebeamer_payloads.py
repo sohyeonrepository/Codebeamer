@@ -16,7 +16,7 @@ def native_field_property(spec, create_operation, source, target, update_operati
     and a Choice value can be represented as an object with an ID.
     """
     from mapping_helper import normalized_label, request_schema, schema_object
-    candidate = {'resolution': 'resolution', 'status': 'status',
+    candidate = {'resolution': 'resolutions', 'status': 'status',
                  'priority': 'priority'}.get(source)
     if not candidate or normalized_label(target.get('label') or target.get('name') or '') != candidate:
         return None
@@ -31,10 +31,23 @@ def native_field_property(spec, create_operation, source, target, update_operati
             if property_schema.get('readOnly') is True:
                 return None
             field = schema_object(spec, property_schema)
-            if field.get('type') != 'object':
-                return None
-            # Conversion of Jira Choice values produces {"id": N}.
-            props = field.get('properties', {})
+            if source == 'resolution':
+                # Codebeamer 3.x Item contracts expose plural resolutions as
+                # an ARRAY of ChoiceOptionReference objects even when the
+                # Tracker's Resolution field is marked single-selection.
+                if field.get('type') != 'array' or not isinstance(field.get('items'), dict):
+                    return None
+                element = schema_object(spec, field['items'])
+                if element.get('type') != 'object':
+                    return None
+                props = element.get('properties', {})
+                # If the API requires more than ID we cannot safely synthesize it.
+                if set(element.get('required', ())) - {'id'}:
+                    return None
+            else:
+                if field.get('type') != 'object':
+                    return None
+                props = field.get('properties', {})
             if 'id' not in props or props['id'].get('readOnly') is True:
                 return None
     except (KeyError, TypeError, ApiError):
