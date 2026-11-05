@@ -187,10 +187,22 @@ class Engine:
         events = timeline(issue, mapping) if self.settings.get('history_replay') and (not self.wizard or self.settings['wizard'].get('native_replay')) else []
         if not events and issue['_history'] and not self.wizard:
             self.report['limitations'].append({'source': key, 'reason': 'History replay disabled'})
-        # External source-key lookup is mandatory before initial create or a changed snapshot.
+        # Java-inspired exact lookup: enumerate the selected target Tracker's
+        # complete Item list, read each Item, and compare its Jira Key FieldValue.
+        # The identity is imported even when only Summary/Description are selected.
         source_key = str(issue['id'])
         known = self.state.get('item:' + source_key)
-        lookup = self.cb.call('lookup', {'sourceId': source_key, 'sourceKey': key, 'trackerId': tracker_id, 'projectId': project_id})
+        identity = self.settings.get('wizard', {}).get('identity_bindings', {}).get(tracker_key)
+        if self.wizard and identity:
+            from migration.jira_identity_lookup import lookup_by_jira_key
+            identity_field_id = identity['field_id']
+            identity_payload_key = identity['payload_key']
+            self.cb.config.setdefault('field_bindings', {})[identity_payload_key] = identity['binding']
+            lookup = lookup_by_jira_key(self.cb, tracker_id, key, identity_field_id)
+        else:
+            # Non-Wizard integrations may still use explicitly configured lookups.
+            lookup = self.cb.call('lookup', {'sourceId': source_key, 'sourceKey': key,
+                                             'trackerId': tracker_id, 'projectId': project_id})
         if not isinstance(lookup, list) or len(lookup) > 1:
             raise ApiError('Lookup must return zero or one exact source-ID match')
         if self.jira.config.get('single_issue_key') and lookup:
@@ -213,6 +225,10 @@ class Engine:
             self.state.mark('item:' + source_key, 'done', {'id': item_id})
         else:
             body = make_payload(events[0][1]) if events else latest
+            if self.wizard and identity:
+                if identity_payload_key in body:
+                    raise ApiError('JIRA_IDENTITY_PAYLOAD_COLLISION: Jira Key 필드가 중복 지정됐습니다.')
+                body = dict(body, **{identity_payload_key: key})
             created = self.state.once('item:' + source_key, lambda: self.cb.call('item_create',
                 {'trackerId': tracker_id, 'sourceId': source_key, 'sourceKey': key, 'projectId': project_id}, body))
             item_id = created['id']
@@ -226,6 +242,11 @@ class Engine:
             replay(self.cb, self.state, key, item_id, events, make_payload)
             self.report['limitations'].append({'source': key, 'reason': 'Original revision author/time preserved in state only; native restoration unverified'})
         actual = self.cb.call('item_get', {'itemId': item_id})
+        if self.wizard and identity:
+            from migration.jira_identity_lookup import item_identity
+            if item_identity(actual, identity_field_id) != key:
+                raise ApiError('JIRA_IDENTITY_READBACK_FAILED: 생성 또는 재사용된 Item의 Jira Key 값이 '
+                               '원본 Jira Issue와 다릅니다. 추가 쓰기를 중단합니다.')
         if self.wizard and self.settings.get('wizard',{}).get('selected_fields_only'):
             # Omitting Jira nulls is safe when creating a new Item, but an
             # existing target may already have a value. Never report such a
