@@ -1168,6 +1168,23 @@ class ImportWizard:
                 raise ApiError('JIRA_IDENTITY_TRACKER_REQUIRED: 신규 Tracker를 사용하려면 '
                                '먼저 실제 Jira Key 필드가 있는 Tracker를 구성해야 합니다.')
             actual_fields = target_fields(self.cb, entry['tracker'])
+            # Configuration is an independent source of field definitions.
+            # A field already created in Codebeamer may be absent from the
+            # list endpoint; never POST a second field in that case.
+            from migration.jira_identity_lookup import normalized_jira_key_label
+            config_fields = self.cb.configuration(entry['tracker']).get('fields', [])
+            if not isinstance(config_fields, list):
+                raise ApiError('JIRA_IDENTITY_CONFIG_UNVERIFIED: Tracker Configuration fields are not a complete list')
+            config_matches = [f for f in config_fields if isinstance(f,dict) and
+                              any(normalized_jira_key_label(f.get(k)) == 'jirakey'
+                                  for k in ('label', 'name'))]
+            if len(config_matches) > 1:
+                raise ApiError('JIRA_IDENTITY_DUPLICATE_CONFIG: Tracker Configuration contains multiple Jira Key fields')
+            listed_ids = {field_identifier(f) for f in actual_fields}
+            if config_matches and field_identifier(config_matches[0]) not in listed_ids:
+                raise ApiError('JIRA_IDENTITY_EXISTING_NOT_LISTED: Jira Key exists in Tracker Configuration '
+                               'but is not present in the field-list response. No duplicate field will be created. '
+                               'Field ID=' + str(field_identifier(config_matches[0])))
             try:
                 identity = identity_field(self.cb, actual_fields)
             except ApiError as exc:
@@ -1484,34 +1501,50 @@ class ImportWizard:
                 actual_fields = target_fields(self.cb, tracker)
                 identity = settings['wizard'].get('identity_bindings', {}).get(scope)
                 if isinstance(identity, dict) and identity.get('pending_creation'):
-                    # This is internal migration metadata, not a user-selected
-                    # Jira field. Reuse the existing approved field-create path
-                    # and its pending-write journal/reconciliation logic.
-                    internal_source = '__migration_jira_key__'
-                    entry['analysis']['fields'][internal_source] = {
-                        'id': internal_source, 'name': 'Jira Key',
-                        'schema': {'type': 'string'}}
-                    entry['analysis']['values'][internal_source] = []
-                    row = {'status': 'create', 'creation_profile': deepcopy(identity['profile']),
-                           'creation': {'label': 'Jira Key', 'semantic_type': 'text',
-                                        'profile_key': 'text', 'conversion': 'text',
-                                        'multipleSelection': False, 'choices': {}}}
-                    self.create_field(scope, internal_source, row, tracker)
-                    from migration.jira_identity_lookup import identity_field
-                    # Recheck the actual created Text field ID and metadata;
-                    # use the independently verified source Text write model
-                    # if this server omits FieldValue details on the new field.
-                    identity = identity_field(self.cb, target_fields(self.cb, tracker),
-                                              verified_template_binding=identity['profile'].get('binding'))
-                    settings['wizard']['identity_bindings'][scope] = identity
-                    self.config['migration']['wizard']['identity_bindings'][scope] = deepcopy(identity)
-                    # The created metadata is not part of the user's checked
-                    # field list. Import is still restricted to their selection.
-                    entry['analysis']['fields'].pop(internal_source, None)
-                    entry['analysis']['values'].pop(internal_source, None)
-                    actual_fields = target_fields(self.cb, tracker)
-                    self.stage('identity-field:' + scope, {'field_id': identity['field_id'],
-                                                             'status': 'created-and-verified'})
+                    # Re-read immediately before POST: the field may have been
+                    # created manually or by a previous failed execution.
+                    from migration.jira_identity_lookup import identity_field, normalized_jira_key_label
+                    fresh_fields = target_fields(self.cb, tracker)
+                    fresh_config = self.cb.configuration(tracker)
+                    config_matches = [f for f in fresh_config.get('fields', [])
+                                      if isinstance(f,dict) and
+                                      any(normalized_jira_key_label(f.get(k)) == 'jirakey'
+                                          for k in ('label','name'))]
+                    if config_matches:
+                        identity = identity_field(self.cb, fresh_fields)
+                        settings['wizard']['identity_bindings'][scope] = identity
+                        self.config['migration']['wizard']['identity_bindings'][scope] = deepcopy(identity)
+                        self.stage('identity-field:' + scope,
+                                   {'field_id': identity['field_id'], 'status':'existing-reused'})
+                    else:
+                        # This is internal migration metadata, not a user-selected
+                        # Jira field. Reuse the existing approved field-create path
+                        # and its pending-write journal/reconciliation logic.
+                        internal_source = '__migration_jira_key__'
+                        entry['analysis']['fields'][internal_source] = {
+                            'id': internal_source, 'name': 'Jira Key',
+                            'schema': {'type': 'string'}}
+                        entry['analysis']['values'][internal_source] = []
+                        row = {'status': 'create', 'creation_profile': deepcopy(identity['profile']),
+                               'creation': {'label': 'Jira Key', 'semantic_type': 'text',
+                                            'profile_key': 'text', 'conversion': 'text',
+                                            'multipleSelection': False, 'choices': {}}}
+                        self.create_field(scope, internal_source, row, tracker)
+                        from migration.jira_identity_lookup import identity_field
+                        # Recheck the actual created Text field ID and metadata;
+                        # use the independently verified source Text write model
+                        # if this server omits FieldValue details on the new field.
+                        identity = identity_field(self.cb, target_fields(self.cb, tracker),
+                                                  verified_template_binding=identity['profile'].get('binding'))
+                        settings['wizard']['identity_bindings'][scope] = identity
+                        self.config['migration']['wizard']['identity_bindings'][scope] = deepcopy(identity)
+                        # The created metadata is not part of the user's checked
+                        # field list. Import is still restricted to their selection.
+                        entry['analysis']['fields'].pop(internal_source, None)
+                        entry['analysis']['values'].pop(internal_source, None)
+                        actual_fields = target_fields(self.cb, tracker)
+                        self.stage('identity-field:' + scope, {'field_id': identity['field_id'],
+                                                                 'status': 'created-and-verified'})
                 for source, row in entry['rows'].items():
                     if not row.get('selected',True):continue
                     spec=row.get('spec') or {}
