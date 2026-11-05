@@ -50,7 +50,8 @@ class State:
         dest.parent.mkdir(parents=True, exist_ok=True)
         temporary = dest.with_suffix('.tmp')
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-        temporary.replace(dest)
+        import os
+        os.replace(temporary, dest)
         return dest
 
     def load(self, directory, key):
