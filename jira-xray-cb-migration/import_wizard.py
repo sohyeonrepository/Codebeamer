@@ -636,6 +636,19 @@ def launch(wizard, initial_projects=None):
         type_box.bind('<<ComboboxSelected>>',selected_type_changed)
         selected_type_changed()
         def save_creation():
+            # Record the exact attempted field and selected type, not user
+            # values or credentials. run() writes this on failure.
+            wizard.last_creation_context = {
+                'scope':scope, 'jira_field_id':source,
+                'jira_schema_type':(definition.get('schema') or {}).get('type'),
+                'requested_target_type':type_box.get(),
+                'requested_multiple':bool(multiple.get()),
+                'source_multiple':bool(source_multiple),
+                'available_profiles':sorted(profiles),
+                'source_choice_count':len(source_choices(
+                    entry['analysis']['values'].get(source,[]) +
+                    (definition.get('allowedValues') or []))),
+            }
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
             originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]), 'id' if source == 'components' else None)
             lines=[line.strip() for line in options.get('1.0','end').splitlines() if line.strip()]
@@ -650,6 +663,7 @@ def launch(wizard, initial_projects=None):
                 choices.update({'manual:'+str(index):value for index,value in enumerate(lines[len(originals):],start=len(originals))})
             wizard.configure_creation(scope,source,name.get(),type_box.get(),multiple.get(),choices,
                 reference_tracker=reference_trackers[reference_box.current()]['id'] if reference_box is not None and reference_box.current()>=0 else None)
+            wizard.last_creation_context = None
             display_scope();dialog.destroy()
         footer=ttk.Frame(body);footer.grid(row=10,column=0,columnspan=2,sticky='e',pady=(14,0))
         ttk.Button(footer,text='취소',command=dialog.destroy).pack(side='left',padx=4)
