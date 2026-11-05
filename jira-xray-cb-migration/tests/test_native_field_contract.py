@@ -17,11 +17,10 @@ class NativeFieldContractTests(unittest.TestCase):
         }}}}
         self.good = request({'resolution': {'$ref': '#/components/schemas/ChoiceOptionReference'}})
 
-    def test_resolution_uses_verified_native_item_property(self):
-        self.assertEqual(
+    def test_legacy_singular_resolution_is_not_a_writable_array(self):
+        self.assertIsNone(
             native_field_property(self.spec, self.good, 'resolution',
-                                  {'id': 15, 'label': 'Resolution'}, self.good),
-            'resolution')
+                                  {'id': 15, 'label': 'Resolution'}, self.good))
 
     def test_native_resolution_array_from_server_item_schema(self):
         shape = {'resolutions': {'type': 'array',
