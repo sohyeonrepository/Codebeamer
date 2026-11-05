@@ -138,7 +138,7 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None, repo
         'creation_attempt': getattr(wizard,'last_creation_context',None) if stage == '신규 필드 설정 저장' else None,
         # ApiError strings can contain server URLs or user values; keep only a
         # controlled summary, not arbitrary exception text.
-        'error_summary': 'Preflight or Import failed; see the selected field contract data.',
+        'error_summary': safe_exception_details(error)['summary'],
         'blocking_field_id': field_id,
         'codebeamer_profile': wizard.cb.config.get('profile'),
         'openapi_loaded': isinstance(spec, dict),
