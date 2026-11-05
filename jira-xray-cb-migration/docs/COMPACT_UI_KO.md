@@ -57,3 +57,14 @@ python import_wizard.py --config config.local.json --prompt-auth
 - 동일 이름 필드가 여러 개이거나 타입/FieldValue 계약이 맞지 않으면 자동 생성으로 우회하지 않고 중단합니다.
 - 자동 생성이 불가능할 때는 `JIRA_IDENTITY_CREATE_UNVERIFIED` 오류와 함께 정확한 원인을 표시합니다.
 - 실제 Jira/Codebeamer 서버에서 아직 테스트하지 않았으며, 생성 전 Tracker 설정과 운영 권한을 검증해야 합니다.
+
+## Connector 바이트코드 검토 후 Jira Key 필드 생성 개선 (2026-11-05)
+
+입력: 업로드된 `jira (2)(2).zip`의 컴파일된 `JiraTrackerSyncConfig.class` (`newTargetField`가 내부 `TrackerSyncConfigurationDto`로 위임함). 내부 Java 매니저 메서드는 외부 Python이 직접 호출할 수 없으므로 **Codebeamer 3.0 REST API를 사용**합니다.
+
+- 기존 Wizard의 `creation_profiles`가 Text 정의를 찾지 못해도 즉시 실패하지 않습니다. `migration/jira_identity_lookup.py:text_creation_profile`이 현재 대상 Tracker **전체 Configuration**, 각 Field Detail의 `typeId`, `permission`, `valueModel` 및 실제 OpenAPI FieldValue 모델을 확인합니다.
+- **TextFieldValue 단일 문자열**로 검증된 기존 필드를 템플릿으로 삼아 `Jira Key` 신규 필드 정의를 구성하며, `POST /v3/tracker/configuration`의 본문 구조를 서버 OpenAPI로 검증합니다. WikiText, 다중 값 및 모호한 Text typeId를 자동 대체하지 않습니다.
+- Import 승인 이후 기존 `create_confirmed_field` 경로에서 원래 Tracker 설정 백업·비교, 요청 저널, POST, 전체 설정 재조회, 새 Field ID 검증을 수행합니다. 그 후 Jira Key를 Item에 같이 기록하고 GET으로 확인합니다.
+- Item 응답에서 필드 ID가 없는 일부 Connector 스타일 필드는 정확한 `name == Jira Key`와 단일 `value`를 통해 식별할 수 있습니다.
+- 여전히 서버의 Text 생성 정의나 사용자 권한 자체가 없는 경우에는 생성하지 않고 `JIRA_IDENTITY_CREATE_UNVERIFIED`와 상세 원인을 기록합니다.
+- 이번 수정은 GitHub 소스 변경 및 회귀 테스트 추가 단계이며 실제 고객 서버 POST 성공은 검증하지 않았습니다. **Test / Verification Tracker에서 1개 Jira Issue로 먼저 테스트**하세요.
