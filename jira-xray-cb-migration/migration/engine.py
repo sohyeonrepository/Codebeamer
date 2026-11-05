@@ -192,15 +192,30 @@ class Engine:
         # The identity is imported even when only Summary/Description are selected.
         source_key = str(issue['id'])
         known = self.state.get('item:' + source_key)
-        identity = self.settings.get('wizard', {}).get('identity_bindings', {}).get(tracker_key)
-        if self.wizard and identity:
+        identity = None
+        if self.wizard:
+            scope = project['key'] + ':' + type_id
+            bindings = self.settings.get('wizard', {}).get('identity_bindings', {})
+            identity = bindings.get(scope)
+            if not isinstance(identity, dict):
+                raise ApiError('JIRA_IDENTITY_BINDING_MISSING: ' + scope +
+                               '의 Jira Key 필드 설정이 Import 엔진에 전달되지 않았습니다. '
+                               'Item 생성 및 중복 검사는 실행하지 않았습니다.')
+            identity_field_id = identity.get('field_id')
+            identity_payload_key = identity.get('payload_key')
+            if (type(identity_field_id) is not int or identity_field_id <= 0
+                    or identity_payload_key != 'cb_field_' + str(identity_field_id)
+                    or not isinstance(identity.get('binding'), dict)
+                    or identity['binding'].get('fieldId') != identity_field_id
+                    or identity['binding'].get('type') != 'TextFieldValue'):
+                raise ApiError('JIRA_IDENTITY_BINDING_INVALID: ' + scope +
+                               '의 Jira Key 필드 ID 또는 TextFieldValue 계약이 불완전합니다. '
+                               '기존 lookup API로 우회하지 않습니다.')
             from migration.jira_identity_lookup import lookup_by_jira_key
-            identity_field_id = identity['field_id']
-            identity_payload_key = identity['payload_key']
             self.cb.config.setdefault('field_bindings', {})[identity_payload_key] = identity['binding']
             lookup = lookup_by_jira_key(self.cb, tracker_id, key, identity_field_id)
         else:
-            # Non-Wizard integrations may still use explicitly configured lookups.
+            # Preserve the existing explicit contract for non-Wizard CLI users.
             lookup = self.cb.call('lookup', {'sourceId': source_key, 'sourceKey': key,
                                              'trackerId': tracker_id, 'projectId': project_id})
         if not isinstance(lookup, list) or len(lookup) > 1:
