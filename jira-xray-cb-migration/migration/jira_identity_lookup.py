@@ -109,6 +109,10 @@ def identity_field(cb, fields, verified_template_binding=None):
         raise ApiError("JIRA_IDENTITY_FIELD_REQUIRED: 대상 Tracker에 표시되는 'Jira Key' 필드가 "
                        "정확히 한 개 있어야 합니다. 확인된 개수: " + str(len(candidates)))
     field = candidates[0]
+    from migration.wizard import semantic_type
+    kind, multiple = semantic_type(field)
+    if kind != "text" or multiple is True or str(field.get("typeName","")).casefold() == "wikitext":
+        raise ApiError("JIRA_IDENTITY_NOT_TEXT: 기존 Jira Key는 단일 Text 필드여야 합니다.")
     identifier = field_identifier(field)
     if type(identifier) is not int:
         raise ApiError("JIRA_IDENTITY_FIELD_UNVERIFIED: Jira Key 필드 ID를 확인할 수 없습니다.")
