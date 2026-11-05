@@ -1,20 +1,28 @@
 # 간소화된 Jira → Codebeamer Wizard
 
-사용자 승인 화면 설계(4페이지)를 반영합니다.
+현재 작업 브랜치의 기본 UI는 **서버 연결 → 프로젝트 연결 → 데이터 가져오기(한 화면)** 로 구성됩니다.
 
-1. **서버 연결**: `import_wizard.py`의 기존 Jira URL/토큰, CB URL/계정/비밀번호 및 Swagger 연결 화면을 그대로 사용합니다. 인증 정보는 화면에 저장하지 않습니다.
-2. **프로젝트 연결**: Jira 프로젝트와 기존 Codebeamer 프로젝트를 선택한 뒤 Jira Issue Type과 CB Tracker를 연결하고 저장합니다. 여러 Type을 등록할 수 있습니다.
-3. **데이터 가져오기 · 추천**: 선택된 Type에 사용된 Jira 필드 및 CB 필드를 조회하고 기존 `proposals` 로직으로 동일명/호환 타입의 매핑을 제안합니다. 기본으로 선택되지 않으며 사용자가 추천 필드를 선택하거나 개별 제외할 수 있습니다.
-4. **데이터 가져오기 · 수동**: 각 Jira 필드의 무시/기존 CB 필드 연결/새 필드 생성 요청을 선택합니다. 신규 필드 타입은 대상 Swagger/Tracker 설정으로 검증된 생성 프로필만 노출합니다. Choice 값은 Jira 관찰 값과 허용 값에서 가져와 제안합니다.
+## 사용 흐름
 
-**주의사항**
-- '새 필드 생성 요청'은 **계획 저장**입니다. 필드 생성 POST는 별도 '실제 Import 실행' 버튼에서 명시적 사용자 승인을 받은 이후에만 진행됩니다.
-- Xray의 Test Set/Test Plan/Test Execution/Test Run 관계는 문자열 필드 매핑과 다릅니다. 필요한 경우 **Xray / Reference 고급 설정**을 열어 기존 Wizard의 관계 매핑 기능을 이용합니다.
-- 기존 Wizard는 `migration.wizard.legacy_ui: true` 옵션으로 유지합니다.
-- API `lookup` 누락 문제 및 실제 Codebeamer 3.0.0.7에 대한 POST 성공 여부는 UI 변경과 별개의 검증 과제입니다.
-- 실제 서버 연결 테스트는 이 GitHub 코드 변경만으로 완료되지 않았습니다.
+1. **서버 연결**: Jira 서버/토큰, CB 서버/아이디/비밀번호 입력. 이전 연결 로직을 재사용합니다.
+2. **프로젝트 연결**: Jira 프로젝트, 기존 CB 프로젝트 선택 → Jira TYPE, CB Tracker 연결.
+3. **데이터 가져오기**: Jira 필드별 체크박스(기본 미선택), Jira 필드명, Codebeamer 대상 필드, Jira 타입을 한 표에 표시합니다.
+   - 필터: **현재 사용 중인 필드**(기본) / **전체 필드**.
+   - 현재 사용 중: 선택된 Jira Issue Type의 Screen/Field Configuration에 설정되었거나 실제 Issue에서 값이 확인된 필드, 또는 필수 필드. 단순히 Jira 전체 필드 API에 null로 등장하는 필드는 사용으로 취급하지 않습니다.
+   - CB 필드 셀 클릭 → 드롭다운으로 기존 필드 매핑 또는 **＋ 신규 필드 생성…** 선택.
+   - 신규 필드 선택 → 별도 팝업에서 필드명, 검증된 생성 타입, 다중 선택, Choice 옵션(원본 조회값 자동 채움), Reference 대상 Tracker 설정.
+   - 원본 Jira 필드와 대상 필드의 불일치/중복 등은 기존 매핑 검증을 유지합니다.
+   - 생성 팝업의 저장은 **생성 계획 저장**입니다. 실제 서버 필드 생성은 사용자 Import 승인 이후에만 진행됩니다.
+4. **완료 · 매핑 저장**: 체크된 필드만 이관 대상으로 유지. **실제 Import 실행…**은 별도 승인 필요.
 
-실행 예:
+Xray Test Set/Test Plan/Test Execution/Test Run 관계는 별도의 Reference 및 테스트 전용 API 검증이 필요하므로 **Xray / Reference 고급 설정**에서 기존 기능을 사용할 수 있습니다.
+
+## 실행
+
 ```bat
 python import_wizard.py --config config.local.json --prompt-auth
 ```
+
+- 기존 Wizard로 되돌리려면 `migration.wizard.legacy_ui: true` 사용.
+- API `lookup` 누락에 따른 중복 검사 차단 및 실제 서버 POST 검증은 UI 변경과 별개의 문제이며, 본 커밋으로 해결됐다고 간주하지 않습니다.
+- 실제 Jira/Codebeamer 서버 UI 테스트는 아직 수행되지 않았습니다.
