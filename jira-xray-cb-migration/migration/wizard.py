@@ -1183,7 +1183,12 @@ class ImportWizard:
                 # First use the normal Wizard catalog. Some deployment field
                 # details omit the catalog discriminator even when the current
                 # Tracker contains a complete, reusable Text configuration.
-                profiles = self.creation_profiles(scope)
+                try:
+                    profiles = self.creation_profiles(scope)
+                except (ApiError, KeyError, ValueError, TypeError) as catalog_error:
+                    self.state.save('wizard-identity-diagnostic', scope,
+                                    {'catalog_error':str(catalog_error)})
+                    profiles = {}
                 profile = profiles.get('text')
                 if (not profile or str(profile.get('type_name','')).casefold() != 'text'
                         or profile.get('value_contract') != 'verified'
