@@ -96,6 +96,18 @@ def launch(wizard, projects):
                + ("신규 엔진 검증됨" if branch_guard_present else "이전 엔진 감지됨"))
     append_log("실행 경로", source_file)
     append_log("엔진 경로", engine_file)
+    # A recent Engine file does not prove preservation.py was also updated.
+    # Check the exact preflight function that execute() imports at runtime.
+    from migration import preservation
+    from migration.preservation import preflight
+    preservation_source = inspect.getsource(preflight)
+    required_section = preservation_source.split("required =", 1)[1].split("for name in required:", 1)[0] if "required =" in preservation_source else ""
+    legacy_lookup_preflight = ("'lookup'" in required_section or '"lookup"' in required_section)
+    append_log("검증 모듈", str(Path(preservation.__file__).resolve()))
+    append_log("검증 코드", "구버전 preservation.py · lookup 필수 검사 감지" if legacy_lookup_preflight
+               else "신규 preservation.py · lookup 필수 검사 없음")
+    append_log("Import 모드", str(wizard.config.get("migration", {}).get("mode", "미확인")))
+
     append_log("준비", "Import 대기 중 · 프로젝트와 필드를 선택하세요.")
 
     # Page 2 of the sketches: project first, followed by source type and target tracker.
@@ -439,7 +451,13 @@ def launch(wizard, projects):
             summarize_report(report)
         except Exception as exc:
             log_identity_stages()
-            from migration.diagnostics import write_diagnostic
+            from migration.diagnostics import safe_exception_details, write_diagnostic
+            details = safe_exception_details(exc)
+            frames = details.get("frames") or []
+            if frames:
+                frame = frames[-1]
+                append_log("오류 호출 위치", str(frame.get("file")) + ":" +
+                           str(frame.get("line")) + " · " + str(frame.get("function")))
             try:
                 filepath = write_diagnostic(wizard, "Import", exc)
                 append_log("상세 진단", filepath)
