@@ -51,13 +51,13 @@ def relation_display(saved, catalog, references):
     return label, 'Reference' if mode.startswith('reference') else 'Association', '반전' if value['reverse'] else '유지'
 
 
-def launch(wizard, initial_projects=None):
+def launch(wizard, initial_projects=None, reset_field_selection=True):
     import tkinter as tk
     from tkinter import ttk, messagebox
     # The UI always opens with zero checked fields. Saved mapping definitions
     # stay available, but a previous test's Import scope is not silently reused.
     selection_reset=False
-    for entry in wizard.plan.get('scopes', {}).values():
+    for entry in (wizard.plan.get('scopes', {}).values() if reset_field_selection else ()):
         for row in entry.get('rows', {}).values():
             if row.get('selected') is not False:
                 row['selected']=False
