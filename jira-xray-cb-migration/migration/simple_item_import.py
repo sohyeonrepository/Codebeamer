@@ -4,7 +4,6 @@ Bypasses the legacy import/preservation pipeline. Never edits tracker configurat
 Only a selected existing Tracker and a manually prepared scalar Text Jira Key.
 """
 import json
-import time
 from pathlib import Path
 
 from clients.http import ApiError
@@ -25,8 +24,18 @@ def _field(cb, tracker):
         raise ApiError("대상 Tracker에 단일 Text 'jira key' 필드가 정확히 1개 필요합니다. "
                        "발견: " + str(len(matches)) + ". UI에서 수동 생성하고 재시도하세요.")
     field = matches[0]
-    kind, multi = semantic_type(field)
     field_id = field_identifier(field)
+    # Tracker Configuration often omits the semantic Text type. Use the
+    # existing Field list/detail for the SAME Field ID, not a guessed typeId.
+    if type(field_id) is int and not field.get("typeName") and not field.get("valueModel"):
+        listed = cb.fields(tracker)
+        if not isinstance(listed, list):
+            raise ApiError("기존 Jira Key의 필드 타입을 조회하지 못했습니다.")
+        matching = [f for f in listed if isinstance(f, dict) and field_identifier(f) == field_id]
+        if len(matching) != 1:
+            raise ApiError("기존 Jira Key Field ID의 타입 상세 조회가 필요합니다.")
+        field = dict(field, **matching[0])
+    kind, multi = semantic_type(field)
     if type(field_id) is not int or kind != "text" or multi is True or (
             str(field.get("typeName", "")).casefold() == "wikitext"):
         raise ApiError("기존 Jira Key 필드는 Field ID가 있는 단일 Text 타입이어야 합니다.")
