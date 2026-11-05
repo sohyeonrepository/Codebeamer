@@ -3,7 +3,7 @@
 Run: python -m unittest discover -s tests -p 'test_jira_identity_lookup.py'
 """
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from clients.http import ApiError
 from migration.jira_identity_lookup import lookup_by_jira_key, item_identity
 
@@ -50,6 +50,42 @@ class IdentityLookupTest(unittest.TestCase):
     def test_empty_tracker_exactly_zero_total(self):
         cb=self.fake_cb({"page=1":{"itemRefs":[],"total":0}}, {})
         self.assertEqual(lookup_by_jira_key(cb,500,"TEST-1",17),[])
+
+    def test_text_creation_profile_without_discriminator_enum(self):
+        from migration.jira_identity_lookup import text_creation_profile
+        cb=Mock()
+        cb.spec={"components":{"schemas":{"TextFieldValue":{"type":"object",
+                    "properties":{"type":{"type":"string"},
+                                  "value":{"type":"string"}}}}}}
+        cb.configuration.return_value={"basicInformation":{"trackerId":500},"fields":[
+            {"id":17,"label":"Legacy ID","typeId":12,"permission":{},
+             "mandatory":False,"multipleSelection":False,"options":None,"reference":None}]}
+        fields=[{"id":17,"name":"Legacy ID","typeId":12,"typeName":"Text",
+                 "valueModel":"TextFieldValue","multipleSelection":False}]
+        template=[{"name":"Text","definition":{"typeId":12,"permission":{},
+                   "mandatory":False,"multipleSelection":False,"options":None,"reference":None}}]
+        with patch("migration.wizard.semantic_type",return_value=("text",False)), \
+             patch("mapping_helper.creation_templates",return_value=template), \
+             patch("clients.tracker_fields.binding",return_value=None), \
+             patch("clients.codebeamer_3007.configuration_field_contract",return_value={}):
+            profile=text_creation_profile(cb,500,fields)
+        self.assertEqual(profile["binding"]["type"],"TextFieldValue")
+        self.assertEqual(profile["binding"]["value_property"],"value")
+
+    def test_conflicting_discriminator_rejected(self):
+        from migration.jira_identity_lookup import text_creation_profile
+        cb=Mock()
+        cb.spec={"components":{"schemas":{"TextFieldValue":{"type":"object",
+                    "properties":{"type":{"type":"string","enum":["NumberFieldValue"]},
+                                  "value":{"type":"string"}}}}}}
+        cb.configuration.return_value={"basicInformation":{"trackerId":500},"fields":[
+            {"id":17,"label":"Legacy ID","typeId":12,"permission":{}}]}
+        fields=[{"id":17,"name":"Legacy ID","typeId":12,"typeName":"Text",
+                 "valueModel":"TextFieldValue","multipleSelection":False}]
+        with patch("migration.wizard.semantic_type",return_value=("text",False)), \
+             patch("clients.tracker_fields.binding",return_value=None):
+            with self.assertRaisesRegex(ApiError,"JIRA_IDENTITY_CREATE_UNVERIFIED"):
+                text_creation_profile(cb,500,fields)
 
     def test_java_style_name_based_fieldvalue_readback(self):
         actual={"id":14,"customFields":[{"name":"Jira Key","type":"TextFieldValue","value":"TEST-14"}]}
