@@ -95,6 +95,7 @@ def typed_project_trackers(cb, params):
 # Product documentation supplied for this integration. Request shapes still come
 # from the connected server; presence here is not a claim of live verification.
 ROUTES = {
+    'tracker_get': ('GET','/v3/trackers/{trackerId}'),
     'tracker_configuration_get': ('GET','/v3/tracker/{trackerId}/configuration'),
     'tracker_configuration_update': ('POST','/v3/tracker/configuration'),
     'tracker_create': ('POST','/v3/tracker/configuration'),
@@ -119,6 +120,16 @@ def bind(cb):
         if present and name not in operations:
             operations[name] = {'method':method,'path':path}
         status[name] = {'documented_method':method,'documented_path':path,'present_in_server_swagger':present}
+    # Swagger variants may expose the verified tracker GET with a singular
+    # resource name or a generic {id} parameter. Bind only documented GETs.
+    if 'tracker_get' not in operations:
+        paths = [p for p, methods in cb.spec['paths'].items()
+                 if re.fullmatch(r'(?:/v3)?/trackers?/\\{(?:trackerId|id)\\}/?', p)
+                 and isinstance(methods.get('get'), dict)]
+        v3 = [p for p in paths if p.startswith('/v3/')]
+        candidates = v3 or prefer_v3_aliases(paths)
+        if len(candidates) == 1:
+            operations['tracker_get'] = {'method': 'GET', 'path': candidates[0]}
     if 'fields' not in operations and 'tracker_configuration_get' in operations:
         operations['fields'] = dict(operations['tracker_configuration_get'],response_path='fields')
     try:
