@@ -118,7 +118,31 @@ def launch(wizard, initial_projects=None):
             return None
     def show_evidence(report=None):
         evidence.delete('1.0', 'end')
-        evidence.insert('end', json.dumps(report or wizard.plan['stages'], ensure_ascii=False, indent=2))
+        if not isinstance(report, dict):
+            # The result tab is for human-readable status, not full plan JSON.
+            stages = wizard.plan.get('stages', [])
+            evidence.insert('end', '최근 실행 단계: ' + str(len(stages)) + '건\\n')
+            for stage in stages[-10:]:
+                if isinstance(stage, dict):
+                    evidence.insert('end', str(stage.get('stage', '단계 확인')) + '\\n')
+            return
+        errors = report.get('errors') or report.get('blockers') or []
+        counts = report.get('counts')
+        lines = ['Import ' + ('완료' if report.get('complete') else '미완료')]
+        if isinstance(counts, dict):
+            lines.append('처리 건수: ' + ', '.join(str(k) + '=' + str(v) for k, v in counts.items()
+                                              if isinstance(v, (int, float, str))))
+        lines.append('오류: ' + str(len(errors)) + '건')
+        for index, error in enumerate(errors[:20], 1):
+            if isinstance(error, dict):
+                code = str(error.get('error_code') or error.get('stage') or '오류')
+                detail = str(error.get('error_detail') or error.get('reason') or
+                             error.get('exception') or '상세 로그 확인')
+                lines.append(str(index) + '. [' + code + '] ' + detail[:400])
+        if len(errors) > 20:
+            lines.append('나머지 ' + str(len(errors) - 20) + '건은 상세 로그에서 확인하세요.')
+        lines.append('상세 실행 데이터는 마이그레이션 상태 폴더의 로그 파일에서 확인하세요.')
+        evidence.insert('end', '\\n'.join(lines))
     ttk.Label(step2, text='프로젝트 연결', style='WizardTitle.TLabel').pack(anchor='w',pady=(0,8))
     ttk.Label(step2, text='Jira 프로젝트와 기존 Codebeamer 프로젝트를 선택해 먼저 연결합니다.',style='WizardSub.TLabel').pack(anchor='w',pady=(0,8))
     top = ttk.Frame(step2); top.pack(fill='x')
