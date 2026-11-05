@@ -125,6 +125,10 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
         'timestamp_utc': datetime.now(timezone.utc).isoformat(),
         'stage': stage, 'error_type': type(error).__name__,
         'error_code': error_code, 'error_detail': error_detail,
+        'exception': safe_exception_details(error),
+        'last_codebeamer_api_call': getattr(wizard.cb, 'last_api_call', None),
+        'configured_codebeamer_capabilities': sorted(str(k) for k in
+              wizard.cb.config.get('operations', {})),
         'creation_attempt': getattr(wizard,'last_creation_context',None) if stage == '신규 필드 설정 저장' else None,
         # ApiError strings can contain server URLs or user values; keep only a
         # controlled summary, not arbitrary exception text.
@@ -177,7 +181,7 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
     audit = Path(wizard.state.root) / 'requests.jsonl'
     if audit.exists():
         try:
-            recent = audit.read_text(encoding='utf-8').splitlines()[-12:]
+            recent = audit.read_text(encoding='utf-8').splitlines()[-40:]
             document['recent_http_requests'] = []
             safe_keys = ('method', 'path_hash', 'status', 'request_bytes',
                          'response_bytes', 'elapsed_ms', 'attempt',
