@@ -77,3 +77,12 @@ python import_wizard.py --config config.local.json --prompt-auth
 - 추가 수정: 신규 필드 생성 예정 단계에서는 아직 부여되지 않은 `identity['field_id']`에 접근하지 않음.
 - 회귀 테스트: `tests/test_jira_identity_lookup.py`에 enum 없는 서버 모델 및 상충하는 enum 사례 추가.
 - 실제 서버의 필드 생성·Item POST 성공은 아직 검증되지 않았음.
+
+## 2026-11-05 lookup 반복 오류 수정
+
+- Wizard에서 원본 Jira Key 중복 조회에 실패했을 때 예전 미설정 `lookup` API로 돌아가는 분기를 제거했습니다. Wizard는 항상 현재 Tracker의 전체 Item GET 및 Jira Key 비교를 사용합니다.
+- `migration/engine.py`: Jira 프로젝트+Issue Type ID를 이용해 `identity_bindings`를 조회하고, 해당 바인딩이 없거나 Field ID 및 쓰기 모델이 다르면 `JIRA_IDENTITY_BINDING_MISSING` 또는 `JIRA_IDENTITY_BINDING_INVALID`로 차단합니다. **중복 확인 없이 신규 Item을 만들지 않습니다.**
+- `migration/wizard.py`: Engine 직전 모든 선택 Scope의 Jira Key Field ID 전달 여부를 검사하고 `identity-ready:<scope>` 단계를 기록합니다.
+- `compact_wizard.py`: 필드 생성·재조회 성공 (`identity-field:<scope>`) 및 Import 전달 확인 (`identity-ready:<scope>`)을 각각 로그에 보여줍니다. Import 오류 발생 시에도 해당 시도에서 완료된 단계를 표시합니다.
+- 기존 외부 CLI에 명시적으로 구성된 `lookup` 계약은 호환성을 위해 남겨 두었습니다. 해당 기능은 **Wizard의 분기에서는 절대 실행하지 않습니다.**
+- 실제 Codebeamer 서버에서의 Item POST 성공 여부는 아직 검증되지 않았습니다.
