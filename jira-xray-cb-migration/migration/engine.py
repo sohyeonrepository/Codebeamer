@@ -110,8 +110,17 @@ class Engine:
         return self.report
 
     def error(self, key, error):
-        # ApiError messages are controlled; arbitrary payload exceptions may contain source values.
-        self.report['errors'].append({'source': key, 'error': str(error) if isinstance(error, ApiError) else type(error).__name__})
+        # Capture call-site evidence even when the engine handles an exception
+        # internally and returns complete=False rather than raising it to UI.
+        from migration.diagnostics import safe_exception_details, error_classification
+        code, summary = error_classification(error)
+        self.report['errors'].append({
+            'source': key,
+            'error': str(error) if isinstance(error, ApiError) else type(error).__name__,
+            'error_code': code, 'error_detail': summary,
+            'exception': safe_exception_details(error),
+            'last_codebeamer_api_call': getattr(self.cb, 'last_api_call', None),
+        })
 
     def issue(self, project, issue, definitions):
         key = issue['key']
