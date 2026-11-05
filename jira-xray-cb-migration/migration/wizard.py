@@ -1143,6 +1143,16 @@ class ImportWizard:
                     if not (selected['target'].startswith('cb_field_') or selected.get('value_contract_unverified')):
                         continue
                     target = row.get('target') or {}
+                    if source == 'resolution' and not any(
+                        has_value(value) for value in entry.get('analysis',{}).get('values',{}).get(source,[])
+                    ):
+                        # No Jira Resolution values exist in this analyzed scope.
+                        # Keep the user-selected mapping, but do not attempt to
+                        # write or validate a non-existent destination value.
+                        # The mandatory source recheck catches new values.
+                        selected['skip_when_source_empty'] = True
+                        selected.pop('value_contract_unverified',None)
+                        continue
                     # A built-in Jira/CB field should use the native Item
                     # property ONLY when the current create/update Swagger
                     # contract explicitly exposes that property. Field ID
