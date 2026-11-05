@@ -18,8 +18,10 @@ def launch(wizard, projects):
     tabs.pack(fill="both", expand=True, padx=14, pady=12)
     project_tab = ttk.Frame(tabs, padding=16)
     auto_tab = ttk.Frame(tabs, padding=16)
+    result_tab = ttk.Frame(tabs, padding=16)
     tabs.add(project_tab, text="1. 프로젝트 연결")
     tabs.add(auto_tab, text="2. 데이터 가져오기")
+    tabs.add(result_tab, text="3. Import 결과 / 로그")
     ttk.Label(root, textvariable=status, wraplength=1080).pack(fill="x", padx=16, pady=(0, 12))
 
     def guarded(label, fn):
@@ -35,6 +37,53 @@ def launch(wizard, projects):
             status.set(label + " 실패: " + message)
             messagebox.showerror(label + " 실패", message)
             return None
+
+    # Keep the human-readable execution log separate from raw diagnostics JSON.
+    import datetime
+    ttk.Label(result_tab, text="Import 결과 / 로그", font=("", 19, "bold")).pack(anchor="w", pady=(0, 8))
+    ttk.Label(result_tab, text="선택 필드, 실행 단계, API 오류와 결과를 요약합니다. 자세한 기록은 상태 폴더에 저장됩니다.").pack(anchor="w")
+    panel = ttk.Frame(result_tab)
+    panel.pack(fill="both", expand=True, pady=12)
+    log_text = tk.Text(panel, wrap="word", state="disabled")
+    log_scroll = ttk.Scrollbar(panel, orient="vertical", command=log_text.yview)
+    log_text.configure(yscrollcommand=log_scroll.set)
+    log_text.pack(side="left", fill="both", expand=True)
+    log_scroll.pack(side="right", fill="y")
+
+    def append_log(stage, detail):
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        log_text.configure(state="normal")
+        log_text.insert("end", "[" + stamp + "] " + stage + " | " + str(detail)[:550] + "\n")
+        log_text.see("end")
+        log_text.configure(state="disabled")
+        root.update_idletasks()
+
+    def summarize_report(report):
+        if not isinstance(report, dict):
+            append_log("결과", "Import 반환값 형식 확인 필요")
+            return
+        counts = report.get("counts") or {}
+        if isinstance(counts, dict):
+            append_log("처리 건수", ", ".join(str(k) + "=" + str(v) for k, v in counts.items()))
+        for record in report.get("issues", []):
+            if isinstance(record, dict):
+                append_log("Issue", str(record.get("key", "대상")) + " / " + str(record.get("status", "미확인")))
+        errors = report.get("errors") or report.get("blockers") or []
+        for error in errors:
+            if isinstance(error, dict):
+                append_log("오류", str(error.get("source", "Import")) + " / " +
+                           str(error.get("error_code", "ERROR")) + " / " +
+                           str(error.get("error") or error.get("reason") or error.get("error_detail") or "진단 로그 확인"))
+        append_log("결과", "성공" if report.get("complete") else "미완료 / 오류 " + str(len(errors)) + "건")
+        append_log("로그 위치", str(wizard.state.root / "report.json"))
+
+    def clear_log():
+        log_text.configure(state="normal")
+        log_text.delete("1.0", "end")
+        log_text.configure(state="disabled")
+
+    ttk.Button(result_tab, text="로그 지우기", command=clear_log).pack(anchor="e")
+    append_log("준비", "Import 대기 중 · 프로젝트와 필드를 선택하세요.")
 
     # Page 2 of the sketches: project first, followed by source type and target tracker.
     ttk.Label(project_tab, text="프로젝트 연결", font=("", 19, "bold")).pack(anchor="w", pady=(0, 15))
@@ -309,8 +358,12 @@ def launch(wizard, projects):
             elif 0 < index <= len(candidates):
                 field = candidates[index - 1]["field"]
                 fid = field_identifier(field)
+                # Summary/Description map to native Item properties, not customFields.
+                target_key = ("name" if source == "summary" else
+                              "description" if source == "description" else
+                              "cb_field_" + str(fid))
                 guarded("기존 필드 연결",
-                        lambda: (wizard.manual_mapping(scope, source, fid, "cb_field_" + str(fid), {}),
+                        lambda: (wizard.manual_mapping(scope, source, fid, target_key, {}),
                                  refresh()))
         dropdown.bind("<<ComboboxSelected>>", changed)
         dropdown.bind("<Escape>", lambda event: (dropdown.destroy(), editor.__setitem__(0, None)))
@@ -339,22 +392,51 @@ def launch(wizard, projects):
         messagebox.showinfo("매핑 저장", str(count) + "개 필드가 선택되었습니다.\n실제 변경은 별도 Import 승인이 있어야 수행됩니다.")
 
     def import_approved():
-        review = wizard.visibility_review()
-        if not messagebox.askyesno("실제 Import 승인",
-            "체크한 데이터와 신규 필드가 실제 Codebeamer 서버에 생성 또는 변경됩니다.\n계속할까요?"):
-            return
-        result = wizard.execute(approved=True, visibility_review=review)
-        if result.get("complete"):
-            messagebox.showinfo("Import", "Import 완료. 상세 결과는 실행 로그에서 확인하세요.")
-        else:
-            messagebox.showwarning("Import", "Import 미완료. 상세 오류 로그를 확인하세요.")
+        tabs.select(result_tab)
+        append_log("Import", "사용자 승인 대기")
+        try:
+            scope = current_scope()
+            selected = [(name, row) for name, row in rows().items() if row.get("selected", False)]
+            append_log("범위", str(scope) + " · 체크된 필드 " + str(len(selected)) + "개")
+            for name, row in selected:
+                spec = row.get("spec") or {}
+                target = (row.get("creation") or {}).get("label") or spec.get("target") or "매핑 확인 필요"
+                append_log("매핑", name + " → " + target)
+            review = wizard.visibility_review()
+            if not messagebox.askyesno("실제 Import 승인",
+                "체크한 데이터와 신규 필드가 실제 Codebeamer 서버에 생성 또는 변경됩니다.\n계속할까요?"):
+                append_log("Import", "사용자가 실행을 취소했습니다.")
+                return
+            append_log("검증", "Import 요청 검증 시작")
+            report = wizard.execute(approved=True, visibility_review=review)
+            summarize_report(report)
+        except Exception as exc:
+            from migration.diagnostics import write_diagnostic
+            try:
+                filepath = write_diagnostic(wizard, "Import", exc)
+                append_log("상세 진단", filepath)
+            except Exception as logging_error:
+                append_log("로그 저장 오류", type(logging_error).__name__)
+            append_log("Import 실패", str(exc) if isinstance(exc, Exception) else type(exc).__name__)
+            status.set("Import 실패: " + str(exc)[:250])
 
     def advanced():
-        if not messagebox.askyesno("고급 관계 매핑", "Xray 관계 및 Reference 설정을 위한 고급 Wizard를 열까요?"):
-            return
-        root.destroy()
-        from import_wizard import launch as legacy_launch
-        legacy_launch(wizard, projects, reset_field_selection=False)
+        # Compact mode must not launch the legacy multi-tab Wizard.
+        dialog = tk.Toplevel(root)
+        dialog.title("고급 설정 · Xray / Reference")
+        dialog.geometry("640x430")
+        dialog.transient(root)
+        dialog.grab_set()
+        box = ttk.Frame(dialog, padding=20)
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text="고급 설정", font=("", 17, "bold")).pack(anchor="w", pady=(0, 12))
+        ttk.Label(box, text="현재 선택한 프로젝트/Tracker의 관계 기능은 Xray/Reference API 계약 검증이 필요합니다.",
+                  wraplength=575).pack(anchor="w")
+        ttk.Label(box, text="기존 마이그레이션 기능을 임의 실행하거나 이전 Wizard 화면으로 전환하지 않습니다.",
+                  wraplength=575).pack(anchor="w", pady=10)
+        ttk.Label(box, text="상태: 고급 관계 매핑은 이 간소화 화면에서 아직 설정할 수 없습니다.",
+                  wraplength=575).pack(anchor="w", pady=12)
+        ttk.Button(box, text="닫기", command=dialog.destroy).pack(anchor="e", pady=18)
 
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
