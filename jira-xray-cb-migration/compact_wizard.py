@@ -448,12 +448,12 @@ def launch(wizard, projects):
                 append_log("매핑", name + " → " + target)
             review = wizard.visibility_review()
             if not messagebox.askyesno("실제 Import 승인",
-                "체크한 데이터와 신규 필드가 실제 Codebeamer 서버에 생성 또는 변경됩니다.\n계속할까요?"):
+                "선택한 Jira Issue 1건을 기존 Codebeamer Tracker에 생성합니다.\n기존 Jira Key가 있으면 중복 생성하지 않습니다. 계속할까요?"):
                 append_log("Import", "사용자가 실행을 취소했습니다.")
                 return
-            append_log("검증", "Import 요청 검증 시작")
-            report = wizard.execute(approved=True, visibility_review=review)
-            log_identity_stages()
+            append_log("Import", "단일 Issue 빠른 생성 경로 시작 · 신규 Tracker/필드 생성 없음")
+            from migration.simple_item_import import run as run_simple_item_import
+            report = run_simple_item_import(wizard, progress=append_log)
             summarize_report(report)
         except Exception as exc:
             log_identity_stages()
