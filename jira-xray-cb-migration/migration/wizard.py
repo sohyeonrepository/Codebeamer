@@ -1185,6 +1185,12 @@ class ImportWizard:
                 raise ApiError('JIRA_IDENTITY_EXISTING_NOT_LISTED: Jira Key exists in Tracker Configuration '
                                'but is not present in the field-list response. No duplicate field will be created. '
                                'Field ID=' + str(field_identifier(config_matches[0])))
+            if config_matches:
+                # Field-list/Detail APIs and Configuration can expose different
+                # name/label spellings for the SAME verified field ID.
+                for field in actual_fields:
+                    if field_identifier(field) == field_identifier(config_matches[0]):
+                        field['label'] = config_matches[0].get('label') or config_matches[0].get('name') or 'Jira Key'
             try:
                 identity = identity_field(self.cb, actual_fields)
             except ApiError as exc:
@@ -1221,6 +1227,10 @@ class ImportWizard:
                 raise ApiError('JIRA_IDENTITY_DUPLICATE_MAPPING: Jira Key 필드는 중복 검사에서 '
                                '자동 관리됩니다. 사용자 필드 매핑에서 선택을 해제하세요.')
             identity_bindings[scope] = identity
+            self.state.save('wizard-identity-resolution', scope,
+                            {'scope':scope,'tracker_id':entry['tracker'],
+                             'status':'pending_creation' if identity.get('pending_creation') else 'existing_verified',
+                             'field_id':identity.get('field_id')})
         self.config['migration'].setdefault('wizard', {})['identity_bindings'] = identity_bindings
         try:
             from mapping_helper import request_schema,schema_object
