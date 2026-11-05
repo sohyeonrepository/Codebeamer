@@ -1567,6 +1567,25 @@ class ImportWizard:
                 self.state.save('reports','latest',report)
                 (self.state.root/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
                 return report
+            # Explicit hand-off: every approved Tracker must have one valid
+            # Jira Key field binding before the Engine may create an Item.
+            for scope, entry in self.plan['scopes'].items():
+                if scope in context_scopes:
+                    continue
+                identity = settings['wizard'].get('identity_bindings', {}).get(scope)
+                tracker_id = settings['tracker_mapping'].get(scope)
+                if not isinstance(identity,dict) or type(identity.get('field_id')) is not int:
+                    raise ApiError('JIRA_IDENTITY_HANDOFF_MISSING: ' + scope +
+                                   '의 Jira Key 필드 ID가 Import 엔진으로 전달되지 않았습니다.')
+                if (not isinstance(identity.get('binding'),dict)
+                        or identity['binding'].get('fieldId') != identity['field_id']
+                        or identity.get('payload_key') != 'cb_field_' + str(identity['field_id'])):
+                    raise ApiError('JIRA_IDENTITY_HANDOFF_INVALID: ' + scope +
+                                   '의 Jira Key FieldValue 정보가 유효하지 않습니다.')
+                self.stage('identity-ready:' + scope,
+                           {'scope':scope,'tracker_id':tracker_id,
+                            'jira_key_field_id':identity['field_id'],
+                            'state':'validated-for-import'})
             xray.runs = lambda issue, field: deepcopy(runs[issue['key']])
             report = Engine(jira, xray, self.cb,
                             self.state, settings, True).migrate()
