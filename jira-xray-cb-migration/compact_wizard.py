@@ -27,7 +27,8 @@ def launch(wizard, projects):
     def guarded(label, fn):
         try:
             result = fn()
-            status.set(label + " 완료")
+            if not status.get().startswith("생성 타입 정의 확인 필요"):
+                status.set(label + " 완료")
             return result
         except Exception as exc:
             message = str(exc)
@@ -72,6 +73,9 @@ def launch(wizard, projects):
         types_box.set("")
         trackers_box.set("")
         active_scope[0] = None
+        scope_names.clear()
+        scope_box.configure(values=[])
+        scope_box.set("")
         status.set("프로젝트 조회 완료. Jira TYPE과 Codebeamer Tracker를 연결하세요.")
 
     ttk.Button(selectors, text="프로젝트 조회", command=lambda: guarded("프로젝트 조회", select_project)).grid(row=1, column=2, padx=10)
@@ -114,6 +118,7 @@ def launch(wizard, projects):
     # recommendation/review and manual mapping/creation actions.
     ttk.Label(auto_tab, text="데이터 가져오기 · 필드 추천", font=("", 19, "bold")).pack(anchor="w")
     ttk.Label(auto_tab, text="사용 중인 Jira 필드를 조회하고 자동 추천합니다. 선택하지 않은 필드는 가져오지 않습니다.").pack(anchor="w", pady=8)
+    ttk.Label(auto_tab, text="자동 추천은 검토용이며, 체크한 필드만 실제 Import 대상에 포함됩니다.").pack(anchor="w")
     ttk.Label(manual_tab, text="데이터 가져오기 · 필드 선택/생성", font=("", 19, "bold")).pack(anchor="w")
     ttk.Label(manual_tab, text="동일명 추천 외의 항목은 무시, 기존 필드 연결 또는 새 필드 생성 요청을 선택합니다.").pack(anchor="w", pady=8)
     cols = ("jira", "cb", "type", "decision")
@@ -178,6 +183,16 @@ def launch(wizard, projects):
     btns = ttk.Frame(auto_tab)
     btns.pack(fill="x", pady=8)
     ttk.Button(btns, text="선택 / 선택 해제", command=lambda: guarded("선택 변경", toggle)).pack(side="left", padx=3)
+    def select_recommended():
+        scope = current_scope()
+        entry = wizard.plan["scopes"][scope]
+        for source, row in entry["rows"].items():
+            recommended = row.get("status") == "mapped" and bool(row.get("spec")) and not row.get("spec", {}).get("selection_unverified")
+            row["selected"] = bool(recommended)
+        wizard.state.save("wizard", "plan", wizard.plan)
+        refresh()
+
+    ttk.Button(btns, text="추천 필드 선택", command=lambda: guarded("추천 필드 선택", select_recommended)).pack(side="left", padx=3)
     ttk.Button(btns, text="전체 제외", command=lambda: guarded("전체 제외", lambda: (wizard.select_all_fields(current_scope(), False), refresh()))).pack(side="left", padx=3)
     ttk.Button(btns, text="수동 필드 연결로 이동", command=lambda: tabs.select(manual_tab)).pack(side="right", padx=3)
 
@@ -197,9 +212,12 @@ def launch(wizard, projects):
 
     available = []
     def update_editor(event=None):
+        if not tables[1].selection():
+            return
         source = selected_source(tables[1])
         entry = wizard.plan["scopes"][current_scope()]
         field_name.set(entry["analysis"]["fields"][source].get("name", source))
+        target_box.set("")
         source_kind, is_multiple = semantic_type(entry["analysis"]["fields"][source], True)
         multiple.set(bool(is_multiple))
         if action.get() == "기존 필드 연결":
@@ -251,7 +269,8 @@ def launch(wizard, projects):
             entry = wizard.plan["scopes"][scope]
             definition = entry["analysis"]["fields"][source]
             values = entry["analysis"].get("values", {}).get(source, [])
-            observed = source_choices(values + definition.get("allowedValues", []))
+            allowed = definition.get("allowedValues") or []
+            observed = source_choices((values if isinstance(values, list) else []) + (allowed if isinstance(allowed, list) else []))
             choices = observed if semantic in ("option", "status") else {}
             wizard.configure_creation(scope, source, field_name.get(), semantic, multiple.get(), choices)
             wizard.select_field(scope, source, True)
@@ -260,7 +279,7 @@ def launch(wizard, projects):
         refresh()
 
     ttk.Button(editor, text="선택 저장", command=lambda: guarded("필드 선택", save_decision)).grid(row=4, column=1, sticky="e", pady=9)
-    ttk.Label(manual_tab, text="Test Set / Test Plan / Test Execution / Test Run 관계는 일반 텍스트 필드가 아니라 별도 Reference/Xray 관계 검증 대상입니다.").pack(anchor="w")
+    ttk.Label(manual_tab, text="Test Set / Test Plan / Test Execution / Test Run 관계는 별도 Xray 관계·Reference 검증 대상입니다.").pack(anchor="w")
 
     def finish():
         count = sum(1 for row in rows().values() if row.get("selected"))
@@ -279,5 +298,12 @@ def launch(wizard, projects):
     bottom = ttk.Frame(manual_tab)
     bottom.pack(fill="x", pady=8)
     ttk.Button(bottom, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="left")
+    def advanced():
+        if not messagebox.askyesno("고급 관계 매핑", "Xray 관계 및 Reference 상세 설정을 위해 고급 Wizard를 열까요? 현재 선택은 유지됩니다."):
+            return
+        root.destroy()
+        from import_wizard import launch as legacy_launch
+        legacy_launch(wizard, projects)
+    ttk.Button(bottom, text="Xray / Reference 고급 설정", command=advanced).pack(side="left", padx=8)
     ttk.Button(bottom, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right")
     root.mainloop()
