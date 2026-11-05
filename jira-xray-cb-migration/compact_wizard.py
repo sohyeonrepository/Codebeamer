@@ -18,10 +18,8 @@ def launch(wizard, projects):
     tabs.pack(fill="both", expand=True, padx=14, pady=12)
     project_tab = ttk.Frame(tabs, padding=16)
     auto_tab = ttk.Frame(tabs, padding=16)
-    manual_tab = ttk.Frame(tabs, padding=16)
     tabs.add(project_tab, text="1. 프로젝트 연결")
-    tabs.add(auto_tab, text="2. 데이터 가져오기 · 추천")
-    tabs.add(manual_tab, text="3. 데이터 가져오기 · 수동")
+    tabs.add(auto_tab, text="2. 데이터 가져오기")
     ttk.Label(root, textvariable=status, wraplength=1080).pack(fill="x", padx=16, pady=(0, 12))
 
     def guarded(label, fn):
@@ -114,196 +112,251 @@ def launch(wizard, projects):
 
     ttk.Button(project_tab, text="연결 저장", command=lambda: guarded("Tracker 연결", save_tracker)).pack(anchor="w", pady=12)
 
-    # Pages 3 and 4: both use the same analyzed scope, but provide independent
-    # recommendation/review and manual mapping/creation actions.
-    ttk.Label(auto_tab, text="데이터 가져오기 · 필드 추천", font=("", 19, "bold")).pack(anchor="w")
-    ttk.Label(auto_tab, text="사용 중인 Jira 필드를 조회하고 자동 추천합니다. 선택하지 않은 필드는 가져오지 않습니다.").pack(anchor="w", pady=8)
-    ttk.Label(auto_tab, text="자동 추천은 검토용이며, 체크한 필드만 실제 Import 대상에 포함됩니다.").pack(anchor="w")
-    ttk.Label(manual_tab, text="데이터 가져오기 · 필드 선택/생성", font=("", 19, "bold")).pack(anchor="w")
-    ttk.Label(manual_tab, text="동일명 추천 외의 항목은 무시, 기존 필드 연결 또는 새 필드 생성 요청을 선택합니다.").pack(anchor="w", pady=8)
-    cols = ("jira", "cb", "type", "decision")
-    tables = []
-    for parent in (auto_tab, manual_tab):
-        frame = ttk.Frame(parent)
-        frame.pack(fill="both", expand=True, pady=9)
-        table = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
-        for key, title, width in (("jira", "Jira 필드", 280), ("cb", "Codebeamer 필드", 330),
-                                  ("type", "타입", 130), ("decision", "선택 상태", 190)):
-            table.heading(key, text=title)
-            table.column(key, width=width, anchor="w")
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
-        table.configure(yscrollcommand=scroll.set)
-        table.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        tables.append(table)
+    # Single field-import page. Checkboxes are intentionally unchecked on load.
+    ttk.Label(auto_tab, text="데이터 가져오기", font=("", 19, "bold")).pack(anchor="w")
+    ttk.Label(auto_tab, text="왼쪽 체크박스로 이관 범위를 선택하고, CB 대상 필드는 오른쪽 드롭다운에서 지정하세요.").pack(anchor="w", pady=(4, 10))
+
+    toolbar = ttk.Frame(auto_tab)
+    toolbar.pack(fill="x", pady=6)
+    ttk.Label(toolbar, text="필드 필터").pack(side="left", padx=(0, 8))
+    filter_var = tk.StringVar(value="현재 사용 중인 필드")
+    filter_box = ttk.Combobox(toolbar, textvariable=filter_var, state="readonly", width=24,
+                              values=["현재 사용 중인 필드", "전체 필드"])
+    filter_box.pack(side="left")
+    shown_count = tk.StringVar(value="0개")
+    ttk.Label(toolbar, textvariable=shown_count).pack(side="left", padx=12)
+    ttk.Button(toolbar, text="필드 다시 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(side="right", padx=5)
+
+    cols = ("check", "jira", "cb", "type")
+    frame = ttk.Frame(auto_tab)
+    frame.pack(fill="both", expand=True, pady=(7, 9))
+    table = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+    for key, title, width in (
+        ("check", "선택", 60), ("jira", "Jira 필드", 305),
+        ("cb", "Codebeamer 필드  ▾", 480), ("type", "Jira 타입", 130)):
+        table.heading(key, text=title)
+        table.column(key, width=width, stretch=(key != "check"), anchor="center" if key == "check" else "w")
+    scroll = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
+    table.configure(yscrollcommand=scroll.set)
+    table.pack(side="left", fill="both", expand=True)
+    scroll.pack(side="right", fill="y")
+    editor = [None]
 
     def rows():
         return wizard.plan["scopes"][current_scope()]["rows"]
 
+    def used_field(info):
+        # A configured field belongs to the selected Jira screen/configuration;
+        # observed non-null values also count as usage. Do not infer usage from
+        # global Jira fields that only appear as null in API responses.
+        return bool(info.get("configured") or info.get("has_value") or info.get("required"))
+
     def refresh():
-        scope = current_scope()
-        entry = wizard.plan["scopes"][scope]
-        for table in tables:
-            table.delete(*table.get_children())
-            for source, row in entry.get("rows", {}).items():
-                info = entry["analysis"]["fields"].get(source, {})
-                target = row.get("target") or {}
-                selected = row.get("selected", False)
-                decision = ("이관 · " if selected else "제외 · ") + str(row.get("status", "미매핑"))
-                if row.get("creation"):
-                    target_name = row["creation"]["label"] + " (신규 생성 예정)"
-                else:
-                    target_name = target.get("label") or target.get("name") or "연결 안 됨"
-                kind = semantic_type(info, True)[0] or "미확인"
-                table.insert("", "end", iid=source, values=(
-                    info.get("name", source), target_name, kind, decision))
-        status.set("필드 목록 갱신 완료 · " + str(len(rows())) + "개")
+        if editor[0] is not None:
+            editor[0].destroy()
+            editor[0] = None
+        entry = wizard.plan["scopes"][current_scope()]
+        table.delete(*table.get_children())
+        count = 0
+        for source, row in entry.get("rows", {}).items():
+            info = entry["analysis"]["fields"].get(source, {})
+            if filter_var.get() == "현재 사용 중인 필드" and not used_field(info):
+                continue
+            target = row.get("target") or {}
+            if row.get("creation"):
+                target_name = str(row["creation"].get("label", source)) + " (신규 생성 예정)"
+            else:
+                target_name = target.get("label") or target.get("name") or "대상 필드 선택 ▾"
+            kind = semantic_type(info, True)[0] or "미확인"
+            table.insert("", "end", iid=source, values=(
+                "☑" if row.get("selected", False) else "☐",
+                info.get("name") or source, target_name, kind))
+            count += 1
+        shown_count.set(str(count) + "개 표시 / " + str(len(entry.get("rows", {}))) + "개 분석")
 
     def analyze():
         scope = current_scope()
         wizard.analyze(scope)
+        # The user's default is always unchecked after collecting source fields.
+        wizard.select_all_fields(scope, False)
         refresh()
         tabs.select(auto_tab)
 
-    ttk.Button(project_tab, text="완료 · 필드 데이터 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(anchor="w", pady=8)
-    ttk.Button(auto_tab, text="필드 다시 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(anchor="w", pady=5)
+    ttk.Button(project_tab, text="완료 · 데이터 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(anchor="w", pady=8)
+    filter_box.bind("<<ComboboxSelected>>", lambda event: guarded("필드 필터", refresh))
 
-    def selected_source(table):
-        selected = table.selection()
-        if not selected:
-            raise ValueError("Jira 필드 행을 선택하세요.")
-        return selected[0]
-
-    def toggle():
-        source = selected_source(tables[0])
+    def toggle(source):
         scope = current_scope()
         wizard.select_field(scope, source, not rows()[source].get("selected", False))
         refresh()
 
-    btns = ttk.Frame(auto_tab)
-    btns.pack(fill="x", pady=8)
-    ttk.Button(btns, text="선택 / 선택 해제", command=lambda: guarded("선택 변경", toggle)).pack(side="left", padx=3)
-    def select_recommended():
+    def select_visible(value):
         scope = current_scope()
-        entry = wizard.plan["scopes"][scope]
-        for source, row in entry["rows"].items():
-            recommended = row.get("status") == "mapped" and bool(row.get("spec")) and not row.get("spec", {}).get("selection_unverified")
-            row["selected"] = bool(recommended)
+        for source in table.get_children():
+            wizard.plan["scopes"][scope]["rows"][source]["selected"] = bool(value)
         wizard.state.save("wizard", "plan", wizard.plan)
         refresh()
 
-    ttk.Button(btns, text="추천 필드 선택", command=lambda: guarded("추천 필드 선택", select_recommended)).pack(side="left", padx=3)
-    ttk.Button(btns, text="전체 제외", command=lambda: guarded("전체 제외", lambda: (wizard.select_all_fields(current_scope(), False), refresh()))).pack(side="left", padx=3)
-    ttk.Button(btns, text="수동 필드 연결로 이동", command=lambda: tabs.select(manual_tab)).pack(side="right", padx=3)
-
-    editor = ttk.Frame(manual_tab)
-    editor.pack(fill="x", pady=8)
-    ttk.Label(editor, text="처리 방법").grid(row=0, column=0, sticky="w")
-    ttk.Label(editor, text="대상 Codebeamer 필드 / 생성 타입").grid(row=0, column=1, sticky="w", padx=8)
-    action = ttk.Combobox(editor, state="readonly", values=["무시", "기존 필드 연결", "새 필드 생성 요청"], width=24)
-    action.grid(row=1, column=0, sticky="w")
-    target_box = ttk.Combobox(editor, state="readonly", width=60)
-    target_box.grid(row=1, column=1, sticky="w", padx=8)
-    field_name = tk.StringVar()
-    ttk.Label(editor, text="새 필드 이름 (생성 요청 시)").grid(row=2, column=0, sticky="w", pady=9)
-    ttk.Entry(editor, textvariable=field_name, width=45).grid(row=2, column=1, sticky="w", padx=8)
-    multiple = tk.BooleanVar(value=False)
-    ttk.Checkbutton(editor, text="다중 선택", variable=multiple).grid(row=3, column=1, sticky="w")
-
-    available = []
-    def update_editor(event=None):
-        if not tables[1].selection():
-            return
-        source = selected_source(tables[1])
-        entry = wizard.plan["scopes"][current_scope()]
-        field_name.set(entry["analysis"]["fields"][source].get("name", source))
-        target_box.set("")
-        source_kind, is_multiple = semantic_type(entry["analysis"]["fields"][source], True)
-        multiple.set(bool(is_multiple))
-        if action.get() == "기존 필드 연결":
-            available[:] = [c for c in wizard.mapping_candidates(current_scope(), source)
-                            if not hidden(c["field"])]
-            target_box.configure(values=[
-                str(field_identifier(c["field"])) + " · " + str(c["field"].get("label", c["field"].get("name", "")))
-                + (" [" + c["reason"] + "]" if c["reason"] else "") for c in available])
-        elif action.get() == "새 필드 생성 요청":
-            entry = wizard.plan["scopes"][current_scope()]
-            try:
-                profiles = wizard.creation_profiles(current_scope())
-            except Exception as exc:
-                profiles = {}
-                status.set("생성 타입 정의 확인 필요: " + str(exc)[:220])
-            available[:] = list(profiles)
-            target_box.configure(values=available)
-            preferred = "option" if source_kind in ("option", "status") else source_kind
-            if preferred in available:
-                target_box.set(preferred)
-            else:
-                target_box.set("")
-        else:
-            available.clear()
-            target_box.configure(values=[])
-            target_box.set("")
-
-    tables[1].bind("<<TreeviewSelect>>", lambda event: update_editor() if tables[1].selection() else None)
-    action.bind("<<ComboboxSelected>>", update_editor)
-
-    def save_decision():
-        source = selected_source(tables[1])
+    def creation_popup(source):
         scope = current_scope()
-        choice = action.get()
-        if choice == "무시":
-            wizard.select_field(scope, source, False)
-        elif choice == "기존 필드 연결":
-            index = target_box.current()
-            if index < 0:
-                raise ValueError("기존 Codebeamer 필드를 선택하세요.")
-            field = available[index]["field"]
-            fid = field_identifier(field)
-            wizard.manual_mapping(scope, source, fid, "cb_field_" + str(fid), {})
-            wizard.select_field(scope, source, True)
-        elif choice == "새 필드 생성 요청":
-            semantic = target_box.get()
-            if semantic not in available:
-                raise ValueError("검증된 Codebeamer 생성 타입을 선택하세요.")
-            entry = wizard.plan["scopes"][scope]
-            definition = entry["analysis"]["fields"][source]
-            values = entry["analysis"].get("values", {}).get(source, [])
-            allowed = definition.get("allowedValues") or []
-            observed = source_choices((values if isinstance(values, list) else []) + (allowed if isinstance(allowed, list) else []))
-            choices = observed if semantic in ("option", "status") else {}
-            wizard.configure_creation(scope, source, field_name.get(), semantic, multiple.get(), choices)
-            wizard.select_field(scope, source, True)
-        else:
-            raise ValueError("무시/기존 필드 연결/새 필드 생성 요청을 선택하세요.")
-        refresh()
+        entry = wizard.plan["scopes"][scope]
+        info = entry["analysis"]["fields"][source]
+        profiles = wizard.creation_profiles(scope)
+        if not profiles:
+            raise ValueError("해당 Tracker에 검증된 신규 필드 생성 타입이 없습니다.")
+        window = tk.Toplevel(root)
+        window.title("신규 Codebeamer 필드 생성 설정")
+        window.geometry("680x570")
+        window.transient(root)
+        window.grab_set()
+        content = ttk.Frame(window, padding=16)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text="Jira 필드: " + str(info.get("name", source)),
+                  font=("", 12, "bold")).pack(anchor="w", pady=(0, 12))
+        ttk.Label(content, text="신규 필드 이름").pack(anchor="w")
+        label_var = tk.StringVar(value=str(info.get("name", source)))
+        ttk.Entry(content, textvariable=label_var, width=65).pack(anchor="w", pady=(3, 10))
+        ttk.Label(content, text="Codebeamer 필드 타입").pack(anchor="w")
+        type_var = tk.StringVar()
+        type_box = ttk.Combobox(content, state="readonly", textvariable=type_var,
+                                values=list(profiles), width=44)
+        type_box.pack(anchor="w", pady=(3, 10))
+        kind, is_multi = semantic_type(info, True)
+        preferred = "option" if kind in ("option", "status") else kind
+        if preferred in profiles:
+            type_var.set(preferred)
+        multi_var = tk.BooleanVar(value=bool(is_multi))
+        ttk.Checkbutton(content, text="다중 선택", variable=multi_var).pack(anchor="w", pady=5)
+        ttk.Label(content, text="Choice 옵션 (원본 값에 맞춰 자동 입력, 필요하면 수정)").pack(anchor="w", pady=(8, 2))
+        choices_box = tk.Text(content, height=7, wrap="none", width=65)
+        choices_box.pack(fill="x")
+        observed = entry["analysis"].get("values", {}).get(source, [])
+        allowed = info.get("allowedValues") or []
+        values = (observed if isinstance(observed, list) else []) + (allowed if isinstance(allowed, list) else [])
+        proposed_choices = source_choices(values)
+        for identity, label in proposed_choices.items():
+            choices_box.insert("end", str(identity) + " = " + str(label) + "\n")
+        ttk.Label(content, text="Reference 대상 Tracker (Reference 타입인 경우)").pack(anchor="w", pady=(9, 2))
+        tracker_items = wizard.plan["projects"][entry["project"]]["trackers"]
+        tracker_box = ttk.Combobox(content, state="readonly", width=56,
+                                   values=[str(t["id"]) + " · " + t.get("name", "") for t in tracker_items])
+        tracker_box.pack(anchor="w")
+        ttk.Label(content, text="여기서는 생성 계획만 저장합니다. 실제 필드 생성은 Import 승인 시 실행됩니다.",
+                  wraplength=610).pack(anchor="w", pady=12)
 
-    ttk.Button(editor, text="선택 저장", command=lambda: guarded("필드 선택", save_decision)).grid(row=4, column=1, sticky="e", pady=9)
-    ttk.Label(manual_tab, text="Test Set / Test Plan / Test Execution / Test Run 관계는 별도 Xray 관계·Reference 검증 대상입니다.").pack(anchor="w")
+        def save_new():
+            def perform():
+                semantic = type_var.get()
+                if semantic not in profiles:
+                    raise ValueError("Codebeamer 필드 타입을 선택하세요.")
+                mapping = {}
+                if semantic in ("option", "status"):
+                    for line in choices_box.get("1.0", "end").splitlines():
+                        if not line.strip():
+                            continue
+                        if "=" not in line:
+                            raise ValueError("Choice 옵션은 '원본값 = 대상값' 형태로 입력하세요.")
+                        identity, label = line.split("=", 1)
+                        if not identity.strip() or not label.strip():
+                            raise ValueError("Choice 값은 비울 수 없습니다.")
+                        mapping[identity.strip()] = label.strip()
+                reference_tracker = None
+                if semantic == "reference":
+                    if tracker_box.current() < 0:
+                        raise ValueError("참조 대상 Tracker를 선택하세요.")
+                    reference_tracker = tracker_items[tracker_box.current()]["id"]
+                wizard.configure_creation(scope, source, label_var.get(), semantic,
+                                          multi_var.get(), mapping, reference_tracker=reference_tracker)
+                wizard.select_field(scope, source, True)
+                refresh()
+                window.destroy()
+            guarded("신규 필드 설정", perform)
+
+        ttk.Button(content, text="설정 저장", command=save_new).pack(side="right", pady=8)
+        ttk.Button(content, text="취소", command=window.destroy).pack(side="right", padx=10, pady=8)
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
+
+    def open_target_dropdown(source):
+        if editor[0] is not None:
+            editor[0].destroy()
+            editor[0] = None
+        scope = current_scope()
+        candidates = [c for c in wizard.mapping_candidates(scope, source) if not hidden(c["field"])]
+        choices = ["— 대상 미지정 —"]
+        for candidate in candidates:
+            field = candidate["field"]
+            name = field.get("label") or field.get("name") or "Field"
+            choices.append(str(name) + " · ID " + str(field_identifier(field)))
+        choices.append("＋ 신규 필드 생성…")
+        bounds = table.bbox(source, "cb")
+        if not bounds:
+            return
+        x, y, width, height = bounds
+        dropdown = ttk.Combobox(table, state="readonly", values=choices)
+        editor[0] = dropdown
+        dropdown.place(x=x, y=y, width=width, height=max(height, 24))
+        dropdown.focus_set()
+
+        def changed(event=None):
+            index = dropdown.current()
+            dropdown.destroy()
+            editor[0] = None
+            if index == 0:
+                wizard.select_field(scope, source, False)
+                refresh()
+            elif index == len(choices) - 1:
+                guarded("신규 필드 생성", lambda: creation_popup(source))
+            elif 0 < index <= len(candidates):
+                field = candidates[index - 1]["field"]
+                fid = field_identifier(field)
+                guarded("기존 필드 연결",
+                        lambda: (wizard.manual_mapping(scope, source, fid, "cb_field_" + str(fid), {}),
+                                 refresh()))
+        dropdown.bind("<<ComboboxSelected>>", changed)
+        dropdown.bind("<Escape>", lambda event: (dropdown.destroy(), editor.__setitem__(0, None)))
+
+    def table_clicked(event):
+        source = table.identify_row(event.y)
+        column = table.identify_column(event.x)
+        if source not in table.get_children():
+            return
+        if column == "#1":
+            guarded("선택 변경", lambda: toggle(source))
+            return "break"
+        if column == "#3":
+            guarded("대상 필드 선택", lambda: open_target_dropdown(source))
+            return "break"
+
+    table.bind("<Button-1>", table_clicked)
+    ttk.Label(auto_tab, text="Test Set / Test Plan / Test Execution / Test Run 관계는 Xray/Reference 별도 설정이 필요합니다.").pack(anchor="w")
+    buttons = ttk.Frame(auto_tab)
+    buttons.pack(fill="x", pady=10)
+    ttk.Button(buttons, text="보이는 필드 전체 체크", command=lambda: guarded("전체 선택", lambda: select_visible(True))).pack(side="left")
+    ttk.Button(buttons, text="보이는 필드 체크 해제", command=lambda: guarded("전체 해제", lambda: select_visible(False))).pack(side="left", padx=8)
 
     def finish():
-        count = sum(1 for row in rows().values() if row.get("selected"))
-        messagebox.showinfo("매핑 저장", "선택한 필드 " + str(count) + "개가 저장되었습니다. 실제 서버 쓰기는 별도 Import 승인 후 실행합니다.")
+        count = sum(bool(r.get("selected")) for r in rows().values())
+        messagebox.showinfo("매핑 저장", str(count) + "개 필드가 선택되었습니다.\n실제 변경은 별도 Import 승인이 있어야 수행됩니다.")
 
     def import_approved():
         review = wizard.visibility_review()
-        if not messagebox.askyesno("실제 Import 승인", "선택한 데이터와 신규 필드가 Codebeamer 서버에 생성/변경될 수 있습니다.\n실행 전 원본·대상 설정과 선택한 매핑을 검토했습니까?"):
+        if not messagebox.askyesno("실제 Import 승인",
+            "체크한 데이터와 신규 필드가 실제 Codebeamer 서버에 생성 또는 변경됩니다.\n계속할까요?"):
             return
         result = wizard.execute(approved=True, visibility_review=review)
         if result.get("complete"):
-            messagebox.showinfo("Import", "Import 완료. 상세 결과는 실행 상태 로그에서 확인하세요.")
+            messagebox.showinfo("Import", "Import 완료. 상세 결과는 실행 로그에서 확인하세요.")
         else:
             messagebox.showwarning("Import", "Import 미완료. 상세 오류 로그를 확인하세요.")
 
-    bottom = ttk.Frame(manual_tab)
-    bottom.pack(fill="x", pady=8)
-    ttk.Button(bottom, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="left")
     def advanced():
-        if not messagebox.askyesno("고급 관계 매핑", "Xray 관계 및 Reference 상세 설정을 위해 고급 Wizard를 열까요? 현재 선택은 유지됩니다."):
+        if not messagebox.askyesno("고급 관계 매핑", "Xray 관계 및 Reference 설정을 위한 고급 Wizard를 열까요?"):
             return
         root.destroy()
         from import_wizard import launch as legacy_launch
         legacy_launch(wizard, projects, reset_field_selection=False)
-    ttk.Button(bottom, text="Xray / Reference 고급 설정", command=advanced).pack(side="left", padx=8)
-    ttk.Button(bottom, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right")
+
+    ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
+    ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
+    ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
     root.mainloop()
