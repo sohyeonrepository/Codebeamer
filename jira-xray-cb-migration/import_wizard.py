@@ -1127,7 +1127,11 @@ def launch_connected(config, state):
     if result[0] is None:return
     current,jira,cb,projects=result[0]
     wizard=ImportWizard(jira,cb,state,current)
-    launch(wizard,projects)
+    if current.get('migration', {}).get('wizard', {}).get('legacy_ui', False):
+        launch(wizard, projects)
+    else:
+        from compact_wizard import launch as launch_compact
+        launch_compact(wizard, projects)
 
 
 def main(argv=None):
