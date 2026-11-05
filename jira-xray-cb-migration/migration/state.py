@@ -51,7 +51,14 @@ class State:
         temporary = dest.with_suffix('.tmp')
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
         import os
-        os.replace(temporary, dest)
+        for attempt in range(5):
+            try:
+                os.replace(temporary, dest)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                __import__('time').sleep(0.2 * (attempt + 1))
         return dest
 
     def load(self, directory, key):
