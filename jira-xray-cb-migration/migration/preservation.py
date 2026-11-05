@@ -13,6 +13,28 @@ from migration.attachments import transfer
 from validation.compare_fields import compare_fields
 
 
+
+R4J_CATEGORIES = ('trees', 'revisions', 'baselines')
+
+
+def r4j_requested(settings):
+    """R4J source collection is optional for an Issue/TEST Wizard import.
+
+    Explicit preserve_r4j wins; otherwise existing R4J adapter configuration
+    indicates opt-in. Partial adapter configurations must still fail preflight.
+    """
+    explicit = settings.get('preserve_r4j')
+    if explicit is not None:
+        if type(explicit) is not bool:
+            raise ApiError('migration.preserve_r4j must be true or false')
+        return explicit
+    return bool(settings.get('r4j'))
+
+
+def r4j_empty():
+    return {category: [] for category in R4J_CATEGORIES}
+
+
 def preflight(cb, settings, plan):
     # The Codebeamer 3.0 REST profile exposes real read operations, not
     # synthetic lookup capabilities. Wizard Item deduplication uses the
@@ -40,10 +62,13 @@ def preflight(cb, settings, plan):
     # Do not silently skip required writes because their names are missing.
     # Their precise capability checks belong to the corresponding operation
     # paths, where source records and server response shape are known.
-    r4j = settings.get('r4j', {})
-    for category in ('trees', 'revisions', 'baselines'):
-        if not r4j.get(category, {}).get('path'):
-            raise ApiError('Configure migration.r4j.' + category + ' with a complete read-only source adapter')
+    if r4j_requested(settings):
+        r4j = settings.get('r4j') or {}
+        for category in R4J_CATEGORIES:
+            profile = r4j.get(category)
+            if not isinstance(profile, dict) or not profile.get('path'):
+                raise ApiError('Configure migration.r4j.' + category +
+                               ' with a complete read-only source adapter')
     for entry in plan['scopes'].values():
         for row in entry['rows'].values():
             if row['status'] == 'create':
@@ -64,15 +89,18 @@ def preflight(cb, settings, plan):
 
 
 def collect_r4j(jira, issue, settings, state):
-    data = {}
-    for category in ('trees', 'revisions', 'baselines'):
-        profile = settings.get('r4j', {}).get(category)
-        if not profile:
-            raise ApiError('Missing R4J ' + category + ' source adapter')
-        data[category] = jira.configured_records(profile, {'issueKey': issue['key'],
-            'issueId': issue['id'], 'projectKey': issue['fields']['project']['key']})
+    requested = r4j_requested(settings)
+    data = r4j_empty()
+    if requested:
+        for category in R4J_CATEGORIES:
+            profile = (settings.get('r4j') or {}).get(category)
+            if not isinstance(profile, dict) or not profile.get('path'):
+                raise ApiError('Missing R4J ' + category + ' source adapter')
+            data[category] = jira.configured_records(profile, {'issueKey': issue['key'],
+                'issueId': issue['id'], 'projectKey': issue['fields']['project']['key']})
     issue['_r4j'] = data
-    state.save('source-r4j', issue['key'], data)
+    issue['_r4j_collection_status'] = 'collected' if requested else 'not_requested'
+    state.save('source-r4j', issue['key'], {'status':issue['_r4j_collection_status'], 'data':data})
     return data
 
 
@@ -94,6 +122,7 @@ def preserve(cb, state, issue, item_id):
               'history': issue['_history'], 'comments': issue['_comments'],
               'worklogs': issue['_worklogs'],
               'linked_issues': issue['fields'].get('issuelinks', []), 'r4j': issue['_r4j'],
+              'r4j_collection_status': issue.get('_r4j_collection_status', 'unknown'),
               'source_fields': issue['fields']}
     content = json.dumps(legacy, ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
     digest = hashlib.sha256(content).hexdigest()
@@ -115,6 +144,7 @@ def preserve(cb, state, issue, item_id):
               'r4j_trees_preserved': len(actual['r4j']['trees']),
               'r4j_revisions_source': len(issue['_r4j']['revisions']),
               'r4j_revisions_preserved': len(actual['r4j']['revisions']),
+              'r4j_collection_status': issue.get('_r4j_collection_status', 'unknown'),
               'r4j_baselines_source': len(issue['_r4j']['baselines']),
               'r4j_baselines_preserved': len(actual['r4j']['baselines'])}
     state.save('legacy-history', issue['key'], {'item_id': item_id, 'attachment': target, 'counts': counts,
