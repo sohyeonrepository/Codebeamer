@@ -100,7 +100,7 @@ def text_creation_profile(cb, tracker_id, fields=None):
     return candidates[0]
 
 
-def identity_field(cb, fields):
+def identity_field(cb, fields, verified_template_binding=None):
     """Find one visible actual field named Jira Key and a verified writable FieldValue."""
     from clients.tracker_fields import binding
     candidates = [f for f in fields if (f.get("label") or f.get("name") or "").strip().casefold()
@@ -113,6 +113,13 @@ def identity_field(cb, fields):
     if type(identifier) is not int:
         raise ApiError("JIRA_IDENTITY_FIELD_UNVERIFIED: Jira Key 필드 ID를 확인할 수 없습니다.")
     contract = binding(cb.spec, field)
+    if not contract and verified_template_binding:
+        from migration.wizard import semantic_type
+        kind, multiple = semantic_type(field)
+        if (kind == "text" and multiple is not True and
+                verified_template_binding.get("type") == "TextFieldValue" and
+                verified_template_binding.get("value_property") == "value"):
+            contract = dict(verified_template_binding, fieldId=identifier)
     if not contract or contract.get("value_property") not in ("value", "values"):
         raise ApiError("JIRA_IDENTITY_WRITE_UNVERIFIED: Jira Key FieldValue의 쓰기 타입을 "
                        "서버 Swagger로 확인하지 못했습니다. 원본 ID는 생략할 수 없습니다.")
@@ -130,7 +137,12 @@ def item_identity(item, field_id):
         # No silent assumption that missing customFields means an empty value.
         raise ApiError("JIRA_LOOKUP_FIELDS_UNVERIFIED: Item 상세 GET에서 customFields 전체를 "
                        "확인할 수 없습니다. 조회 결과를 '중복 없음'으로 처리하지 않습니다.")
-    found = [f for f in fields if isinstance(f,dict) and f.get("fieldId")==field_id]
+    # The embedded Codebeamer connector resolves the reserved identity
+    # field by name; REST Item responses may omit fieldId on some profiles.
+    found = [f for f in fields if isinstance(f,dict) and (
+             f.get("fieldId")==field_id or
+             (f.get("fieldId") is None and
+              str(f.get("name") or "").strip().casefold()=="jira key"))]
     if len(found)>1:
         raise ApiError("JIRA_LOOKUP_DUPLICATE_FIELD: 하나의 Item에 Jira Key 필드가 중복됩니다.")
     if not found:
