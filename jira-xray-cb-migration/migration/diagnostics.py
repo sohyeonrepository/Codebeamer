@@ -31,6 +31,8 @@ def error_classification(error):
     """Classify predictable failures without recording potentially sensitive raw text."""
     import re
     message = str(error)
+    if 'Unconfigured API capability:' in message:
+        return 'UNCONFIGURED_API_CAPABILITY', 'An API operation was called without a Swagger-backed capability binding'
     if 'Source fields/values changed' in message:
         return 'SOURCE_CHANGED', 'Jira field analysis changed between GET and Import'
     if 'GET transport failure' in message or 'Connection deadline exceeded' in message:
@@ -129,6 +131,10 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None, repo
         'last_codebeamer_api_call': getattr(wizard.cb, 'last_api_call', None),
         'configured_codebeamer_capabilities': sorted(str(k) for k in
               wizard.cb.config.get('operations', {})),
+        'recent_wizard_stage_names': [
+            str(row.get('stage')) for row in wizard.plan.get('stages',[])[-25:]
+            if isinstance(row,dict)
+        ],
         'creation_attempt': getattr(wizard,'last_creation_context',None) if stage == '신규 필드 설정 저장' else None,
         # ApiError strings can contain server URLs or user values; keep only a
         # controlled summary, not arbitrary exception text.
