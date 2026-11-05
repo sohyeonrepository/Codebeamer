@@ -91,7 +91,7 @@ def launch(wizard, initial_projects=None):
                     report=value)
                 status.set(label+' 미완료 | 진단 로그: '+str(diagnostic_path))
                 show_evidence(value)
-                evidence.insert('end','\\n\\n상세 진단 로그: '+str(diagnostic_path))
+                evidence.insert('end','\n\n상세 진단 로그: '+str(diagnostic_path))
                 tabs.select(step4)
             else:
                 if not incomplete:
