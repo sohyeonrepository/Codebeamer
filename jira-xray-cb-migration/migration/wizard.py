@@ -1488,7 +1488,11 @@ class ImportWizard:
                                         'multipleSelection': False, 'choices': {}}}
                     self.create_field(scope, internal_source, row, tracker)
                     from migration.jira_identity_lookup import identity_field
-                    identity = identity_field(self.cb, target_fields(self.cb, tracker))
+                    # Recheck the actual created Text field ID and metadata;
+                    # use the independently verified source Text write model
+                    # if this server omits FieldValue details on the new field.
+                    identity = identity_field(self.cb, target_fields(self.cb, tracker),
+                                              verified_template_binding=identity['profile'].get('binding'))
                     settings['wizard']['identity_bindings'][scope] = identity
                     self.config['migration']['wizard']['identity_bindings'][scope] = deepcopy(identity)
                     # The created metadata is not part of the user's checked
