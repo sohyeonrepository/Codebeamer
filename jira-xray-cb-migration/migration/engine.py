@@ -217,6 +217,18 @@ class Engine:
             replay(self.cb, self.state, key, item_id, events, make_payload)
             self.report['limitations'].append({'source': key, 'reason': 'Original revision author/time preserved in state only; native restoration unverified'})
         actual = self.cb.call('item_get', {'itemId': item_id})
+        if self.wizard and self.settings.get('wizard',{}).get('selected_fields_only'):
+            # Omitting Jira nulls is safe when creating a new Item, but an
+            # existing target may already have a value. Never report such a
+            # field as migrated without a verified clearing/write contract.
+            for source, specification in mapping.items():
+                if issue['fields'].get(source) is not None:
+                    continue
+                if specification.get('deferred_reference'):
+                    continue
+                target_key=specification['target']
+                if target_key in actual and actual[target_key] not in (None, [], ''):
+                    raise ApiError('Jira null cannot overwrite existing Codebeamer value without verified clear contract: '+source)
         if self.jira.config.get('single_issue_key') and actual.get('tracker',{}).get('id') != tracker_id:
             raise ApiError('Single-Issue target Tracker could not be verified; refuse any Item update')
         if compare_fields(latest, actual):
