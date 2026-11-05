@@ -105,6 +105,10 @@ def payload(fields, mappings, settings):
     output = {}
     for source, spec in mappings.items():
         if spec.get('deferred_reference'):continue
+        if spec.get('skip_when_source_empty'):
+            if fields.get(source) is not None and fields.get(source) != []:
+                raise ApiError('Resolution source gained a value after analysis; re-analyze before Import')
+            continue
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
