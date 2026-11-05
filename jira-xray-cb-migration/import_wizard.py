@@ -657,6 +657,8 @@ def launch(wizard, initial_projects=None):
                 lines=list(originals.values())
                 options.delete('1.0','end')
                 options.insert('1.0','\n'.join(lines))
+            if type_box.get() in ('option','status') and not originals:
+                raise ApiError('Jira '+source+': 원본 Choice 값과 allowedValues를 확인하지 못해 옵션을 생성할 수 없습니다.')
             choices={}
             if type_box.get() in ('option','status'):
                 if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
