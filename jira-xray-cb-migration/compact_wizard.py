@@ -393,6 +393,19 @@ def launch(wizard, projects):
 
     def import_approved():
         tabs.select(result_tab)
+        previous_stage_count = len(wizard.plan.get("stages", []))
+        def log_identity_stages():
+            for entry in wizard.plan.get("stages", [])[previous_stage_count:]:
+                name = str(entry.get("stage") or "")
+                result = entry.get("result") or {}
+                if name.startswith("identity-field:") and isinstance(result,dict):
+                    append_log("Jira Key 필드", "생성 후 조회 확인 · CB Field ID " +
+                               str(result.get("field_id", "미확인")))
+                elif name.startswith("identity-ready:") and isinstance(result,dict):
+                    append_log("Jira Key 전달", "검증 완료 · Tracker " +
+                               str(result.get("tracker_id", "미확인")) +
+                               " / Field ID " + str(result.get("jira_key_field_id", "미확인")))
+        
         append_log("Import", "사용자 승인 대기")
         try:
             scope = current_scope()
@@ -409,8 +422,10 @@ def launch(wizard, projects):
                 return
             append_log("검증", "Import 요청 검증 시작")
             report = wizard.execute(approved=True, visibility_review=review)
+            log_identity_stages()
             summarize_report(report)
         except Exception as exc:
+            log_identity_stages()
             from migration.diagnostics import write_diagnostic
             try:
                 filepath = write_diagnostic(wizard, "Import", exc)
