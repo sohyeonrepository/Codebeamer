@@ -26,3 +26,11 @@ python import_wizard.py --config config.local.json --prompt-auth
 - 기존 Wizard로 되돌리려면 `migration.wizard.legacy_ui: true` 사용.
 - API `lookup` 누락에 따른 중복 검사 차단 및 실제 서버 POST 검증은 UI 변경과 별개의 문제이며, 본 커밋으로 해결됐다고 간주하지 않습니다.
 - 실제 Jira/Codebeamer 서버 UI 테스트는 아직 수행되지 않았습니다.
+
+## Import 결과 및 고급 설정 (2026-11-05)
+
+- **3. Import 결과 / 로그** 탭에서 승인 범위, 선택 필드의 대상 속성, 실행 결과, 오류 코드/메시지 및 상세 결과 파일 경로를 표시합니다. 전체 JSON은 화면에 출력하지 않습니다.
+- Jira **Summary → Codebeamer name**, **Description → description**을 수동 선택할 때에도 기본 속성 키를 유지합니다. 기존 `migration/wizard.py`의 자동 추천 및 이전 Field ID 보정 로직은 그대로 보존합니다.
+- **고급 설정**은 예전 전체 Wizard로 전환하지 않고, 현 UI 안의 팝업으로 **Jira Issue Link Type → Codebeamer Association Type**과 방향 반전을 저장합니다.
+- Xray Test Run 전용 관계, Reference 값 생성/변경은 이 간소화 팝업에서 아직 지원하지 않으며, 지원하는 것처럼 표시하지 않습니다.
+- **중복 확인 `lookup` 누락은 아직 별도 해결 대상**입니다. 로그 화면이 도입되었다고 POST가 성공했다는 뜻은 아닙니다.
