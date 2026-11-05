@@ -75,7 +75,7 @@ def safe_exception_details(error):
     return {'summary': summary, 'frames': frames}
 
 
-def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
+def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None, report=None):
     """Write minimal safe metadata needed to reproduce a contract failure."""
     from clients.tracker_fields import binding
     spec = wizard.cb.spec
@@ -139,6 +139,16 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
         'openapi_version': spec.get('openapi', spec.get('swagger')) if isinstance(spec, dict) else None,
         'operations': {},
         'scopes': scopes,
+        'import_report': {
+            'complete':report.get('complete'),
+            'counts':report.get('counts'),
+            'errors': [
+                {'source':e.get('source'), 'error_code':e.get('error_code'),
+                 'error_detail':e.get('error_detail'), 'exception':e.get('exception'),
+                 'last_codebeamer_api_call':e.get('last_codebeamer_api_call')}
+                for e in report.get('errors',[]) if isinstance(e,dict)
+            ],
+        } if isinstance(report,dict) else None,
     }
     for operation_name in ('item_create', 'item_update', 'item_get'):
         try:
