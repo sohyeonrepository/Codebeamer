@@ -53,6 +53,28 @@ def error_classification(error):
     return 'UNCLASSIFIED', 'See the error displayed in the Import Wizard and recent request metadata'
 
 
+def safe_exception_details(error):
+    import traceback
+    import re
+    frames = [{'file': Path(f.filename).name, 'function': f.name, 'line': f.lineno}
+              for f in traceback.extract_tb(error.__traceback__)[-16:]]
+    message = str(error)
+    match = re.search(r'Unconfigured API capability:\s*([a-zA-Z_][a-zA-Z_0-9]*)', message)
+    if match:
+        summary = 'Unconfigured API capability: ' + match.group(1)
+    elif 'Source fields/values changed' in message:
+        summary = 'Jira source fields or values changed'
+    elif 'Target configuration changed' in message:
+        summary = 'Codebeamer destination field contracts changed'
+    elif 'Choice 필드는 원본 값에 대응하는 선택 옵션이 필요합니다' in message:
+        summary = 'Source Choice options unavailable'
+    elif 'FieldValue schema unverified' in message:
+        summary = 'FieldValue write contract unavailable'
+    else:
+        summary = 'Exception message shown only in Wizard UI'
+    return {'summary': summary, 'frames': frames}
+
+
 def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
     """Write minimal safe metadata needed to reproduce a contract failure."""
     from clients.tracker_fields import binding
