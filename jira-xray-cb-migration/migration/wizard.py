@@ -1153,6 +1153,20 @@ class ImportWizard:
                     '신규 필드/Tracker가 있으면 POST /v3/tracker/configuration 전체 schema; '
                     'Attachment upload/download, Comment create/get, Association create/get, Legacy History 보존 API. '
                     '서버 OpenAPI 또는 이전 성공 실행의 discovery/single-openapi가 필요합니다. 원인: '+str(exc)) from exc
+        # Import uses an external Jira identity to reconcile retries. A missing
+        # lookup is not an HTTP POST error and cannot safely mean "no match".
+        # Check before Tracker/Field POSTs to prevent partial writes.
+        if 'lookup' not in self.cb.config.get('operations', {}):
+            raise ApiError(
+                'LOOKUP_NOT_CONFIGURED: Jira 원본 ID로 기존 Codebeamer Item을 찾는 '
+                '중복 확인 기능이 설정되지 않았습니다. POST 요청은 아직 실행되지 않았습니다. '
+                'Summary/Description만 매핑하면 원본 식별값이 Codebeamer Item에 '
+                '저장되지 않으므로 재실행 시 중복 생성 여부를 확인할 수 없습니다. '
+                'Jira Key/원본 ID 저장 필드와 해당 필드의 정확한 조회 계약을 설정해야 합니다.'
+            )
+        lookup=self.cb.operation('lookup')
+        if lookup['method'].upper()!='GET':
+            raise ApiError('LOOKUP_INVALID: 중복 확인 기능은 검증된 GET API여야 합니다.')
         try:
             from mapping_helper import request_schema,schema_object
             item=self.cb.operation('item_create');readback=self.cb.operation('item_get')
