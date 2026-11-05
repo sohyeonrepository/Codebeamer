@@ -94,9 +94,30 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
             operation = spec['paths'][path][op['method'].lower()]
             from mapping_helper import request_schema
             raw = request_schema(spec, operation) if op['method'].upper() != 'GET' else {}
+            native_shapes = {}
+            from mapping_helper import schema_object
+            for key in ('resolution', 'resolutions', 'status', 'priority'):
+                field = raw.get('properties', {}).get(key)
+                if not isinstance(field, dict):
+                    continue
+                try:
+                    expanded = schema_object(spec, field)
+                    item = expanded.get('items')
+                    resolved_item = schema_object(spec, item) if isinstance(item,dict) else {}
+                    native_shapes[key] = {
+                        'type': expanded.get('type'),
+                        'read_only': expanded.get('readOnly',False),
+                        'is_array': expanded.get('type') == 'array',
+                        'item_type': resolved_item.get('type'),
+                        'item_properties': sorted(resolved_item.get('properties',{})),
+                        'property_type': expanded.get('format'),
+                    }
+                except Exception as inner:
+                    native_shapes[key] = {'schema_error':type(inner).__name__}
             document['operations'][operation_name] = {
                 'method': op['method'], 'path': path,
                 'request_properties': sorted(raw.get('properties', {})),
+                'native_choice_shapes': native_shapes,
             }
         except Exception as exc:
             document['operations'][operation_name] = {'inspection_error': type(exc).__name__}
