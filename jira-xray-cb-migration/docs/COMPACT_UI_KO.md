@@ -34,3 +34,17 @@ python import_wizard.py --config config.local.json --prompt-auth
 - **고급 설정**은 예전 전체 Wizard로 전환하지 않고, 현 UI 안의 팝업으로 **Jira Issue Link Type → Codebeamer Association Type**과 방향 반전을 저장합니다.
 - Xray Test Run 전용 관계, Reference 값 생성/변경은 이 간소화 팝업에서 아직 지원하지 않으며, 지원하는 것처럼 표시하지 않습니다.
 - **중복 확인 `lookup` 누락은 아직 별도 해결 대상**입니다. 로그 화면이 도입되었다고 POST가 성공했다는 뜻은 아닙니다.
+
+## Jira Key 기반 중복 확인 (Java 마이그레이터 로직 적용)
+
+`CbCloudTestRunMigrator.java`의 `allTrackerItemRefs()`, `loadExistingRuns()`, `loadTestCaseMap()` 조회 방식을 Python에 적용했습니다.
+
+- 대상 Tracker의 **Jira Key** 필드가 정확히 1개 존재하고, Swagger로 Text FieldValue 쓰기 구조가 확인되어야 합니다.
+- UI에서 Jira Summary/Description만 체크하더라도 Jira Key는 도구 내부의 **이관 식별 필드**로 자동 저장하도록 요청을 구성합니다.
+- Item 생성 전 페이지별 Tracker Item 전체 목록을 조회하고 각 Item을 GET하여 Jira Key가 같은지 검사합니다.
+- 정확히 한 건이면 기존 Item과 대응시키고, 2건 이상이면 오류로 중단합니다. 읽기 실패·응답 구조 불일치·불완전한 페이지도 '중복 없음'으로 취급하지 않습니다.
+- 신규 생성 후 Item GET으로 Jira Key가 실제 반영됐는지 검증합니다.
+- Jira Key 필드가 없거나 쓰기 형식이 확인되지 않은 Tracker는 **이관 전에 차단**합니다. 자동 필드 생성이나 임의 이름 기반 추측은 하지 않습니다.
+- 이 코드는 서버에서 아직 실행 검증하지 않았고, GET 응답의 `customFields` 구조가 다른 서버에서는 어댑터 추가가 필요합니다.
+
+검증용 오프라인 테스트: `python -m unittest discover -s tests -p 'test_jira_identity_lookup.py'`
