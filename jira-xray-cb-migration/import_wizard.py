@@ -598,7 +598,8 @@ def launch(wizard, initial_projects=None):
         # Summary/Description/Assignee/Date do not require choice options.
         option_label=ttk.Label(body,text='선택 옵션 (Choice/Status 전용, 한 줄에 하나)')
         options=tk.Text(body,width=48,height=7)
-        initial=list(dict.fromkeys(row.get('creation',{}).get('choices',{}).values()))
+        originals_for_ui=source_choices(entry['analysis']['values'].get(source,[])+(definition.get('allowedValues') or []))
+        initial=list(dict.fromkeys(row.get('creation',{}).get('choices',{}).values() or originals_for_ui.values()))
         options.insert('1.0','\n'.join(initial))
         conversion_notice=ttk.Label(body,text='',wraplength=430)
         conversion_notice.grid(row=4,column=0,columnspan=2,sticky='w',pady=(10,4))
