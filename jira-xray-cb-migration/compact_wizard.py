@@ -420,6 +420,12 @@ def launch(wizard, projects):
         tabs.select(result_tab)
         previous_stage_count = len(wizard.plan.get("stages", []))
         def log_identity_stages():
+            for scope_key in wizard.plan.get("scopes", {}):
+                evidence = wizard.state.load("wizard-identity-resolution", scope_key)
+                if isinstance(evidence, dict):
+                    append_log("Jira Key 판정", str(scope_key) + " · " +
+                               str(evidence.get("status", "미확인")) + " · Field ID " +
+                               str(evidence.get("field_id", "생성 전")))
             for entry in wizard.plan.get("stages", [])[previous_stage_count:]:
                 name = str(entry.get("stage") or "")
                 result = entry.get("result") or {}
