@@ -421,23 +421,70 @@ def launch(wizard, projects):
             status.set("Import 실패: " + str(exc)[:250])
 
     def advanced():
-        # Compact mode must not launch the legacy multi-tab Wizard.
+        # The compact UI owns its own relation editor; never launch the legacy UI.
         dialog = tk.Toplevel(root)
-        dialog.title("고급 설정 · Xray / Reference")
-        dialog.geometry("640x430")
+        dialog.title("고급 설정 · Jira Issue Link / CB Association")
+        dialog.geometry("730x470")
         dialog.transient(root)
         dialog.grab_set()
-        box = ttk.Frame(dialog, padding=20)
-        box.pack(fill="both", expand=True)
-        ttk.Label(box, text="고급 설정", font=("", 17, "bold")).pack(anchor="w", pady=(0, 12))
-        ttk.Label(box, text="현재 선택한 프로젝트/Tracker의 관계 기능은 Xray/Reference API 계약 검증이 필요합니다.",
-                  wraplength=575).pack(anchor="w")
-        ttk.Label(box, text="기존 마이그레이션 기능을 임의 실행하거나 이전 Wizard 화면으로 전환하지 않습니다.",
-                  wraplength=575).pack(anchor="w", pady=10)
-        ttk.Label(box, text="상태: 고급 관계 매핑은 이 간소화 화면에서 아직 설정할 수 없습니다.",
-                  wraplength=575).pack(anchor="w", pady=12)
-        ttk.Button(box, text="닫기", command=dialog.destroy).pack(anchor="e", pady=18)
+        content = ttk.Frame(dialog, padding=18)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text="고급 설정 · 관계 유형 매핑", font=("", 16, "bold")).pack(anchor="w", pady=(0, 12))
+        ttk.Label(content, text="Jira Issue Link Type을 Codebeamer Association Type으로 연결합니다. 이 화면은 관계 타입 설정만 저장합니다.",
+                  wraplength=680).pack(anchor="w")
+        ttk.Label(content, text="Xray Test Run 및 Reference 필드 생성/연결은 별도 검증이 필요하며 여기서 변경하지 않습니다.",
+                  wraplength=680).pack(anchor="w", pady=5)
+        relation_types = {"jira": [], "codebeamer": []}
+        source_box = ttk.Combobox(content, state="readonly", width=80)
+        target_box = ttk.Combobox(content, state="readonly", width=80)
+        ttk.Label(content, text="Jira Issue Link Type").pack(anchor="w", pady=(15, 3))
+        source_box.pack(anchor="w")
+        ttk.Label(content, text="Codebeamer Association Type").pack(anchor="w", pady=(12, 3))
+        target_box.pack(anchor="w")
+        reverse = tk.BooleanVar(value=False)
+        ttk.Checkbutton(content, text="방향 반전", variable=reverse).pack(anchor="w", pady=10)
+        advanced_status = tk.StringVar(value="관계 유형 조회를 선택하세요.")
+        ttk.Label(content, textvariable=advanced_status, wraplength=675).pack(anchor="w", pady=8)
 
+        def load_catalog():
+            catalog = wizard.relation_catalog()
+            relation_types["jira"] = catalog["jira"]
+            relation_types["codebeamer"] = catalog["codebeamer"]
+            source_box.configure(values=[str(t["id"]) + " · " + str(t["name"]) for t in catalog["jira"]])
+            target_box.configure(values=[str(t["id"]) + " · " + str(t["name"]) for t in catalog["codebeamer"]])
+            advanced_status.set("Jira " + str(len(catalog["jira"])) + "개 / CB " +
+                                str(len(catalog["codebeamer"])) + "개 유형 조회 완료")
+
+        def load_existing(event=None):
+            if source_box.current() < 0:
+                return
+            source = relation_types["jira"][source_box.current()]
+            selected = wizard.config["migration"].get("wizard", {}).get("association_types", {}).get(str(source["id"]))
+            target_box.set("")
+            reverse.set(False)
+            if isinstance(selected, dict) and selected.get("mode", "association") == "association":
+                for index, item in enumerate(relation_types["codebeamer"]):
+                    if item["id"] == selected.get("type_id"):
+                        target_box.current(index)
+                        reverse.set(bool(selected.get("reverse", False)))
+                        break
+
+        def save_relation():
+            if source_box.current() < 0 or target_box.current() < 0:
+                raise ValueError("Jira 및 CB 관계 유형을 선택하세요.")
+            source = relation_types["jira"][source_box.current()]
+            target = relation_types["codebeamer"][target_box.current()]
+            wizard.save_relation_mapping(source["id"], {
+                "mode": "association", "type_id": target["id"], "reverse": reverse.get()
+            })
+            advanced_status.set(str(source["name"]) + " → " + str(target["name"]) + " 저장 완료")
+
+        source_box.bind("<<ComboboxSelected>>", load_existing)
+        controls = ttk.Frame(content)
+        controls.pack(fill="x", pady=15)
+        ttk.Button(controls, text="관계 유형 조회", command=lambda: guarded("관계 조회", load_catalog)).pack(side="left")
+        ttk.Button(controls, text="매핑 저장", command=lambda: guarded("관계 저장", save_relation)).pack(side="left", padx=10)
+        ttk.Button(controls, text="닫기", command=dialog.destroy).pack(side="right")
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
