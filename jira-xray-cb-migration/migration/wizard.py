@@ -252,8 +252,6 @@ def proposals(analysis, targets, config, existing=None):
     result = {}
     # A saved mapping must never block itself on the next GET analysis.
     # Other mappings are reconciled separately using the user's active selection.
-    claimed = {source: str(spec.get('field_id')) for source,spec in existing.items()
-               if isinstance(spec,dict) and spec.get('field_id') is not None}
     for source, definition in analysis['fields'].items():
         from migration.system_fields import field_policy
         policy = field_policy(source, definition)
@@ -374,11 +372,6 @@ def proposals(analysis, targets, config, existing=None):
                 if source == 'components': spec['source_identity'] = 'id'
                 for v in analysis['values'].get(source, []):
                     checked_value(v, converter, mapping, target, 'id' if source == 'components' else None)
-                if any(other != source and other_id == str(fid)
-                       for other,other_id in claimed.items()):
-                    # A stale mapping is not enough to reject this field.
-                    # The final owner check uses explicit selected scope.
-                    pass
                 if key in bindings: spec['binding'] = deepcopy(bindings[key])
                 entry.update(status='mapped', mapping_mode='auto', spec=spec, target=target, reason='이름·타입 일치')
             except (ValueError, ApiError, TypeError) as exc:
@@ -725,9 +718,10 @@ class ImportWizard:
                 reason = '타입/다중 선택 미확인: type='+str(target.get('type', target.get('typeName')))+', valueModel='+str(target.get('valueModel'))
             elif not compatible(kind, multiple, target):
                 reason = '타입 불일치: Jira '+str((kind,multiple))+' → CB '+str((target_kind,target_multiple))
-            elif any(other != source and row.get('spec', {}).get('field_id') == field_identifier(target)
-                     for other,row in entry['rows'].items() if row.get('spec')):
-                reason = '다른 Jira 필드에 이미 연결됨'
+            elif any(other != source and row.get('selected',False) and
+                     (row.get('spec') or {}).get('field_id') == field_identifier(target)
+                     for other,row in entry['rows'].items()):
+                reason = '선택된 다른 Jira 필드가 대상 Field ID를 사용 중'
             candidates.append({'field':target, 'reason':reason})
         return candidates
 
@@ -751,8 +745,9 @@ class ImportWizard:
         if kind and target_kind and type(target_multiple) is bool and not compatible(kind,multiple,target):
             raise ApiError('Incompatible source/target types; no implicit conversion')
         for other, row in entry['rows'].items():
-            if other != source and row.get('spec') and (row['spec']['field_id'] == target_id or row['spec']['target'] == target_key):
-                raise ApiError('Destination already mapped to another Jira field')
+            if other != source and row.get('selected',False) and row.get('spec') and (
+                    row['spec']['field_id'] == target_id or row['spec']['target'] == target_key):
+                raise ApiError('선택된 다른 Jira 필드 '+other+'가 같은 Codebeamer 대상 필드를 사용 중입니다.')
         spec = build_spec(source, target, text_conversion(kind,multiple,target) or 'raw', target_key, values, existing=True)
         if not compatible(kind,multiple,target):spec['selection_unverified']='타입/다중 선택 미확인'
         if detail_error:spec['selection_unverified']='상세 조회 실패: '+detail_error
