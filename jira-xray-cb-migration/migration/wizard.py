@@ -1175,8 +1175,9 @@ class ImportWizard:
                 # server-verified Text field creation template on Import approval.
                 # Never treat an ambiguous or incompatible existing field as
                 # permission to create a duplicate.
+                from migration.jira_identity_lookup import normalized_jira_key_label
                 candidates = [f for f in actual_fields if
-                              any(__import__('migration.jira_identity_lookup', fromlist=['normalized_jira_key_label']).normalized_jira_key_label(f.get(k)) == 'jirakey' for k in ('label', 'name'))]
+                              any(normalized_jira_key_label(f.get(k)) == 'jirakey' for k in ('label', 'name'))]
                 if candidates or 'JIRA_IDENTITY_FIELD_REQUIRED' not in str(exc):
                     raise
                 from migration.jira_identity_lookup import text_creation_profile
