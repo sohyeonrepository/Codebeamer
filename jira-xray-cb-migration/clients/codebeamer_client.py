@@ -12,6 +12,7 @@ class CodebeamerClient:
     def __init__(self, http, config, write=False):
         self.http, self.config, self.write = http, config, write
         self.spec = None
+        self.last_api_call = None
 
     def discover(self):
         location = self.config.get('swagger_url')
@@ -160,7 +161,17 @@ class CodebeamerClient:
 
     def call(self, name, params=None, data=None, raw=False, headers=None):
         operation_name = name
+        # Deliberately record only operation names, parameter NAMES, and
+        # Swagger route templates. No credentials, IDs, payload or values.
+        self.last_api_call = {
+            'capability': str(name),
+            'phase': 'resolve_operation',
+            'parameter_names': sorted(str(k) for k in (params or {})),
+            'has_request_body': data is not None,
+        }
         op = self.operation(name)
+        self.last_api_call.update(phase='execute',method=op['method'].upper(),
+                                  path_template=op['path'])
         if name == 'trackers_get' and op.get('aggregate_types') and 'typeId' not in (params or {}):
             from clients.codebeamer_3007 import typed_project_trackers
             return typed_project_trackers(self, params or {})
