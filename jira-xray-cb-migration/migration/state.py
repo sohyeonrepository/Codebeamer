@@ -48,7 +48,8 @@ class State:
         import hashlib
         dest = self.root / directory / (hashlib.sha256(str(key).encode()).hexdigest() + '.json')
         dest.parent.mkdir(parents=True, exist_ok=True)
-        temporary = dest.with_suffix('.tmp')
+        import uuid
+        temporary = dest.with_name(dest.name + '.' + uuid.uuid4().hex + '.tmp')
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
         import os
         for attempt in range(5):
