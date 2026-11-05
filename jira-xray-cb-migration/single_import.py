@@ -336,7 +336,26 @@ def launch_single(test):
     ttk.Label(root,text='지정한 테스트 범위에만 생성합니다. 기존 Item 수정/삭제 및 전체 이관은 수행하지 않습니다.').pack(pady=8)
     output=tk.Text(root,wrap='word');output.pack(fill='both',expand=True)
     def display():
-        output.delete('1.0','end');output.insert('end',json.dumps(test.report,ensure_ascii=False,indent=2))
+        # Keep the complete structured report on disk, not in the user-facing window.
+        # Never expose API payloads or the full OpenAPI/schema snapshot in Tk.
+        report = test.report
+        lines = ['Jira → Codebeamer 단일 Issue 검증 결과']
+        blockers = report.get('blockers') or []
+        if blockers:
+            lines.append('상태: 차단 / 오류 ' + str(len(blockers)) + '건')
+            for index, item in enumerate(blockers[:20], 1):
+                stage = str(item.get('stage') or '확인 필요') if isinstance(item, dict) else '확인 필요'
+                reason = str(item.get('reason') or item.get('error_code') or '상세 로그 확인') if isinstance(item, dict) else '상세 로그 확인'
+                lines.append(str(index) + '. [' + stage + '] ' + reason[:400])
+            if len(blockers) > 20:
+                lines.append('그 외 ' + str(len(blockers) - 20) + '건은 로그에서 확인하세요.')
+        else:
+            lines.append('상태: ' + ('완료' if report.get('complete') else '사전 검증 진행 / 상세 결과 저장'))
+        lines.append('')
+        lines.append('상세 결과 파일: ' + str(test.state.root / 'single-import-report.json'))
+        lines.append('API 요청 기록: ' + str(test.state.root / 'requests.jsonl'))
+        output.delete('1.0', 'end')
+        output.insert('end', '\\n'.join(lines))
     def prepare():
         try:test.prepare()
         except Exception as exc:
