@@ -359,8 +359,35 @@ def launch(wizard, initial_projects=None):
     create_button=ttk.Button(action_bar,text='＋ 신규 필드 생성')
     manual_button.pack(side='left')
     def select_all(value):
-        for source in wizard.plan['scopes'].get(scopes.get(),{}).get('rows',{}):wizard.select_field(scopes.get(),source,value)
-        display_scope()
+        scope=scopes.get()
+        if not scope or scope not in wizard.plan['scopes']:
+            return
+        wizard.select_all_fields(scope,value)
+        # Update visible Treeview rows in place. Rebuilding the whole scope
+        # recalculates Xray relations and repeatedly queries the state DB.
+        for iid,source in scope_rows.items():
+            if table.exists(iid):
+                table.set(iid,'selected','☑' if value else '☐')
+                if not value:
+                    table.set(iid,'cb','이관하지 않음 (제외)')
+                else:
+                    row=wizard.plan['scopes'][scope]['rows'][source]
+                    target=row.get('target') or {}
+                    spec=row.get('spec')
+                    if spec:
+                        label=target.get('label',target.get('name',''))
+                        display=label+' · ID '+str(spec['field_id'])
+                    elif row.get('creation'):
+                        display=row['creation']['label']+' (신규 생성 예정)'
+                    else:
+                        display=row.get('reason','검증 필요')
+                    table.set(iid,'cb',display)
+        if selected_only.get():
+            display_scope()
+        else:
+            entry=wizard.plan['scopes'][scope]
+            detail.set(str(sum(bool(row.get('selected',False)) for row in entry['rows'].values()))+
+                       ' / '+str(len(entry['rows']))+' 선택')
     ttk.Button(action_bar,text='전체 선택',command=lambda:select_all(True)).pack(side='left')
     ttk.Button(action_bar,text='전체 해제',command=lambda:select_all(False)).pack(side='left')
     detail = tk.StringVar(value='Attachment · Comment · Linked Issue · History · R4J는 별도로 자동 이관합니다.')
