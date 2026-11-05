@@ -9,6 +9,97 @@ from clients.jira_client import segment
 from mapping_helper import field_identifier
 
 
+
+def text_creation_profile(cb, tracker_id, fields=None):
+    """Build a Text profile from *this server's* actual Tracker configuration.
+
+    The embedded Jira Connector creates fields internally, so we use its
+    reuse/clone principle, NOT its private Java method signatures.  Never
+    fabricate a typeId, field permission, or write discriminator.
+    """
+    from copy import deepcopy
+    from clients.tracker_fields import binding
+    from clients.codebeamer_3007 import configuration_field_contract
+    from mapping_helper import field_identifier, schema_object, creation_templates
+    from migration.wizard import target_fields, semantic_type
+    if fields is None:
+        fields = target_fields(cb, tracker_id)
+    configuration = cb.configuration(tracker_id)
+    config_fields = configuration.get("fields")
+    if not isinstance(config_fields, list):
+        raise ApiError("JIRA_IDENTITY_TEMPLATE_CONFIG_MISSING: Tracker 필드 설정 전체를 읽지 못했습니다.")
+    by_id = {str(field_identifier(f)):f for f in fields}
+    candidates = []
+    diagnostics = []
+    for original in config_fields:
+        observed = dict(original, **by_id.get(str(field_identifier(original)), {}))
+        kind, multiple = semantic_type(observed)
+        if kind != "text" or multiple is True or str(observed.get("typeName", "")).casefold() in ("wikitext",):
+            continue
+        if type(original.get("typeId")) is not int or not isinstance(original.get("permission"),dict):
+            diagnostics.append("Text 템플릿의 typeId/permission 누락")
+            continue
+        if original.get("reference") is not None:
+            continue
+        # A concrete sample field must supply the actual FieldValue model.
+        model = observed.get("valueModel")
+        if not isinstance(model,str) or not model:
+            diagnostics.append("Text FieldValue 모델 미확인")
+            continue
+        value_binding = binding(cb.spec, observed)
+        if not value_binding:
+            # The connector's actual TextFieldValue class can be verified from
+            # OpenAPI when the legacy field-detail response omits the enum.
+            definitions = cb.spec.get("components",{}).get("schemas",
+                          cb.spec.get("definitions",{}))
+            base = model.split("<",1)[0]
+            schema = definitions.get(base)
+            if base != "TextFieldValue" or not isinstance(schema,dict):
+                diagnostics.append("Text FieldValue 타입 정의 미확인")
+                continue
+            resolved = schema_object(cb.spec,schema)
+            properties = resolved.get("properties",{})
+            value_def = schema_object(cb.spec,properties.get("value",{}))
+            if value_def.get("type") != "string" or properties.get("value",{}).get("readOnly") is True:
+                diagnostics.append("Text FieldValue.value가 쓰기 가능한 문자열이 아님")
+                continue
+            discriminator = schema_object(cb.spec,properties.get("type",{}))
+            if discriminator.get("enum") not in (["TextFieldValue"],) and discriminator.get("const") != "TextFieldValue":
+                diagnostics.append("TextFieldValue discriminator 미확인")
+                continue
+            value_binding = {"fieldId":field_identifier(observed),"type":"TextFieldValue",
+                             "value_property":"value"}
+        if value_binding.get("value_property") != "value":
+            diagnostics.append("Text 필드는 단일 value가 필요")
+            continue
+        template = next((t for t in creation_templates(configuration,fields)
+                         if t["definition"]["typeId"] == original["typeId"]), None)
+        if not template:
+            diagnostics.append("Text 생성 정의를 구성할 수 없음")
+            continue
+        definition = deepcopy(template["definition"])
+        definition.update(label="Jira Key", mandatory=False, multipleSelection=False)
+        try:
+            configuration_field_contract(cb,definition,tracker_id)
+        except ApiError as exc:
+            diagnostics.append("Text 필드 Configuration 계약 불일치: " + str(exc)[:180])
+            continue
+        fresh_binding = deepcopy(value_binding)
+        fresh_binding.pop("fieldId",None)
+        candidates.append({"type_name":"Text","definition":template["definition"],
+                           "binding":fresh_binding,"creation_method":"configuration",
+                           "source_tracker_id":tracker_id,"definition_contract":"verified",
+                           "value_contract":"verified"})
+    if not candidates:
+        raise ApiError("JIRA_IDENTITY_CREATE_UNVERIFIED: Jira Key 신규 필드용 Text 템플릿을 "
+                       "실제 Tracker에서 검증할 수 없습니다. " +
+                       "; ".join(dict.fromkeys(diagnostics[:4])))
+    types = {c["definition"]["typeId"] for c in candidates}
+    if len(types) != 1:
+        raise ApiError("JIRA_IDENTITY_TEXT_AMBIGUOUS: 복수 Text typeId가 있어 임의 생성하지 않습니다.")
+    return candidates[0]
+
+
 def identity_field(cb, fields):
     """Find one visible actual field named Jira Key and a verified writable FieldValue."""
     from clients.tracker_fields import binding
