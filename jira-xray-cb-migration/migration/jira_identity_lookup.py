@@ -109,11 +109,62 @@ def text_creation_profile(cb, tracker_id, fields=None):
     return candidates[0]
 
 
+
+def normalized_jira_key_label(value):
+    """The built-in Connector and older trackers use Jira Key / jirakey."""
+    return "".join(ch for ch in str(value or "").casefold() if ch.isspace() is False and ch not in "_-")
+
+
+def existing_text_value_binding(cb, field):
+    """Verify a real Text field against the actual TextFieldValue OpenAPI model.
+
+    Missing discriminator metadata is not a type conflict. Never accept an
+    explicit conflicting discriminator, a WikiText or a non-string value.
+    """
+    from mapping_helper import schema_object
+    from migration.wizard import semantic_type
+    kind, multiple = semantic_type(field)
+    model = str(field.get("valueModel") or "").split("<", 1)[0]
+    if (kind != "text" or multiple is True or
+        str(field.get("typeName") or "").casefold() == "wikitext" or
+        model not in ("", "TextFieldValue")):
+        return None
+    spec = getattr(cb, "spec", None)
+    if not isinstance(spec, dict):
+        return None
+    definitions = spec.get("components", {}).get("schemas", spec.get("definitions", {}))
+    schema = definitions.get("TextFieldValue")
+    if not isinstance(schema, dict):
+        return None
+    properties = schema_object(spec, schema).get("properties", {})
+    value = schema_object(spec, properties.get("value", {}))
+    if value.get("type") != "string" or value.get("readOnly") is True:
+        return None
+    other_values = schema_object(spec, properties.get("values", {}))
+    if other_values and other_values.get("readOnly") is not True:
+        return None
+    discriminator = schema_object(spec, properties.get("type", {}))
+    allowed = discriminator.get("enum")
+    constant = discriminator.get("const")
+    if (allowed is not None and
+        (not isinstance(allowed, list) or "TextFieldValue" not in allowed)):
+        return None
+    if constant is not None and constant != "TextFieldValue":
+        return None
+    identifier = field_identifier(field)
+    if type(identifier) is not int:
+        return None
+    return {"fieldId": identifier, "type": "TextFieldValue", "value_property": "value"}
+
+
+
 def identity_field(cb, fields, verified_template_binding=None):
     """Find one visible actual field named Jira Key and a verified writable FieldValue."""
     from clients.tracker_fields import binding
-    candidates = [f for f in fields if (f.get("label") or f.get("name") or "").strip().casefold()
-                  == "jira key" and f.get("hidden") is not True and f.get("isHidden") is not True]
+    candidates = [f for f in fields
+                  if any(normalized_jira_key_label(f.get(k)) == "jirakey"
+                         for k in ("label", "name"))
+                  and f.get("hidden") is not True and f.get("isHidden") is not True]
     if len(candidates) != 1:
         raise ApiError("JIRA_IDENTITY_FIELD_REQUIRED: 대상 Tracker에 표시되는 'Jira Key' 필드가 "
                        "정확히 한 개 있어야 합니다. 확인된 개수: " + str(len(candidates)))
@@ -126,6 +177,8 @@ def identity_field(cb, fields, verified_template_binding=None):
     if type(identifier) is not int:
         raise ApiError("JIRA_IDENTITY_FIELD_UNVERIFIED: Jira Key 필드 ID를 확인할 수 없습니다.")
     contract = binding(cb.spec, field)
+    if not contract:
+        contract = existing_text_value_binding(cb, field)
     if not contract and verified_template_binding:
         from migration.wizard import semantic_type
         kind, multiple = semantic_type(field)
@@ -155,7 +208,7 @@ def item_identity(item, field_id):
     found = [f for f in fields if isinstance(f,dict) and (
              f.get("fieldId")==field_id or
              (f.get("fieldId") is None and
-              str(f.get("name") or "").strip().casefold()=="jira key"))]
+              normalized_jira_key_label(f.get("name"))=="jirakey"))]
     if len(found)>1:
         raise ApiError("JIRA_LOOKUP_DUPLICATE_FIELD: 하나의 Item에 Jira Key 필드가 중복됩니다.")
     if not found:
