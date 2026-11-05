@@ -221,6 +221,39 @@ def field_analysis(jira, project, issue_type):
             'configuration_count': len(configured), 'managed_fields': sorted(managed), 'complete': True}
 
 
+def selected_analysis_changes(baseline, latest, selected_sources):
+    """Compare stable, selected-source migration evidence, not volatile GET metadata.
+
+    A field excluded from Import is intentionally outside this approval scope.
+    Ordered Jira samples are a set of distinct observed values; reordered pages
+    must not invalidate approval. Real count, selected value, field type,
+    allowed choices, visibility and loss-risk changes still stop the Import.
+    """
+    def signature(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+    differences = []
+    if baseline.get('issue_count') != latest.get('issue_count'):
+        differences.append('issue_count')
+    if signature(baseline.get('risks', [])) != signature(latest.get('risks', [])):
+        differences.append('hidden_field_risks')
+    for source in sorted(set(selected_sources)):
+        old = baseline.get('fields', {}).get(source)
+        new = latest.get('fields', {}).get(source)
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            differences.append(source + ':field_missing')
+            continue
+        keys = ('id', 'name', 'schema', 'required', 'allowedValues', 'visibility')
+        for key in keys:
+            if signature(old.get(key)) != signature(new.get(key)):
+                differences.append(source + ':metadata.' + key)
+        old_values = {signature(v) for v in baseline.get('values', {}).get(source, [])}
+        new_values = {signature(v) for v in latest.get('values', {}).get(source, [])}
+        if old_values != new_values:
+            differences.append(source + ':observed_values')
+    return differences
+
+
 def target_fields(cb, tracker):
     from clients.codebeamer_client import CodebeamerClient
     from clients.tracker_fields import normalize, read
@@ -1211,8 +1244,16 @@ class ImportWizard:
         # Refresh analysis before writes. Changes require a new explicit review.
         for scope, entry in self.plan['scopes'].items():
             latest = field_analysis(jira, entry['project'], entry['type'])
-            if latest != entry['analysis']:
-                raise ApiError('Source fields/values changed; analyze again: ' + scope)
+            changes = selected_analysis_changes(
+                entry['analysis'], latest,
+                [source for source,row in entry['rows'].items() if row.get('selected',False)])
+            if changes:
+                # Preserve a safe, value-free diff for review; no automatic
+                # acceptance of newly observed source values.
+                self.state.save('wizard-source-change', scope,
+                                {'scope':scope,'changed':changes})
+                raise ApiError('Source fields/values changed; analyze again: '+
+                               scope+'; changed: '+', '.join(changes))
             checked_tracker = entry['tracker'] or entry.get('template_tracker')
             if checked_tracker:
                 actual_fields=target_fields(self.cb,checked_tracker)
