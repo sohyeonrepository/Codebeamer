@@ -254,6 +254,40 @@ def selected_analysis_changes(baseline, latest, selected_sources):
     return differences
 
 
+def selected_target_changes(baseline, current, rows, resumable_names=()):
+    original = {str(field_identifier(f)): f for f in baseline}
+    actual = {str(field_identifier(f)): f for f in current}
+    differences = []
+    for source, row in rows.items():
+        if not row.get('selected', False):
+            continue
+        spec = row.get('spec') or {}
+        field_id = spec.get('field_id')
+        if field_id is not None:
+            key = str(field_id)
+            before, after = original.get(key), actual.get(key)
+            if before is None or after is None:
+                differences.append(source + ':target_field_missing')
+                continue
+            properties = ('typeName', 'typeId', 'valueModel', 'multipleSelection',
+                          'mandatory', 'hidden', 'isHidden', 'visible', 'permission',
+                          'options', 'reference')
+            for property_name in properties:
+                lhs = json.dumps(before.get(property_name), sort_keys=True, default=str)
+                rhs = json.dumps(after.get(property_name), sort_keys=True, default=str)
+                if lhs != rhs:
+                    differences.append(source + ':target.' + property_name)
+        if row.get('status') == 'create' and row.get('creation'):
+            label = row['creation']['label']
+            collision = any(
+                str(f.get('label', f.get('name'))) == label and
+                str(field_identifier(f)) not in original for f in current
+            )
+            if label not in resumable_names and collision:
+                differences.append(source + ':planned_field_name_collision')
+    return differences
+
+
 def target_fields(cb, tracker):
     from clients.codebeamer_client import CodebeamerClient
     from clients.tracker_fields import normalize, read
@@ -1267,12 +1301,14 @@ class ImportWizard:
             checked_tracker = entry['tracker'] or entry.get('template_tracker')
             if checked_tracker:
                 actual_fields=target_fields(self.cb,checked_tracker)
-                prior_ids={field_identifier(f) for f in entry['target_fields']}
                 resumable_names={r['creation']['label'] for source,r in entry.get('rows',{}).items()
                     if r.get('creation') and self.state.get(field_identity(checked_tracker,source,r))}
-                baseline=[f for f in actual_fields if field_identifier(f) in prior_ids or f.get('label',f.get('name')) not in resumable_names]
-                if baseline != entry['target_fields']:
-                    raise ApiError('Target configuration changed; analyze again: ' + scope)
+                target_changes=selected_target_changes(
+                    entry['target_fields'], actual_fields, entry.get('rows',{}), resumable_names)
+                if target_changes:
+                    self.state.save('wizard-target-change',scope,{'scope':scope,'changed':target_changes})
+                    raise ApiError('Target configuration changed; analyze again: '+
+                                   scope+'; changed: '+', '.join(target_changes))
 
         from migration.preservation import preflight
         selected_plan=deepcopy(self.plan)
