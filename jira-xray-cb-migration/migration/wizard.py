@@ -1521,6 +1521,16 @@ class ImportWizard:
                                       any(normalized_jira_key_label(f.get(k)) == 'jirakey'
                                           for k in ('label','name'))]
                     if config_matches:
+                        if len(config_matches) != 1:
+                            raise ApiError('JIRA_IDENTITY_DUPLICATE_CONFIG: Multiple Jira Key fields exist')
+                        existing_id = field_identifier(config_matches[0])
+                        matching = [f for f in fresh_fields if field_identifier(f) == existing_id]
+                        if len(matching) != 1:
+                            raise ApiError('JIRA_IDENTITY_EXISTING_NOT_LISTED: Configuration contains Jira Key '
+                                           'but its Field Detail cannot be reconciled. No create attempted. '
+                                           'Field ID=' + str(existing_id))
+                        matching[0]['label'] = (config_matches[0].get('label')
+                                                or config_matches[0].get('name') or 'Jira Key')
                         identity = identity_field(self.cb, fresh_fields)
                         settings['wizard']['identity_bindings'][scope] = identity
                         self.config['migration']['wizard']['identity_bindings'][scope] = deepcopy(identity)
