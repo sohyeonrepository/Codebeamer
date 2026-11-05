@@ -47,7 +47,7 @@ def error_classification(error):
         return 'FIELD_CREATION_CONTRACT', 'Codebeamer field creation request contract is missing'
     if '지원하지 않는 값 변환' in message:
         return 'SOURCE_VALUE_CONVERSION', 'Jira source-to-target value conversion is unsupported'
-    match = re.search(r'\\bGET\\s+[^\\s]+\\s+failed:\\s*HTTP\\s+(\\d+)', message)
+    match = re.search(r'\bGET\s+[^\s]+\s+failed:\s*HTTP\s+(\d+)', message)
     if match:
         return 'HTTP_READ_FAILURE', 'GET HTTP status '+match.group(1)
     return 'UNCLASSIFIED', 'See the error displayed in the Import Wizard and recent request metadata'
