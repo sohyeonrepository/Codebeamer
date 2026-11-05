@@ -579,8 +579,11 @@ def launch(wizard, initial_projects=None):
             chosen=type_box.get()
             from migration.wizard import selected_conversion
             conversion=selected_conversion(source_kind,bool(source_multiple),chosen,multiple.get())
-            conversion_notice.configure(text='Jira '+str(source_kind)+' → Codebeamer '+chosen+
-                                        ' · '+('변환: '+conversion if conversion else '이 조합은 값 변환을 지원하지 않음'))
+            if conversion is None and source_kind is None and chosen in ('option','status'):
+                conversion_notice.configure(text='Jira 스키마 미확인 → Codebeamer Choice: 실제 원본 선택지와 값 매핑을 확인하면 수동 생성 가능')
+            else:
+                conversion_notice.configure(text='Jira '+str(source_kind)+' → Codebeamer '+chosen+
+                                            ' · '+('변환: '+conversion if conversion else '이 조합은 값 변환을 지원하지 않음'))
             option_label.grid_remove();options.grid_remove()
             reference_label.grid_remove();reference_box.grid_remove()
             if chosen in ('option','status'):
