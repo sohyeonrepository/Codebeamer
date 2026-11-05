@@ -115,11 +115,22 @@ class Http:
                     self.log.parent.mkdir(parents=True, exist_ok=True)
                     # No URL query, headers, bodies or server error text: these may contain secrets.
                     path_only = urllib.parse.urlsplit(url).path
-                    from re import sub
-                    route_category = sub(r'/[0-9]+(?=/|$)', '/{id}', path_only)
-                    # Remove high-cardinality project/issue identifiers; keep
-                    # a general route to distinguish Jira search vs CB tracker GET.
-                    route_category = sub(r'(?i)/(?:STGVSTAR|[A-Z]{2,12}-[0-9]+)(?=/|$)', '/{issue}', route_category)
+                    # Fixed allowlist avoids disclosing Jira keys, names,
+                    # tenant-specific route paths or project identifiers.
+                    if '/rest/api/2/search' in path_only:
+                        route_category = 'jira-issue-search'
+                    elif '/rest/api/2/issue/' in path_only:
+                        route_category = 'jira-issue-detail'
+                    elif '/rest/api/2/field' in path_only:
+                        route_category = 'jira-field-metadata'
+                    elif '/v3/tracker/' in path_only or '/v3/trackers/' in path_only:
+                        route_category = 'cb-tracker'
+                    elif '/v3/items/' in path_only:
+                        route_category = 'cb-item'
+                    elif '/v3/' in path_only:
+                        route_category = 'cb-other-v3'
+                    else:
+                        route_category = 'other'
                     entry = {'method': method, 'route_category': route_category,
                              'path_hash': hashlib.sha256(path_only.encode()).hexdigest(),
                              'status': status, 'request_bytes': len(body or b''), 'response_bytes': len(content),
