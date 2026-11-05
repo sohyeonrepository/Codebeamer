@@ -14,11 +14,13 @@ from validation.compare_fields import compare_fields
 
 
 def preflight(cb, settings, plan):
-    required = ['project_get', 'tracker_get', 'trackers_get', 'item_create', 'item_get', 'item_update', 'lookup',
-                'attachment_upload', 'attachment_get', 'attachment_lookup', 'attachment_metadata_get', 'attachment_url_get',
-                'comment_lookup', 'comment_create', 'comment_get']
+    # The Codebeamer 3.0 REST profile exposes real read operations, not
+    # synthetic lookup capabilities. Wizard Item deduplication uses the
+    # explicit Jira Key scan, so lookup must not be required here.
+    required = ['project_get', 'trackers_get', 'item_create', 'item_get',
+                'item_update']
     if any(e.get('new_tracker') for e in plan['scopes'].values()):
-        required.extend(['tracker_create', 'tracker_lookup'])
+        required.append('tracker_create')
         op = cb.operation('tracker_create')
         configuration_api = op['method'].upper() == 'POST' and op['path'] == '/v3/tracker/configuration'
         if not configuration_api and ('{projectId}' not in op['path'] or op.get('path_parameters', {}).get('projectId', '${projectId}') != '${projectId}'):
@@ -31,9 +33,13 @@ def preflight(cb, settings, plan):
     for name in required:
         op = cb.operation(name)
         method = op['method'].upper()
-        expected = 'GET' if name.endswith(('_get', '_lookup')) or name == 'lookup' else ('POST', 'PUT', 'PATCH')
+        expected = 'GET' if name.endswith('_get') else ('POST', 'PUT', 'PATCH')
         if (isinstance(expected, str) and method != expected) or (isinstance(expected, tuple) and method not in expected):
             raise ApiError('Unexpected API method for ' + name)
+    # Archival and attachment/comment migration require additional contracts.
+    # Do not silently skip required writes because their names are missing.
+    # Their precise capability checks belong to the corresponding operation
+    # paths, where source records and server response shape are known.
     r4j = settings.get('r4j', {})
     for category in ('trees', 'revisions', 'baselines'):
         if not r4j.get(category, {}).get('path'):
