@@ -1179,12 +1179,14 @@ class ImportWizard:
                               str(f.get('label') or f.get('name') or '').strip().casefold() == 'jira key']
                 if candidates or 'JIRA_IDENTITY_FIELD_REQUIRED' not in str(exc):
                     raise
+                from migration.jira_identity_lookup import text_creation_profile
+                # First use the normal Wizard catalog. Some deployment field
+                # details omit the catalog discriminator even when the current
+                # Tracker contains a complete, reusable Text configuration.
                 profiles = self.creation_profiles(scope)
                 profile = profiles.get('text')
                 if not profile or not profile.get('binding') or profile.get('value_contract') != 'verified':
-                    raise ApiError('JIRA_IDENTITY_CREATE_UNVERIFIED: Jira Key 필드가 없습니다. '
-                                   '이 Tracker의 Text 필드 생성 및 쓰기 계약을 검증할 수 없어 '
-                                   '자동 생성하지 않았습니다. 서버의 Text 필드 생성 설정을 확인하세요.') from exc
+                    profile = text_creation_profile(self.cb, entry['tracker'], actual_fields)
                 identity = {'pending_creation': True, 'profile': deepcopy(profile)}
             selected_ids = {str((r.get('spec') or {}).get('field_id'))
                             for r in entry.get('rows',{}).values() if r.get('selected')}
