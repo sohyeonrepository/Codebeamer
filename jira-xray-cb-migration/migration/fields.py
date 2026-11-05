@@ -108,7 +108,23 @@ def payload(fields, mappings, settings):
         if source not in fields:
             raise ApiError('Source field absent: ' + source)
         group = {'user': 'user_mapping', 'status': 'status_mapping'}.get(spec['type'], 'value_mapping')
-        output[spec['target']] = convert(fields[source], spec['type'], spec.get('value_mapping', settings.get(group, {})), spec.get('source_identity'))
+        converted = convert(fields[source], spec['type'],
+                            spec.get('value_mapping', settings.get(group, {})),
+                            spec.get('source_identity'))
+        if spec.get('native_array'):
+            if spec['target'] != 'resolutions' or spec['type'] != 'option':
+                raise ApiError('Only verified native Resolution may use an array payload')
+            # The Jira Resolution field is often empty on unclosed Issues.
+            # Omit it rather than POSTing null into a native array property.
+            if converted is None:
+                continue
+            if isinstance(converted, dict):
+                converted = [converted]
+            if not isinstance(converted, list) or any(
+                not isinstance(v, dict) or type(v.get('id')) is not int for v in converted
+            ):
+                raise ApiError('Native Resolution requires mapped numeric Codebeamer option IDs')
+        output[spec['target']] = converted
     return output
 
 
