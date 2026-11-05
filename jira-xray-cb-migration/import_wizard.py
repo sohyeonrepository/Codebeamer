@@ -652,13 +652,23 @@ def launch(wizard, initial_projects=None):
             }
             if not type_box.get():raise ValueError('필드 타입을 선택하세요.')
             originals=source_choices(entry['analysis']['values'].get(source,[])+definition.get('allowedValues',[]), 'id' if source == 'components' else None)
+            if source == 'resolution' and type_box.get() in ('option','status') and not originals:
+                try:
+                    catalog=wizard.jira.global_catalog(('resolutions',))
+                    originals={str(v['id']):str(v['name']) for v in catalog['resolutions']}
+                except ApiError:
+                    # An authorized, complete Jira resolution catalog is
+                    # preferred but not always available. Explicitly entered
+                    # target-only options may still be proposed without
+                    # inventing source IDs or field values.
+                    pass
             lines=[line.strip() for line in options.get('1.0','end').splitlines() if line.strip()]
             if type_box.get() in ('option','status') and not lines:
                 lines=list(originals.values())
                 options.delete('1.0','end')
                 options.insert('1.0','\n'.join(lines))
-            if type_box.get() in ('option','status') and not originals:
-                raise ApiError('Jira '+source+': 원본 Choice 값과 allowedValues를 확인하지 못해 옵션을 생성할 수 없습니다.')
+            if type_box.get() in ('option','status') and not originals and not lines:
+                raise ApiError('Jira '+source+': 사용된 Choice 값이 없습니다. Jira 선택지 목록을 확인하거나 생성할 옵션을 직접 입력하세요.')
             choices={}
             if type_box.get() in ('option','status'):
                 if len(lines)<len(originals):raise ValueError('원본 Choice 값 수만큼 옵션을 입력하세요.')
