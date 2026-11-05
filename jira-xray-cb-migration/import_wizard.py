@@ -83,9 +83,20 @@ def launch(wizard, initial_projects=None):
         status.set(label + '…'); root.update_idletasks()
         try:
             value = action()
-            if not (isinstance(value, dict) and value.get('complete') is False):
-                status.set(label + ' 완료')
-            show_evidence(value if isinstance(value, dict) and 'complete' in value else None)
+            incomplete = isinstance(value,dict) and value.get('complete') is False
+            if incomplete and label == 'Import':
+                from migration.diagnostics import write_diagnostic
+                diagnostic_path = write_diagnostic(
+                    wizard, label, ApiError('Import engine returned complete=False'),
+                    report=value)
+                status.set(label+' 미완료 | 진단 로그: '+str(diagnostic_path))
+                show_evidence(value)
+                evidence.insert('end','\\n\\n상세 진단 로그: '+str(diagnostic_path))
+                tabs.select(step4)
+            else:
+                if not incomplete:
+                    status.set(label + ' 완료')
+                show_evidence(value if isinstance(value, dict) and 'complete' in value else None)
             return value
         except Exception as exc:
             from migration.diagnostics import write_diagnostic
@@ -100,7 +111,7 @@ def launch(wizard, initial_projects=None):
                 status.set(label + ' 실패: ' + message + ' | 진단 로그: ' + str(path))
                 evidence.delete('1.0', 'end')
                 evidence.insert('end', '오류: '+message+'\n진단 로그: '+str(path)+
-                                '\n\n로그에는 선택한 필드 ID/타입/쓰기 계약만 기록됩니다.')
+                                '\n\n로그에는 오류 발생 위치, API 기능명, 선택 필드 상태 및 최근 HTTP 요청 메타데이터를 기록합니다.\n비밀번호·토큰·이슈 본문은 제외합니다.')
                 tabs.select(step4)
             except Exception as log_error:
                 status.set(label + ' 실패: ' + message + ' | 로그 저장 실패: ' + type(log_error).__name__)
