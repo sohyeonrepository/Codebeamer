@@ -86,3 +86,13 @@ python import_wizard.py --config config.local.json --prompt-auth
 - `compact_wizard.py`: 필드 생성·재조회 성공 (`identity-field:<scope>`) 및 Import 전달 확인 (`identity-ready:<scope>`)을 각각 로그에 보여줍니다. Import 오류 발생 시에도 해당 시도에서 완료된 단계를 표시합니다.
 - 기존 외부 CLI에 명시적으로 구성된 `lookup` 계약은 호환성을 위해 남겨 두었습니다. 해당 기능은 **Wizard의 분기에서는 절대 실행하지 않습니다.**
 - 실제 Codebeamer 서버에서의 Item POST 성공 여부는 아직 검증되지 않았습니다.
+
+## 2026-11-05 R4J 사전 검증 오류 해결
+
+- 로그: `preservation.py:preflight`에서 `Configure migration.r4j.trees with a complete read-only source adapter` 오류.
+- Wizard는 `migration.mode=test-runs`를 실제 선택 Issue Import 실행 중에 `issues`로 바꾸므로, `mode == test-runs`만으로 예외 처리를 하면 안 됩니다.
+- R4J 수집 활성화 조건: `migration.preserve_r4j: true`를 명시하거나 (별도 flag 없으면) `migration.r4j` 어댑터 설정이 하나라도 제공된 경우. `preserve_r4j: false`는 명시적으로 비활성화.
+- R4J 사용 시에는 `trees`, `revisions`, `baselines` 모두 read-only source adapter path가 있어야 합니다. 하나라도 없으면 사전 검증 실패하며 불완전 수집하지 않습니다.
+- 선택한 TEST Issue에 R4J 설정이 없으면 Adapter 검증 및 조회를 생략하고 `_r4j_collection_status=not_requested`로 기록합니다. 첨부된 Legacy JSON에 `r4j_collection_status`를 저장하므로 R4J 데이터가 원래 비어 있었다는 의미로 오해하지 않도록 합니다.
+- 현재 흐름은 **R4J 제외**이지 Jira 변경이력, 댓글, 첨부파일까지 무조건 제외하는 것은 아닙니다. 해당 기능들은 다음 단계에서 별도의 API 검증이 필요합니다.
+- GitHub 수정·테스트 추가 완료. 고객 Codebeamer 서버에서의 POST 성공과 테스트 실행은 별도 확인이 필요합니다.
