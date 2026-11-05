@@ -88,14 +88,11 @@ def launch(wizard, projects):
     from pathlib import Path
     source_file = str(Path(__file__).resolve())
     engine_file = str((Path(__file__).resolve().parent / "migration" / "engine.py"))
-    from migration.engine import Engine
-    import inspect
-    active_engine_source = inspect.getsource(Engine.issue)
-    branch_guard_present = "JIRA_IDENTITY_BINDING_MISSING" in active_engine_source
-    append_log("실행 버전", "wizard-key-lookup-guard-20261105 · "
-               + ("신규 엔진 검증됨" if branch_guard_present else "이전 엔진 감지됨"))
+    from migration import simple_item_import
+    append_log("실행 버전", "simple-item-import-v1 · 단일 Issue 빠른 생성 경로")
     append_log("실행 경로", source_file)
-    append_log("엔진 경로", engine_file)
+    append_log("엔진 경로", str(Path(simple_item_import.__file__).resolve()))
+    import inspect
     # A recent Engine file does not prove preservation.py was also updated.
     # Check the exact preflight function that execute() imports at runtime.
     from migration import preservation
