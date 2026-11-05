@@ -43,9 +43,16 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
             selected = row.get('spec') or {}
             fid = selected.get('field_id')
             model = target.get('valueModel')
+            jira_definition = entry.get('analysis', {}).get('fields', {}).get(source, {})
+            jira_schema = jira_definition.get('schema') if isinstance(jira_definition.get('schema'),dict) else {}
             field_rows.append({
                 'blocking_field': field_id is not None and str(fid) == str(field_id),
-                'jira_field_id': source, 'jira_field_name': entry.get('analysis', {}).get('fields', {}).get(source, {}).get('name'),
+                'jira_field_id': source, 'jira_field_name': jira_definition.get('name'),
+                'jira_schema_type': jira_schema.get('type'),
+                'jira_schema_items': jira_schema.get('items'),
+                'jira_schema_custom': jira_schema.get('custom'),
+                'jira_allowed_value_count': len(jira_definition.get('allowedValues',[])) if isinstance(jira_definition.get('allowedValues'),list) else None,
+                'jira_observed_nonnull_count': sum(v is not None and v != '' and v != [] for v in entry.get('analysis',{}).get('values',{}).get(source,[])),
                 'mapping_status': row.get('status'),
                 'cb_field_id': fid,
                 'cb_field_name': target.get('label', target.get('name')),
@@ -93,6 +100,22 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
             }
         except Exception as exc:
             document['operations'][operation_name] = {'inspection_error': type(exc).__name__}
+    # Only metadata-only HTTP audit entries are included; no request body,
+    # URL query, credentials, issue values or response body.
+    audit = Path(wizard.state.root) / 'requests.jsonl'
+    if audit.exists():
+        try:
+            recent = audit.read_text(encoding='utf-8').splitlines()[-12:]
+            document['recent_http_requests'] = []
+            safe_keys = ('method', 'path_hash', 'status', 'request_bytes',
+                         'response_bytes', 'elapsed_ms', 'attempt',
+                         'error_type', 'route_category')
+            for line in recent:
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    document['recent_http_requests'].append({k:row[k] for k in safe_keys if k in row})
+        except (OSError, ValueError, TypeError):
+            document['recent_http_requests_error'] = 'audit metadata unavailable'
     folder = Path(wizard.state.root) / 'logs'
     folder.mkdir(parents=True, exist_ok=True)
     # Use one deterministic filename to avoid creating uncontrolled log files.
