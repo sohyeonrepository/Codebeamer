@@ -250,7 +250,10 @@ def proposals(analysis, targets, config, existing=None):
     visible = [f for f in targets if not hidden(f)]
     bindings = config.get('codebeamer', {}).get('field_bindings', {})
     result = {}
-    claimed = {str(s.get('field_id')) for s in existing.values()}
+    # A saved mapping must never block itself on the next GET analysis.
+    # Other mappings are reconciled separately using the user's active selection.
+    claimed = {source: str(spec.get('field_id')) for source,spec in existing.items()
+               if isinstance(spec,dict) and spec.get('field_id') is not None}
     for source, definition in analysis['fields'].items():
         from migration.system_fields import field_policy
         policy = field_policy(source, definition)
@@ -371,8 +374,11 @@ def proposals(analysis, targets, config, existing=None):
                 if source == 'components': spec['source_identity'] = 'id'
                 for v in analysis['values'].get(source, []):
                     checked_value(v, converter, mapping, target, 'id' if source == 'components' else None)
-                if str(fid) in claimed:
-                    raise ValueError('이미 다른 원본에 연결된 대상')
+                if any(other != source and other_id == str(fid)
+                       for other,other_id in claimed.items()):
+                    # A stale mapping is not enough to reject this field.
+                    # The final owner check uses explicit selected scope.
+                    pass
                 if key in bindings: spec['binding'] = deepcopy(bindings[key])
                 entry.update(status='mapped', mapping_mode='auto', spec=spec, target=target, reason='이름·타입 일치')
             except (ValueError, ApiError, TypeError) as exc:
@@ -393,15 +399,9 @@ def proposals(analysis, targets, config, existing=None):
             entry['spec']['source_field_id'] = source
         entry['field_policy'] = policy
         result[source] = entry
-    # Do not let loop order choose the winner of an ambiguous many-to-one match.
-    owners = {}
-    for source, entry in result.items():
-        if entry['spec']:
-            owners.setdefault(str(entry['spec']['field_id']), []).append(source)
-    for sources in owners.values():
-        if len(sources) > 1:
-            for source in sources:
-                result[source].update(status='manual', spec=None, reason='대상 필드 중복')
+    # Defer duplicate ownership to explicit import selection.
+    # Unchecked fields are not part of an Import and must not invalidate
+    # a valid Summary->Name mapping before the user checks a field.
     return result
 
 
@@ -610,7 +610,10 @@ class ImportWizard:
             if row.get('creation_saved') and not row.get('spec') and source in entry['rows']:
                 entry['rows'][source].update(status='create',spec=None,creation=deepcopy(row['creation']), creation_saved=True, creation_profile=deepcopy(row.get('creation_profile')),creation_token=row.get('creation_token'))
         for source,row in entry['rows'].items():
-            row['selected']=old_rows.get(source,{}).get('selected', bool(existing.get(source)) or analysis['fields'][source].get('default_selected',True))
+            # A new analysis starts with an empty selection, even for
+            # auto-mapped, mandatory and populated Jira fields.
+            # Explicit choices survive re-analysis within the same plan.
+            row['selected']=bool(old_rows.get(source,{}).get('selected',False))
             if row.get('creation'):row['creation_saved']=True
         if getattr(self.cb, 'spec', None) is not None and any(r.get('selected') and r.get('creation') and not r.get('creation_profile') for r in entry['rows'].values()):
             try:
@@ -634,6 +637,15 @@ class ImportWizard:
         if type(selected) is not bool:raise ApiError('Field selection must be boolean')
         self.plan['scopes'][scope]['rows'][source]['selected']=selected
         self.state.save('wizard','plan',self.plan)
+
+    def select_all_fields(self, scope, selected):
+        """One state save for bulk check/uncheck instead of N full-plan writes."""
+        if type(selected) is not bool:raise ApiError('Field selection must be boolean')
+        entry=self.plan['scopes'][scope]
+        for row in entry.get('rows',{}).values():
+            row['selected']=selected
+        self.state.save('wizard','plan',self.plan)
+        return sum(row['selected'] for row in entry.get('rows',{}).values())
 
     def creation_review(self):
         return [{'scope':scope,'source':source,'selected':row.get('selected',True),
@@ -917,10 +929,19 @@ class ImportWizard:
                     errors.append(scope + ':' + source + ': CB 대상 Hidden 여부 미확인: Field Detail 권한/응답 확인 필요')
                 if row['status'] not in ('mapped', 'create'):
                     errors.append(scope + ':' + source + ': ' + row['reason'])
-            keys = [row['spec']['target'] for row in entry['rows'].values()
-                    if row.get('spec') and row.get('selected', True)]
-            if len(keys) != len(set(keys)):
-                errors.append(scope + ': 중복 대상 payload 키')
+            owners = {}
+            for source, row in entry['rows'].items():
+                spec = row.get('spec')
+                if not row.get('selected',False) or not spec:
+                    continue
+                for identity in (('field_id',str(spec.get('field_id'))),
+                                 ('target',str(spec.get('target')))):
+                    if identity[1] not in ('None',''):
+                        owners.setdefault(identity,[]).append(source)
+            for identity, sources in owners.items():
+                if len(sources) > 1:
+                    errors.append(scope+': 중복 Codebeamer '+identity[0]+' '+identity[1]+
+                                  ' ← Jira '+', '.join(sorted(set(sources))))
         return errors
 
     def create_field(self, scope, source, row, tracker):
