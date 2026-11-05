@@ -68,3 +68,12 @@ python import_wizard.py --config config.local.json --prompt-auth
 - Item 응답에서 필드 ID가 없는 일부 Connector 스타일 필드는 정확한 `name == Jira Key`와 단일 `value`를 통해 식별할 수 있습니다.
 - 여전히 서버의 Text 생성 정의나 사용자 권한 자체가 없는 경우에는 생성하지 않고 `JIRA_IDENTITY_CREATE_UNVERIFIED`와 상세 원인을 기록합니다.
 - 이번 수정은 GitHub 소스 변경 및 회귀 테스트 추가 단계이며 실제 고객 서버 POST 성공은 검증하지 않았습니다. **Test / Verification Tracker에서 1개 Jira Issue로 먼저 테스트**하세요.
+
+## 2026-11-05 15:47 테스트 오류 보정
+
+- 발생: `JIRA_IDENTITY_CREATE_UNVERIFIED: TextFieldValue discriminator 미확인`
+- 원인: 서버 OpenAPI의 구체 모델이 `TextFieldValue`이고 `value`가 쓰기 가능한 문자열이어도, `type.enum == ["TextFieldValue"]`가 반드시 존재하도록 강제하는 검증 분기.
+- 수정: 실제 `TextFieldValue` 스키마가 있고 단일 문자열 `value`가 검증되면 discriminator `enum`/ `const`가 **생략**된 것은 허용. 명시적으로 다른 모델을 지시하는 `enum`/`const`는 거부.
+- 추가 수정: 신규 필드 생성 예정 단계에서는 아직 부여되지 않은 `identity['field_id']`에 접근하지 않음.
+- 회귀 테스트: `tests/test_jira_identity_lookup.py`에 enum 없는 서버 모델 및 상충하는 enum 사례 추가.
+- 실제 서버의 필드 생성·Item POST 성공은 아직 검증되지 않았음.
