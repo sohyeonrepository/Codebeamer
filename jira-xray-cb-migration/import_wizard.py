@@ -59,7 +59,7 @@ def launch(wizard, initial_projects=None):
     selection_reset=False
     for entry in wizard.plan.get('scopes', {}).values():
         for row in entry.get('rows', {}).values():
-            if row.get('selected',False):
+            if row.get('selected') is not False:
                 row['selected']=False
                 selection_reset=True
     if selection_reset:
