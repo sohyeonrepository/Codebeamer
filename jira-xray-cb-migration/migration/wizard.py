@@ -1185,7 +1185,11 @@ class ImportWizard:
                 # Tracker contains a complete, reusable Text configuration.
                 profiles = self.creation_profiles(scope)
                 profile = profiles.get('text')
-                if not profile or not profile.get('binding') or profile.get('value_contract') != 'verified':
+                if (not profile or str(profile.get('type_name','')).casefold() != 'text'
+                        or profile.get('value_contract') != 'verified'
+                        or not isinstance(profile.get('binding'),dict)
+                        or profile['binding'].get('type') != 'TextFieldValue'
+                        or profile['binding'].get('value_property') != 'value'):
                     profile = text_creation_profile(self.cb, entry['tracker'], actual_fields)
                 identity = {'pending_creation': True, 'profile': deepcopy(profile)}
             selected_ids = {str((r.get('spec') or {}).get('field_id'))
