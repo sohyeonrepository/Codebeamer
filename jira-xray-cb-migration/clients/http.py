@@ -80,12 +80,14 @@ class Http:
                 raise ApiError('Connection deadline exceeded')
             start = time.monotonic()
             status, content = None, b''
+            failure_kind = None
             try:
                 with self.opener.open(urllib.request.Request(url, data=body, headers=h, method=method), timeout=min(self.timeout,remaining)) as response:
                     status = response.status
                     content = response.read()
                 return content if raw else (json.loads(content) if content else {})
             except urllib.error.HTTPError as exc:
+                failure_kind = 'HTTPError'
                 status = exc.code
                 failure_body=exc.read(8192)
                 content_type=exc.headers.get('Content-Type','') if exc.headers else ''
@@ -97,6 +99,7 @@ class Http:
                     continue
                 raise ApiError(f'{method} {urllib.parse.urlsplit(url).path} failed: HTTP {status}; {detail}') from None
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                failure_kind = type(exc).__name__
                 # GET is read-only; distinguish it from an uncertain POST/PUT.
                 # On failures, preserve only bounded metadata (never URLs,
                 # headers, credentials or source values).
@@ -111,9 +114,17 @@ class Http:
                 if self.log:
                     self.log.parent.mkdir(parents=True, exist_ok=True)
                     # No URL query, headers, bodies or server error text: these may contain secrets.
-                    entry = {'method': method, 'path_hash': hashlib.sha256(urllib.parse.urlsplit(url).path.encode()).hexdigest(),
+                    path_only = urllib.parse.urlsplit(url).path
+                    from re import sub
+                    route_category = sub(r'/[0-9]+(?=/|$)', '/{id}', path_only)
+                    # Remove high-cardinality project/issue identifiers; keep
+                    # a general route to distinguish Jira search vs CB tracker GET.
+                    route_category = sub(r'(?i)/(?:STGVSTAR|[A-Z]{2,12}-[0-9]+)(?=/|$)', '/{issue}', route_category)
+                    entry = {'method': method, 'route_category': route_category,
+                             'path_hash': hashlib.sha256(path_only.encode()).hexdigest(),
                              'status': status, 'request_bytes': len(body or b''), 'response_bytes': len(content),
-                             'elapsed_ms': round((time.monotonic() - start) * 1000)}
+                             'elapsed_ms': round((time.monotonic() - start) * 1000),
+                             'attempt': attempt + 1, 'error_type': failure_kind}
                     with self.log.open('a', encoding='utf-8') as f:
                         f.write(json.dumps(entry) + '\n')
 
