@@ -48,3 +48,12 @@ python import_wizard.py --config config.local.json --prompt-auth
 - 이 코드는 서버에서 아직 실행 검증하지 않았고, GET 응답의 `customFields` 구조가 다른 서버에서는 어댑터 추가가 필요합니다.
 
 검증용 오프라인 테스트: `python -m unittest discover -s tests -p 'test_jira_identity_lookup.py'`
+
+## Jira Key 자동 준비
+
+- 사용자가 Summary와 Description만 선택해도 원본 식별을 위해 내부 `Jira Key` 필드를 별도 관리합니다.
+- 대상 Tracker에 **동일한 이름의 단일 Text 필드**가 이미 있다면 검증 후 사용합니다.
+- 없다면 Import 사전 점검에서 **서버 검증된 Text 생성 템플릿**을 확보하고, **Import 승인을 받은 이후에만** 기존 생성/재조회 로직으로 `Jira Key`를 추가합니다.
+- 동일 이름 필드가 여러 개이거나 타입/FieldValue 계약이 맞지 않으면 자동 생성으로 우회하지 않고 중단합니다.
+- 자동 생성이 불가능할 때는 `JIRA_IDENTITY_CREATE_UNVERIFIED` 오류와 함께 정확한 원인을 표시합니다.
+- 실제 Jira/Codebeamer 서버에서 아직 테스트하지 않았으며, 생성 전 Tracker 설정과 운영 권한을 검증해야 합니다.
