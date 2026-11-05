@@ -1176,7 +1176,7 @@ class ImportWizard:
                 # Never treat an ambiguous or incompatible existing field as
                 # permission to create a duplicate.
                 candidates = [f for f in actual_fields if
-                              str(f.get('label') or f.get('name') or '').strip().casefold() == 'jira key']
+                              any(__import__('migration.jira_identity_lookup', fromlist=['normalized_jira_key_label']).normalized_jira_key_label(f.get(k)) == 'jirakey' for k in ('label', 'name'))]
                 if candidates or 'JIRA_IDENTITY_FIELD_REQUIRED' not in str(exc):
                     raise
                 from migration.jira_identity_lookup import text_creation_profile
