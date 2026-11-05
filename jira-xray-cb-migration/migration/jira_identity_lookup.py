@@ -64,8 +64,17 @@ def text_creation_profile(cb, tracker_id, fields=None):
                 diagnostics.append("Text FieldValue.value가 쓰기 가능한 문자열이 아님")
                 continue
             discriminator = schema_object(cb.spec,properties.get("type",{}))
-            if discriminator.get("enum") not in (["TextFieldValue"],) and discriminator.get("const") != "TextFieldValue":
-                diagnostics.append("TextFieldValue discriminator 미확인")
+            # Some Codebeamer Swagger exports declare TextFieldValue as the
+            # concrete schema name but leave the inherited 'type' property
+            # without a one-value enum.  The concrete schema and a writable
+            # string 'value' are sufficient to select that model; an explicit
+            # conflicting enum/const is NOT ignored.
+            allowed = discriminator.get("enum")
+            constant = discriminator.get("const")
+            if ((allowed is not None and
+                 (not isinstance(allowed,list) or "TextFieldValue" not in allowed)) or
+                (constant is not None and constant != "TextFieldValue")):
+                diagnostics.append("TextFieldValue 타입 식별자가 실제 모델과 충돌")
                 continue
             value_binding = {"fieldId":field_identifier(observed),"type":"TextFieldValue",
                              "value_property":"value"}
