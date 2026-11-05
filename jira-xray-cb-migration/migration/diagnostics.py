@@ -27,6 +27,32 @@ def _schema_summary(spec, model):
                 'schema_inspection_error': type(exc).__name__}
 
 
+def error_classification(error):
+    """Classify predictable failures without recording potentially sensitive raw text."""
+    import re
+    message = str(error)
+    if 'Source fields/values changed' in message:
+        return 'SOURCE_CHANGED', 'Jira field analysis changed between GET and Import'
+    if 'GET transport failure' in message or 'Connection deadline exceeded' in message:
+        return 'READ_TIMEOUT', 'Read-only API request timed out or failed'
+    if 'POST transport failure' in message or 'PUT transport failure' in message:
+        return 'WRITE_OUTCOME_UNKNOWN', 'Write request may have reached the server; reconcile before retry'
+    if 'Changelog incomplete' in message:
+        return 'JIRA_HISTORY_INCOMPLETE', 'Jira change history cannot be fetched completely'
+    if '중복' in message or 'duplicate' in message.lower():
+        return 'FIELD_MAPPING_CONFLICT', 'Two or more selected source fields target the same Codebeamer field'
+    if 'valueModel' in message or 'FieldValue' in message:
+        return 'FIELD_WRITE_CONTRACT', 'A mapped field has an unverified writable value contract'
+    if 'New Field requires' in message or 'Tracker Configuration request schema missing' in message:
+        return 'FIELD_CREATION_CONTRACT', 'Codebeamer field creation request contract is missing'
+    if '지원하지 않는 값 변환' in message:
+        return 'SOURCE_VALUE_CONVERSION', 'Jira source-to-target value conversion is unsupported'
+    match = re.search(r'\\bGET\\s+[^\\s]+\\s+failed:\\s*HTTP\\s+(\\d+)', message)
+    if match:
+        return 'HTTP_READ_FAILURE', 'GET HTTP status '+match.group(1)
+    return 'UNCLASSIFIED', 'See the error displayed in the Import Wizard and recent request metadata'
+
+
 def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
     """Write minimal safe metadata needed to reproduce a contract failure."""
     from clients.tracker_fields import binding
@@ -72,9 +98,11 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None):
             'selected_field_count': sum(bool(r.get('selected', True)) for r in entry.get('rows', {}).values()),
             'fields': field_rows,
         }
+    error_code, error_detail = error_classification(error)
     document = {
         'timestamp_utc': datetime.now(timezone.utc).isoformat(),
         'stage': stage, 'error_type': type(error).__name__,
+        'error_code': error_code, 'error_detail': error_detail,
         # ApiError strings can contain server URLs or user values; keep only a
         # controlled summary, not arbitrary exception text.
         'error_summary': 'Preflight or Import failed; see the selected field contract data.',
