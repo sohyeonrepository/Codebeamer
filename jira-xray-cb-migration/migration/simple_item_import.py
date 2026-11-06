@@ -395,10 +395,26 @@ def run(wizard, *, progress=None):
             " · expected name length="+str(len(summary))+
             " · observed name length="+
             (str(len(observed_name)) if isinstance(observed_name,str) else "n/a"))
-        raise ApiError("POST는 Item ID "+str(item_id)+"로 반환됐으나 저장 후 검증 실패: "+
-                       ("Jira Key " if not key_matches else "")+
-                       ("Name " if not name_matches else "")+
-                       "불일치. 중복 생성 금지; 기존 Item의 실제 값을 확인하세요.")
+        failure=ApiError("POST는 Item ID "+str(item_id)+"로 반환됐으나 저장 후 검증 실패: "+
+                         ("Jira Key " if not key_matches else "")+
+                         ("Name " if not name_matches else "")+
+                         "불일치. 중복 생성 금지; 기존 Item의 실제 값을 확인하세요.")
+        # Attach a strict, non-sensitive structure for JSON diagnostics.
+        # Never record actual Jira Key, Summary or server-returned field values.
+        failure.safe_verification={
+            "phase":"post_create_readback",
+            "cb_item_id":item_id,
+            "cb_tracker_id":tracker,
+            "jira_key_field_id":field_id,
+            "jira_key_match":key_matches,
+            "name_match":name_matches,
+            "expected_name_length":len(summary),
+            "observed_name_length":len(observed_name) if isinstance(observed_name,str) else None,
+            "observed_name_type":type(observed_name).__name__,
+            "outcome":"item_created_but_readback_mismatch",
+            "retry_create_safe":False
+        }
+        raise failure
     if "description" in payload and actual.get("description") != description:
         raise ApiError("생성된 Item의 Description 확인 실패. CB Item ID " + str(item_id))
     actual_custom=actual.get("customFields")
