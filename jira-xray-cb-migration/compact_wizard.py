@@ -437,17 +437,33 @@ def launch(wizard, projects):
         append_log("Import", "사용자 승인 대기")
         try:
             scope = current_scope()
-            # The original Import button uses selected Wizard mappings, not
-            # the provided Test Set / Test Case JSON files. Keep this explicit.
+            # Fail before approval when the selected fields exceed the proven
+            # legacy 1-issue smoke engine's scope. Do not accept confirmation
+            # then fail mysteriously at simple_item_import.py:83.
+            selected = [(field, row) for field, row in rows().items()
+                        if row.get("selected", False)]
+            unsupported = [field for field, _ in selected
+                           if field not in ("summary", "description")]
+            if unsupported:
+                append_log("Import 사전검사", "기존 엔진의 미지원 필드: " +
+                           ", ".join(unsupported))
+                append_log("조치", "체크를 임의로 해제하지 마세요. " +
+                           "전체 매핑은 아직 이관 불가하며 " +
+                           "Test Set/Case 매핑 검수 버튼을 사용하세요.")
+                messagebox.showwarning(
+                    "이관 차단 · 선택 필드가 미지원",
+                    "현재 '실제 Import 실행'은 Summary/Description/Jira Key만 지원합니다.\\n\\n"
+                    "선택한 미지원 필드: " + ", ".join(unsupported) +
+                    "\\n\\n체크 해제로 데이터를 누락시키지 마세요. " +
+                    "Test Set/Case 매핑 검수를 먼저 진행하세요.")
+                return
             name = (wizard.plan["scopes"][scope].get("type") or {}).get("name")
-            if name in ("Test", "Test Set"):
-                if not messagebox.askyesno("이관 범위 확인",
-                    "이 버튼은 기존 Wizard에서 체크한 필드만 처리합니다.\\n"
-                    "제공한 Test Set / Test Case 매핑 JSON 전체를 자동 적용하지 않습니다.\\n"
-                    "매핑 검수만 하려면 '자동으로 1건 조회 (GET)' 버튼을 사용하세요.\\n\\n"
-                    "기존 1건 Import를 계속할까요?"):
-                    return
-            selected = [(name, row) for name, row in rows().items() if row.get("selected", False)]
+            if name in ("Test", "Test Set") and not messagebox.askyesno(
+                    "제한된 1건 테스트",
+                    "기존 엔진은 전체 매핑을 사용하지 않습니다.\\n"
+                    "Name/Description/Jira Key(Text)만 처리하는\\n"
+                    "1건 테스트를 진행할까요?"):
+                return
             append_log("범위", str(scope) + " · 체크된 필드 " + str(len(selected)) + "개")
             for name, row in selected:
                 spec = row.get("spec") or {}
