@@ -902,6 +902,8 @@ class ImportWizard:
                     continue
             if candidate_binding: candidate_binding.pop('fieldId', None)
             profile_key = creation_kind(representative) or kind
+            if profile_key == 'choice':
+                profile_key = 'option'
             profiles.setdefault(profile_key, {'type_name':representative.get('typeName'),
                                       'definition':definition, 'binding':candidate_binding,
                                       'creation_method':method, 'source_tracker_id':tracker,
@@ -1133,8 +1135,33 @@ class ImportWizard:
         row['creation_stage']='CREATED'
         self.state.field_phase(scope+':'+source,'VALUE_MAPPING_PENDING')
         mapping, unmatched = suggest_values(entry_values(self.plan['scopes'][scope], source), actual.get('options'), 'id' if source == 'components' else None)
-        if proposal['semantic_type'] in ('option', 'status') and unmatched:
-            raise ApiError('Created Choice values do not cover the source')
+        if proposal['semantic_type'] in ('option', 'status'):
+            from migration.option_batch import choice_names, norm
+            created_options=actual.get('options')
+            if not isinstance(created_options,list):
+                raise ApiError('Created Choice options readback unavailable')
+            by_name={}
+            for o in created_options:
+                if not isinstance(o,dict) or type(o.get('id')) is not int:
+                    raise ApiError('Created Choice option ID is not verified')
+                key=norm(o.get('name'))
+                if key in by_name:
+                    raise ApiError('Created Choice options contain duplicate names')
+                by_name[key]=o
+            missing=[name for name in proposal['choices'].values() if norm(name) not in by_name]
+            if missing:
+                raise ApiError('Created Choice options do not cover requested names: '+repr(missing))
+            mapping={identity:{'id':by_name[norm(name)]['id']}
+                     for identity,name in proposal['choices'].items()}
+            for sample in entry_values(self.plan['scopes'][scope],source):
+                try: names=choice_names(sample,source)
+                except ApiError: continue
+                for name in names:
+                    wanted=next((label for identity,label in proposal['choices'].items()
+                                 if norm(identity)==norm(name)),name)
+                    if norm(wanted) in by_name:
+                        mapping[name]={'id':by_name[norm(wanted)]['id']}
+            unmatched=[]
         if proposal['semantic_type'] == 'user':
             mapping = deepcopy(self.config['migration'].get('user_mapping', {}))
         key = 'jira_' + source
