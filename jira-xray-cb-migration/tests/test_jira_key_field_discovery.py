@@ -22,11 +22,10 @@ class JiraKeyFieldDiscoveryTests(unittest.TestCase):
                    [{"id":74,"name":"Jira Key","valueModel":"TextFieldValue"}])
         self.assertEqual(_field(cb,500),74)
 
-    def test_wikitext_is_present_but_not_supported(self):
+    def test_wikitext_is_supported(self):
         cb=self.cb([], [{"id":74,"name":"Jira Key",
                          "typeName":"Wikitext","valueModel":"WikiTextFieldValue"}])
-        with self.assertRaisesRegex(ApiError,"존재합니다"):
-            _field(cb,500)
+        self.assertEqual(_field(cb,500),74)
 
     def test_missing_field_message_includes_observed_counts(self):
         cb=self.cb([{"id":71,"label":"Name"}],[{"id":71,"name":"Name"}])
