@@ -11,6 +11,7 @@ from clients.jira_client import segment
 from mapping_helper import field_identifier
 from migration.jira_identity_lookup import normalized_jira_key_label, item_identity, lookup_by_jira_key
 from migration.wizard import semantic_type
+from urllib.parse import quote
 
 
 def _field(cb, tracker):
@@ -68,6 +69,68 @@ def _journal(path, event):
         handle.flush()
 
 
+
+def _supported_custom_field_values(entry, fields, source_values, jira_key_field):
+    """Prepare requested scalar CB fields before POST, never drop selected data.
+
+    The first-import contract currently covers Text/WikiText via actual
+    Tracker field metadata. Complex values must be supported explicitly.
+    """
+    from clients.tracker_fields import normalize
+    prepared=[]
+    selected={key:row for key,row in entry.get("rows",{}).items() if row.get("selected",False)}
+    by_id={field_identifier(f):normalize(f) for f in fields if isinstance(f,dict)}
+    for source,row in selected.items():
+        if source in ("summary","description"):
+            continue
+        value=source_values.get(source)
+        if value is None:
+            continue
+        spec=row.get("spec") or {}
+        fid=spec.get("field_id")
+        if type(fid) is not int or fid not in by_id:
+            raise ApiError("필드 "+source+": 대상 CB Field ID 미설정/미확인. 매핑을 지정하세요.")
+        if fid==jira_key_field:
+            raise ApiError("필드 "+source+": Jira Key 예약 필드와 대상 Field ID 충돌")
+        if spec.get("selection_unverified") or spec.get("missing_definition"):
+            raise ApiError("필드 "+source+": 대상 필드 정의/선택 미검증")
+        actual=by_id[fid]
+        model=str(actual.get("valueModel") or "").split("<",1)[0]
+        type_name=str(actual.get("typeName") or "").casefold()
+        if model not in ("TextFieldValue","WikiTextFieldValue"):
+            raise ApiError("필드 "+source+": 현재 1차 Import 지원 타입(Text/WikiText) 아님: "+
+                           (model or type_name or "미확인"))
+        if type_name and type_name not in ("text","wikitext","wikitextfield","wikitextfieldvalue"):
+            raise ApiError("필드 "+source+": CB 타입 불일치: "+type_name)
+        if not isinstance(value,str):
+            raise ApiError("필드 "+source+": Jira 문자열이 아닌 값은 임의 변환하지 않음")
+        if any(row["fieldId"]==fid for row in prepared):
+            raise ApiError("필드 "+source+": 선택된 필드끼리 CB Field ID 중복")
+        prepared.append({"fieldId":fid,"type":model,"value":value})
+    return prepared
+
+
+def _read_selected_issue(wizard, scope, selected):
+    key=wizard.config["jira"].get("single_issue_key")
+    if not key:
+        raise ApiError("1차 Import할 Jira Issue Key를 지정하세요.")
+    requested=list(dict.fromkeys(["summary","description","issuetype","project"]+sorted(selected)))
+    issue=wizard.jira.http.request("GET","/rest/api/2/issue/"+quote(key,safe="-_")+
+                                   "?fields="+",".join(requested))
+    if not isinstance(issue,dict) or issue.get("key")!=key:
+        raise ApiError("Jira Issue 조회 결과 불일치")
+    fields=issue.get("fields")
+    if not isinstance(fields,dict):
+        raise ApiError("Jira Issue fields 누락")
+    if str((fields.get("project") or {}).get("key"))+":"+str(
+            (fields.get("issuetype") or {}).get("id"))!=scope:
+        raise ApiError("선택 프로젝트/Issue Type과 Jira 이슈가 다릅니다.")
+    if not isinstance(fields.get("summary"),str) or not fields["summary"].strip():
+        raise ApiError("Jira Summary 없음: Item 생성 불가")
+    if fields.get("description") is not None and not isinstance(fields["description"],str):
+        raise ApiError("Jira Description 형식 미지원")
+    return key,fields
+
 def run(wizard, *, progress=None):
     """Create ONE selected Jira Issue; reconcile an existing Jira Key without update."""
     log = progress or (lambda stage, detail: None)
@@ -79,13 +142,27 @@ def run(wizard, *, progress=None):
     if type(tracker) is not int or tracker <= 0:
         raise ApiError("기존 Codebeamer Tracker를 선택하세요. 신규 생성은 사용하지 않습니다.")
     selected = {name for name, row in entry.get("rows", {}).items() if row.get("selected", False)}
-    if not selected or not selected.issubset({"summary", "description"}):
-        raise ApiError("첫 테스트에서는 Summary, Description 필드만 체크하세요. Jira Key는 자동으로 기록합니다.")
+    if "summary" not in selected:
+        raise ApiError("Summary → Name 필드를 반드시 선택하세요.")
 
     field_id = _field(wizard.cb, tracker)
     log("기존 Jira Key", "CB Field ID " + str(field_id) + " 재사용 (신규 생성 없음)")
-    key, summary, description = _read_issue(wizard, scope)
-    log("Jira 조회", key + " · Summary/Description 확인")
+    key, source_values = _read_selected_issue(wizard, scope, selected)
+    summary, description = source_values["summary"],source_values.get("description")
+    log("Jira 조회", key + " · 선택 필드 "+str(len(selected))+"개")
+    cb_fields=wizard.cb.configuration(tracker).get("fields")
+    if not isinstance(cb_fields,list):
+        raise ApiError("Codebeamer Tracker 필드 설정 조회 실패")
+    # Field detail can supply types omitted by Tracker configuration.
+    cb_details=wizard.cb.fields(tracker)
+    if not isinstance(cb_details,list):
+        raise ApiError("Codebeamer Tracker 필드 상세 조회 실패")
+    indexed={field_identifier(row):dict(row) for row in cb_fields if isinstance(row,dict)}
+    for row in cb_details:
+        if isinstance(row,dict):
+            indexed.setdefault(field_identifier(row),{}).update(row)
+    extras=_supported_custom_field_values(entry,list(indexed.values()),source_values,field_id)
+    log("필드 준비","추가 Text/WikiText "+str(len(extras))+"개 · 요청 전 검증 완료")
     journal = Path(wizard.state.root) / "migration-state.jsonl"
     log("중복 조회", "선택 Tracker의 기존 Jira Key 검색")
     matches = lookup_by_jira_key(wizard.cb, tracker, key, field_id)
@@ -101,7 +178,7 @@ def run(wizard, *, progress=None):
     # A previous uncertain write cannot be blindly reissued. Reconciliation
     # above guarantees that an existing Jira Key will never be duplicated.
     payload = {"name": summary,
-               "customFields": [{"fieldId": field_id, "type": "TextFieldValue", "value": key}]}
+               "customFields": [{"fieldId": field_id, "type": "TextFieldValue", "value": key}]+extras}
     if "description" in selected and description is not None:
         payload["description"] = description
     if "summary" not in selected:
@@ -125,6 +202,15 @@ def run(wizard, *, progress=None):
         raise ApiError("생성된 Item의 Jira Key 또는 Name이 예상 값과 다릅니다. CB Item ID " + str(item_id))
     if "description" in payload and actual.get("description") != description:
         raise ApiError("생성된 Item의 Description 확인 실패. CB Item ID " + str(item_id))
+    actual_custom=actual.get("customFields")
+    if extras and not isinstance(actual_custom,list):
+        raise ApiError("CB Item "+str(item_id)+" 생성 후 customFields GET 누락; 확인 필요")
+    actual_by_id={v.get("fieldId"):v.get("value") for v in (actual_custom or [])
+                  if isinstance(v,dict)}
+    missing=[v["fieldId"] for v in extras if actual_by_id.get(v["fieldId"])!=v["value"]]
+    if missing:
+        raise ApiError("CB Item "+str(item_id)+" 생성 후 추가 필드 불일치 "+
+                       str(len(missing))+"건. 재시도 전 서버 확인 필요")
     record = {"jira": key, "status": "CREATED", "cb": item_id, "tracker": tracker}
     _journal(journal, record)
     log("Item 생성 성공", key + " → CB Item " + str(item_id))
