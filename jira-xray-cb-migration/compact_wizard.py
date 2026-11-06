@@ -337,7 +337,7 @@ def launch(wizard, projects):
         tracker_box = ttk.Combobox(content, state="readonly", width=56,
                                    values=[str(t["id"]) + " · " + t.get("name", "") for t in tracker_items])
         tracker_box.pack(anchor="w")
-        ttk.Label(content, text="여기서는 생성 계획만 저장합니다. 실제 필드 생성은 Import 승인 시 실행됩니다.",
+        ttk.Label(content, text="Choice 필드는 확인 후 Tracker에 실제 생성하고 Field ID/Option ID를 조회합니다. 그 외 타입은 설정만 저장합니다.",
                   wraplength=610).pack(anchor="w", pady=12)
 
         def save_new():
@@ -364,6 +364,54 @@ def launch(wizard, projects):
                 wizard.configure_creation(scope, source, label_var.get(), semantic,
                                           multi_var.get(), mapping, reference_tracker=reference_tracker)
                 wizard.select_field(scope, source, True)
+                if semantic in ("option","status"):
+                    if not messagebox.askyesno("신규 Choice 실제 생성",
+                        "CB Tracker "+str(entry["tracker"])+"에 신규 필드 '"+label_var.get()+
+                        "'와 옵션 "+str(len(set(mapping.values())))+
+                        "개를 실제 생성합니다. 계속할까요?",parent=window):
+                        append_log("신규 Choice 계획 저장",source+" · 서버 변경 없음")
+                        refresh()
+                        window.destroy()
+                        return
+                    append_log("신규 Choice 생성 시작",source+" · type="+semantic+
+                               " · multiple="+str(multi_var.get())+
+                               " · 옵션 "+str(len(set(mapping.values())))+"개")
+                    from migration.option_batch import norm
+                    spec=wizard.create_field(scope,source,entry["rows"][source],entry["tracker"])
+                    fid=spec.get("field_id")
+                    if type(fid) is not int:
+                        raise ValueError("신규 필드 실제 CB ID를 확인하지 못했습니다.")
+                    actual=wizard.cb.http.request("GET",
+                        "/v3/trackers/"+str(entry["tracker"])+"/fields/"+str(fid))
+                    existing={norm(o.get("name")):o for o in actual.get("options",[])
+                              if isinstance(o,dict) and type(o.get("id")) is int}
+                    if any(norm(name) not in existing for name in mapping.values()):
+                        raise ValueError("신규 필드 생성 후 CB 옵션 ID 검증 실패. 재생성하지 말고 서버 확인 필요.")
+                    # The Issue import adapter uses Jira displayed option names,
+                    # while creation stores Jira option identities.
+                    from migration.option_batch import choice_names
+                    aliases={}
+                    for item in values:
+                        try:names=choice_names(item,source)
+                        except Exception:continue
+                        for name in names:
+                            aliases[name]=next((target for original,target in mapping.items()
+                                               if norm(original)==norm(name) or
+                                               norm(proposed_choices.get(original))==norm(name)),name)
+                    name_mapping=dict(mapping)
+                    name_mapping.update(aliases)
+                    spec["value_mapping"]={k:existing[norm(v)]["name"]
+                                           for k,v in name_mapping.items() if norm(v) in existing}
+                    spec["choice_options_verified"]=True
+                    spec.pop("missing_definition",None)
+                    spec.pop("selection_unverified",None)
+                    entry["rows"][source].update(spec=spec,target=actual,
+                                                mapping_mode="manual",status="mapped")
+                    entry["rows"][source].pop("creation",None)
+                    entry["rows"][source].pop("creation_saved",None)
+                    wizard.state.save("wizard","plan",wizard.plan)
+                    append_log("신규 Choice 검증",source+" → CB "+str(fid)+
+                               " · 실제 옵션 ID "+str(len(existing))+"개 조회")
                 refresh()
                 window.destroy()
             guarded("신규 필드 설정", perform)
