@@ -161,6 +161,25 @@ def run(wizard, *, progress=None):
     for row in cb_details:
         if isinstance(row,dict):
             indexed.setdefault(field_identifier(row),{}).update(row)
+    # Configuration and list APIs may omit the FieldValue discriminator.
+    # Fetch selected actual field detail, not customField[n] or a guessed ID.
+    for selected_field,row in entry.get("rows",{}).items():
+        if not row.get("selected") or selected_field in ("summary","description"):
+            continue
+        if source_values.get(selected_field) is None:
+            continue
+        selected_id=(row.get("spec") or {}).get("field_id")
+        if type(selected_id) is not int or selected_id not in indexed:
+            raise ApiError("필드 "+selected_field+": 대상 실제 CB Field ID를 선택하세요.")
+        if not indexed[selected_id].get("valueModel"):
+            try:
+                detail=wizard.cb.http.request("GET",
+                    "/v3/trackers/"+segment(tracker)+"/fields/"+segment(selected_id))
+            except ApiError as exc:
+                raise ApiError("필드 "+selected_field+" 상세 GET 실패: "+str(exc)) from None
+            if not isinstance(detail,dict) or field_identifier(detail)!=selected_id:
+                raise ApiError("필드 "+selected_field+": CB 상세 조회 ID 불일치")
+            indexed[selected_id].update(detail)
     extras=_supported_custom_field_values(entry,list(indexed.values()),source_values,field_id)
     log("필드 준비","추가 Text/WikiText "+str(len(extras))+"개 · 요청 전 검증 완료")
     journal = Path(wizard.state.root) / "migration-state.jsonl"
