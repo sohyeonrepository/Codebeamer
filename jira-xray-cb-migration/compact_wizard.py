@@ -437,6 +437,16 @@ def launch(wizard, projects):
         append_log("Import", "사용자 승인 대기")
         try:
             scope = current_scope()
+            # The original Import button uses selected Wizard mappings, not
+            # the provided Test Set / Test Case JSON files. Keep this explicit.
+            name = (wizard.plan["scopes"][scope].get("type") or {}).get("name")
+            if name in ("Test", "Test Set"):
+                if not messagebox.askyesno("이관 범위 확인",
+                    "이 버튼은 기존 Wizard에서 체크한 필드만 처리합니다.\\n"
+                    "제공한 Test Set / Test Case 매핑 JSON 전체를 자동 적용하지 않습니다.\\n"
+                    "매핑 검수만 하려면 '자동으로 1건 조회 (GET)' 버튼을 사용하세요.\\n\\n"
+                    "기존 1건 Import를 계속할까요?"):
+                    return
             selected = [(name, row) for name, row in rows().items() if row.get("selected", False)]
             append_log("범위", str(scope) + " · 체크된 필드 " + str(len(selected)) + "개")
             for name, row in selected:
