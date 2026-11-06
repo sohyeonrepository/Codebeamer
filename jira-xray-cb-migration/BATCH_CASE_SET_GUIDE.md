@@ -45,3 +45,52 @@ Test Set is `--kind set` with the actual **Test Set** Tracker ID.
 Jira may mutate while the batch executes. If the search total changes, the program stops. This version does not guarantee consistent source snapshots across a changing Jira project.
 
 Code has been committed, but **no live Jira or Codebeamer batch POST has been executed by the assistant**. Review the preview and target Tracker mandatory fields before executing a real write.
+
+## Additional development (2026-11-06)
+
+The importer now supports optional existing **ChoiceOptionReference** and **UserReference** fields, resolved from target Tracker field details and CB usernames. It does not require you to manually parse numeric IDs.
+
+- `--include-options`: recognized Choice / Choice-option rows only. Fetches each target OptionChoiceField's real `options` through GET; requires exact option name matches. `Components` (Work/config references) and Xray Test membership are intentionally **not** treated as ordinary options.
+- `--include-users`: recognizes `UserChoiceField` and native `Assigned to`; resolves Jira username through GET `/v3/users/findByName?name=...`. Existing users must already exist on CB.
+- `--capture-relations`: captures Jira Xray membership keys into the local `relations-<hash>.jsonl` next to the batch journal. This is **capture**, not CB relation writing.
+- `--capture-children`: captures complete Jira comment history and attachment metadata into `children-<hash>.jsonl` after successful Item creation, marked `SOURCE_CAPTURED_NOT_IMPORTED`. It does not upload comments or binaries.
+- `phase2_resolve_test_sets.py` reads both verified Item journals and membership manifests, resolves Test Set/Test Case Jira keys to CB Item IDs, deduplicates inverse membership, and saves `phase2-verified-id-plan.json`. This is a plan, **not** a CB relation write.
+
+Run **preview** first:
+
+```bat
+python batch_case_set_import.py --kind set --jira-project STGVSTAR --tracker-id YOUR_SET_TRACKER_ID --limit 1 --include-options --include-users --capture-relations --capture-children --prompt-auth
+```
+
+The BAT menu can also select these capabilities. For a real POST, the program explicitly requires `--execute --confirm-project STGVSTAR --acknowledge-partial` because parts of the **full user-provided mapping remain unimplemented**. Do NOT treat this command as a full migration.
+
+If target option display names differ from Jira values, optional configuration in the existing local `migration` object:
+
+```json
+{
+  "option_name_mapping": {
+    "case": {
+      "priority.name": { "Highest": "High" }
+    }
+  },
+  "user_name_mapping": {
+    "case": {
+      "assignee": { "jira_account_name": "cb_account_name" }
+    }
+  }
+}
+```
+
+This is a fragment *inside* `migration`, not a complete `config.local.json`. IDs are looked up automatically.
+
+### Remaining user-mapped data before any full-completion claim
+
+1. `Components` as Work/config references and similar lookup fields, Test Set Labels target field creation
+2. Test Set Jira Key as `Wiki Link / URL` (different from existing WikiText contract)
+3. Native Status/Resolution/Created/Updated/Creator properties, subject to CB write permissions and exact field contracts
+4. Real Comment/Attachment POST/upload and reconciliation, not just capture
+5. Test Set ↔ Test Case table/reference write and GET verification
+6. Test Plans and Xray Test Run/results only after additional target model setup
+7. Original Jira History preservation/native Revision replay remains under review
+
+No assistant-side live batch POST or local unit-test execution has been performed in this environment. The basic one-Issue POST success was reported by the user. Do not rerun already-created Items from the older one-Issue smoke test without reconciling IDs: the new batch journal does not know those prior writes.
