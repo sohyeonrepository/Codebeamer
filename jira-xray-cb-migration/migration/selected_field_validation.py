@@ -29,6 +29,19 @@ def _names(value):
     return found
 
 
+
+def _get_with_context(http, path, stage, field=None):
+    """GET errors are tagged by the operation, never logged with credentials or values."""
+    try:
+        return http.request("GET", path)
+    except ApiError as exc:
+        prefix = "API 검증 실패 [" + stage + "]"
+        if field is not None:
+            prefix += " [Jira 필드 " + str(field) + "]"
+        # Http removes full URL/query and request/response bodies from exceptions.
+        raise ApiError(prefix + ": " + str(exc)) from None
+
+
 def validate_selected(wizard, scope, issue_key):
     """Validate a single matching Jira Issue and selected CB fields using GET only.
 
@@ -49,15 +62,16 @@ def validate_selected(wizard, scope, issue_key):
     requested=list(dict.fromkeys(["issuetype","project"]+list(selected)))
     jira=wizard.jira.http
     cb=wizard.cb.http
-    issue=jira.request("GET","/rest/api/2/issue/"+quote(issue_key,safe="-_")+
-                       "?fields="+",".join(requested))
+    issue=_get_with_context(jira,"/rest/api/2/issue/"+quote(issue_key,safe="-_")+
+                       "?fields="+",".join(requested),"Jira Issue 상세 조회")
     fields=issue.get("fields") if isinstance(issue,dict) else None
     if not isinstance(fields,dict) or issue.get("key")!=issue_key or (
           fields.get("project") or {}).get("key")!=project or str(
           (fields.get("issuetype") or {}).get("id"))!=str(entry["type"]["id"]):
         raise ApiError("Jira 조회 결과의 Key/프로젝트/Issue Type이 선택과 다릅니다.")
     tracker=entry["tracker"]
-    cbconfig=cb.request("GET",f"/v3/tracker/{tracker}/configuration")
+    cbconfig=_get_with_context(cb,f"/v3/tracker/{tracker}/configuration",
+                               "Codebeamer Tracker Configuration")
     available=cbconfig.get("fields") if isinstance(cbconfig,dict) else None
     if not isinstance(available,list):
         raise ApiError("CB Tracker 필드 설정 전체를 조회할 수 없습니다.")
@@ -86,7 +100,8 @@ def validate_selected(wizard, scope, issue_key):
             reason="Wizard에 미검증 필드 정의가 남아 있음"
         else:
             try:
-                detail=cb.request("GET",f"/v3/trackers/{tracker}/fields/{fid}")
+                detail=_get_with_context(cb,f"/v3/trackers/{tracker}/fields/{fid}",
+                                         "Codebeamer Field Detail",source)
                 if not isinstance(detail,dict) or detail.get("id")!=fid:
                     raise ApiError("CB 필드 상세 GET ID 불일치")
                 model=str(detail.get("valueModel") or "")
@@ -101,7 +116,8 @@ def validate_selected(wizard, scope, issue_key):
                         target_name=target_name.get("name")
                     if not isinstance(target_name,str) or not target_name:
                         raise ApiError("Reporter 대상 사용자 이름 매핑 미확인")
-                    account=cb.request("GET","/v3/users/findByName?name="+quote(target_name,safe=""))
+                    account=_get_with_context(cb,"/v3/users/findByName?name="+quote(target_name,safe=""),
+                                              "Codebeamer 사용자 조회",source)
                     if (not isinstance(account,dict) or type(account.get("id")) is not int or
                             account.get("name")!=target_name):
                         raise ApiError("Reporter 사용자 정확히 일치하는 CB ID 조회 실패")
