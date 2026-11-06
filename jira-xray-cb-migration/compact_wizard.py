@@ -449,6 +449,26 @@ def launch(wizard, projects):
         project=entry["project"]
         if not key.startswith(project+"-"):
             raise ValueError("선택한 Jira 프로젝트의 Issue Key를 입력하세요.")
+        # The checkmark selects data, but it does not assign a CB field.
+        # Report all unmapped chosen fields before approval, not just the
+        # first field encountered while POST payload is being prepared.
+        missing=[]
+        for source in selected:
+            if source in ("summary","description"):
+                continue
+            row=entry["rows"][source]
+            spec=row.get("spec") or {}
+            fid=spec.get("field_id")
+            if type(fid) is not int or fid<=0:
+                missing.append(source+" (CB 대상 필드 미지정)")
+            elif spec.get("missing_definition") or spec.get("selection_unverified"):
+                missing.append(source+" (매핑 타입/계약 미확인)")
+        if missing:
+            for problem in missing:
+                append_log("선택 필드 매핑 누락",problem)
+            raise ValueError("체크된 Jira 필드 중 CB 대상 매핑이 없습니다:\\n"+
+                             "\\n".join(missing)+
+                             "\\n데이터 가져오기 화면의 CB 필드 열에서 기존 대상을 연결하세요.")
         # Verify the reserved, unique Jira Key field BEFORE user approval.
         from migration.simple_item_import import _field
         _field(wizard.cb,entry["tracker"])
@@ -462,7 +482,7 @@ def launch(wizard, projects):
         append_log("1차 Import","Jira "+key+" · 필드 "+str(len(selected))+"개 · 실제 POST")
         for source in selected:
             spec=rows()[source].get("spec") or {}
-            append_log("필드 선택",source+" → "+str(spec.get("target") or spec.get("field_id") or "기본 필드"))
+            append_log("필드 선택",source+" → "+str(spec.get("target") or spec.get("field_id") or "CB 대상 미지정"))
         settings=deepcopy(wizard.config)
         settings.setdefault("jira",{})["single_issue_key"]=key
         # One selected type per write; other saved mappings remain untouched.
