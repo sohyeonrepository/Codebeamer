@@ -822,7 +822,10 @@ class ImportWizard:
             spec['deferred_reference']=True
             spec.pop('missing_definition',None)
         if source == 'components': spec['source_identity'] = 'id'
-        if kind!='reference' and not spec.get('selection_unverified'):
+        # Choice option mapping is supplied in the compact UI immediately
+        # after choosing the target field. Do not reject an empty mapping
+        # before the user is given the option-mapping dialog.
+        if kind not in ('reference','option','status') and not spec.get('selection_unverified'):
             for value in entry['analysis']['values'].get(source, []):
                 checked_value(value, spec['type'], values, target, 'id' if source == 'components' else None)
         entry['rows'][source].pop('creation_saved',None)
