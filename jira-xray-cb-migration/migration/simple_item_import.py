@@ -121,7 +121,7 @@ def _journal(path, event):
 
 
 
-def _supported_custom_field_values(entry, fields, source_values, jira_key_field):
+def _supported_custom_field_values(entry, fields, source_values, jira_key_field, cb=None, progress=None):
     """Prepare requested scalar CB fields before POST, never drop selected data.
 
     The first-import contract currently covers Text/WikiText via actual
@@ -148,7 +148,7 @@ def _supported_custom_field_values(entry, fields, source_values, jira_key_field)
         actual=by_id[fid]
         model=str(actual.get("valueModel") or "").split("<",1)[0]
         type_name=str(actual.get("typeName") or "").casefold()
-        if model=="ChoiceFieldValue":
+        if model=="ChoiceFieldValue" and actual.get("referenceType")=="ChoiceOptionReference":
             from migration.option_batch import choice_names, norm
             if actual.get("referenceType")!="ChoiceOptionReference" or not isinstance(actual.get("options"),list):
                 raise ApiError("필드 "+source+": CB ChoiceOptionReference/options 상세가 없습니다.")
@@ -180,6 +180,16 @@ def _supported_custom_field_values(entry, fields, source_values, jira_key_field)
                              "type":"ChoiceOptionReference"})
             if actual.get("multipleValues") is False and len(refs)>1:
                 raise ApiError("필드 "+source+": 단일 Choice 필드에 Jira 값이 여러 개입니다.")
+            custom={"fieldId":fid,"type":"ChoiceFieldValue","values":refs}
+        elif model=="ChoiceFieldValue" and actual.get("referenceType")=="UserReference":
+            if cb is None:
+                raise ApiError("User 매핑: CB 사용자 조회 클라이언트 없음")
+            from migration.user_auto_mapping import resolve
+            refs=resolve(cb,source,value,spec.get("user_mapping"),progress)
+            if not refs:
+                continue
+            if actual.get("multipleValues") is False and len(refs)>1:
+                raise ApiError("User 필드 "+source+": CB 단일 사용자 필드에 여러 사용자 입력 불가")
             custom={"fieldId":fid,"type":"ChoiceFieldValue","values":refs}
         elif model in ("TextFieldValue","WikiTextFieldValue"):
             if type_name and type_name not in ("text","wikitext","wikitextfield","wikitextfieldvalue"):
@@ -287,8 +297,9 @@ def run(wizard, *, progress=None):
             if not isinstance(detail,dict) or field_identifier(detail)!=selected_id:
                 raise ApiError("필드 "+selected_field+": CB 상세 조회 ID 불일치")
             indexed[selected_id].update(detail)
-    extras=_supported_custom_field_values(entry,list(indexed.values()),source_values,field_id)
-    log("필드 준비","추가 Text/WikiText/Choice "+str(len(extras))+"개 · 요청 전 검증 완료")
+    extras=_supported_custom_field_values(entry,list(indexed.values()),source_values,field_id,
+                                          cb=wizard.cb,progress=log)
+    log("필드 준비","추가 Text/WikiText/Choice/User "+str(len(extras))+"개 · 요청 전 검증 완료")
     journal = Path(wizard.state.root) / "migration-state.jsonl"
     log("중복 조회", "선택 Tracker의 기존 Jira Key 검색")
     matches = lookup_by_jira_key(wizard.cb, tracker, key, field_id)
