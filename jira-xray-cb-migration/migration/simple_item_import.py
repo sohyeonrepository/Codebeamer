@@ -148,16 +148,44 @@ def _supported_custom_field_values(entry, fields, source_values, jira_key_field)
         actual=by_id[fid]
         model=str(actual.get("valueModel") or "").split("<",1)[0]
         type_name=str(actual.get("typeName") or "").casefold()
-        if model not in ("TextFieldValue","WikiTextFieldValue"):
-            raise ApiError("필드 "+source+": 현재 1차 Import 지원 타입(Text/WikiText) 아님: "+
+        if model=="ChoiceFieldValue":
+            from migration.option_batch import choice_names, norm
+            if actual.get("referenceType")!="ChoiceOptionReference" or not isinstance(actual.get("options"),list):
+                raise ApiError("필드 "+source+": CB ChoiceOptionReference/options 상세가 없습니다.")
+            mapping=spec.get("value_mapping") or {}
+            source_names=choice_names(value,source)
+            if not source_names:
+                continue
+            options=actual["options"]
+            refs=[]
+            for name in source_names:
+                wanted=mapping.get(name)
+                if not isinstance(wanted,str) or not wanted:
+                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+"'의 CB 대상 옵션 매핑이 없습니다.")
+                matches=[o for o in options if isinstance(o,dict) and
+                         norm(o.get("name"))==norm(wanted) and
+                         type(o.get("id")) is int and
+                         o.get("type")=="ChoiceOptionReference"]
+                if len(matches)!=1:
+                    raise ApiError("필드 "+source+": 대상 CB 옵션 '"+wanted+
+                                   "' ID가 없거나 중복됩니다.")
+                refs.append({"id":matches[0]["id"],"name":matches[0]["name"],
+                             "type":"ChoiceOptionReference"})
+            if actual.get("multipleValues") is False and len(refs)>1:
+                raise ApiError("필드 "+source+": 단일 Choice 필드에 Jira 값이 여러 개입니다.")
+            custom={"fieldId":fid,"type":"ChoiceFieldValue","values":refs}
+        elif model in ("TextFieldValue","WikiTextFieldValue"):
+            if type_name and type_name not in ("text","wikitext","wikitextfield","wikitextfieldvalue"):
+                raise ApiError("필드 "+source+": CB 타입 불일치: "+type_name)
+            if not isinstance(value,str):
+                raise ApiError("필드 "+source+": Jira 문자열이 아닌 값은 임의 변환하지 않음")
+            custom={"fieldId":fid,"type":model,"value":value}
+        else:
+            raise ApiError("필드 "+source+": 현재 1차 Import 지원 타입(Text/WikiText/Choice) 아님: "+
                            (model or type_name or "미확인"))
-        if type_name and type_name not in ("text","wikitext","wikitextfield","wikitextfieldvalue"):
-            raise ApiError("필드 "+source+": CB 타입 불일치: "+type_name)
-        if not isinstance(value,str):
-            raise ApiError("필드 "+source+": Jira 문자열이 아닌 값은 임의 변환하지 않음")
         if any(row["fieldId"]==fid for row in prepared):
             raise ApiError("필드 "+source+": 선택된 필드끼리 CB Field ID 중복")
-        prepared.append({"fieldId":fid,"type":model,"value":value})
+        prepared.append(custom)
     return prepared
 
 
@@ -241,7 +269,9 @@ def run(wizard, *, progress=None):
         selected_id=(row.get("spec") or {}).get("field_id")
         if type(selected_id) is not int or selected_id not in indexed:
             raise ApiError("필드 "+selected_field+": 대상 실제 CB Field ID를 선택하세요.")
-        if not indexed[selected_id].get("valueModel"):
+        if (not indexed[selected_id].get("valueModel") or
+                str(indexed[selected_id].get("valueModel") or "").startswith("ChoiceFieldValue") and
+                not isinstance(indexed[selected_id].get("options"),list)):
             try:
                 detail=wizard.cb.http.request("GET",
                     "/v3/trackers/"+segment(tracker)+"/fields/"+segment(selected_id))
@@ -251,7 +281,7 @@ def run(wizard, *, progress=None):
                 raise ApiError("필드 "+selected_field+": CB 상세 조회 ID 불일치")
             indexed[selected_id].update(detail)
     extras=_supported_custom_field_values(entry,list(indexed.values()),source_values,field_id)
-    log("필드 준비","추가 Text/WikiText "+str(len(extras))+"개 · 요청 전 검증 완료")
+    log("필드 준비","추가 Text/WikiText/Choice "+str(len(extras))+"개 · 요청 전 검증 완료")
     journal = Path(wizard.state.root) / "migration-state.jsonl"
     log("중복 조회", "선택 Tracker의 기존 Jira Key 검색")
     matches = lookup_by_jira_key(wizard.cb, tracker, key, field_id)
@@ -310,9 +340,21 @@ def run(wizard, *, progress=None):
     actual_custom=actual.get("customFields")
     if extras and not isinstance(actual_custom,list):
         raise ApiError("CB Item "+str(item_id)+" 생성 후 customFields GET 누락; 확인 필요")
-    actual_by_id={v.get("fieldId"):v.get("value") for v in (actual_custom or [])
+    actual_by_id={v.get("fieldId"):v for v in (actual_custom or [])
                   if isinstance(v,dict)}
-    missing=[v["fieldId"] for v in extras if actual_by_id.get(v["fieldId"])!=v["value"]]
+    missing=[]
+    for requested in extras:
+        received=actual_by_id.get(requested["fieldId"])
+        if not isinstance(received,dict):
+            missing.append(requested["fieldId"])
+        elif requested["type"]=="ChoiceFieldValue":
+            expected_ids=sorted(v["id"] for v in requested["values"])
+            actual_refs=received.get("values")
+            if (not isinstance(actual_refs,list) or
+                sorted(ref.get("id") for ref in actual_refs if isinstance(ref,dict))!=expected_ids):
+                missing.append(requested["fieldId"])
+        elif received.get("value")!=requested["value"]:
+            missing.append(requested["fieldId"])
     if missing:
         raise ApiError("CB Item "+str(item_id)+" 생성 후 추가 필드 불일치 "+
                        str(len(missing))+"건. 재시도 전 서버 확인 필요")
