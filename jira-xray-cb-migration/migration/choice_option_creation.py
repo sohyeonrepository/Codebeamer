@@ -84,7 +84,34 @@ def append_missing(cb, tracker, field_id, desired, state_root, approved=False, p
     field_schema=schema_object(cb.spec,field_array.get("items",{}))
     option_schema=schema_object(cb.spec,field_schema.get("properties",{}).get("options",{}))
     if option_schema.get("type")!="array":
-        raise ApiError("Tracker Configuration 쓰기 스키마에 options 배열 없음; 안전하게 중단")
+        # Distinguish a missing writable option definition from a broken
+        # schema traversal. Enumerate documented candidate routes without
+        # attempting to write an unsupported field into configuration.
+        routes=[]
+        for path,verbs in cb.spec.get("paths",{}).items():
+            for method,operation_info in verbs.items():
+                if (method.lower() in ("post","put","patch") and isinstance(operation_info,dict)
+                    and any(token in (path+" "+str(operation_info.get("operationId") or "")).casefold()
+                            for token in ("option","choice"))):
+                    routes.append(method.upper()+" "+path)
+        evidence={
+            "tracker_id":tracker,"field_id":field_id,
+            "choice_reference_type":detail.get("referenceType"),
+            "configuration_option_presence":"options" in target,
+            "configuration_option_type":type(config_options).__name__,
+            "openapi_root_properties":sorted(schema.get("properties",{})),
+            "openapi_field_properties":sorted(field_schema.get("properties",{})),
+            "openapi_option_schema":option_schema,
+            "candidate_option_write_routes":routes,
+            "note":"Read-only diagnostics. No option create request was made."}
+        evidence_path=Path(state_root)/("choice-contract-"+str(tracker)+"-"+str(field_id)+".json")
+        evidence_path.parent.mkdir(parents=True,exist_ok=True)
+        evidence_path.write_text(json.dumps(evidence,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+        log("Choice 옵션 계약 진단",str(evidence_path)+
+            " · 후보 쓰기 경로 "+str(len(routes))+"개")
+        raise ApiError("현재 서버 OpenAPI의 Tracker Configuration 필드 쓰기 스키마에 options 배열이 없습니다. "+
+                       "다른 옵션 생성 API가 있는지 계약 진단 파일에서 확인하세요. "+
+                       "생성 요청 미실행 · "+str(evidence_path))
     if isinstance(config_options,list):
         existing=deepcopy(config_options)
         existing_names={norm(o.get("name")) for o in existing if isinstance(o,dict)}
