@@ -506,7 +506,9 @@ def launch(wizard, projects):
                     wizard.manual_mapping(scope,source,fid,target_key,{})
                     refresh()
                     kind=semantic_type(field)[0]
-                    if kind in ("option","status") or str(field.get("valueModel") or "").startswith("ChoiceFieldValue"):
+                    if (kind in ("option","status") or
+                        field.get("referenceType")=="ChoiceOptionReference" or
+                        str(field.get("valueModel") or "").startswith("ChoiceFieldValue")):
                         option_mapping_popup(source)
                 guarded("기존 필드 연결",connect)
         dropdown.bind("<<ComboboxSelected>>", changed)
