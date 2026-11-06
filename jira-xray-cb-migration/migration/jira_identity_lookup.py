@@ -207,10 +207,10 @@ def canonical_jira_identity(value):
     key_pattern=r"[A-Za-z][A-Za-z0-9_]*-[0-9]+"
     if re.fullmatch(key_pattern,value):
         return value
-    wiki=re.fullmatch(r"\\[("+key_pattern+r")\\|https?://[^\\]\\s]+/browse/\\1/?\\]",value)
+    wiki=re.fullmatch(r"\[("+key_pattern+r")\|https?://[^\]\s]+/browse/\1/?\]",value)
     if wiki:
         return wiki.group(1)
-    url=re.fullmatch(r"https?://[^\\s]+/browse/("+key_pattern+r")/?",value)
+    url=re.fullmatch(r"https?://[^\s]+/browse/("+key_pattern+r")/?",value)
     if url:
         return url.group(1)
     # Unrecognized format is not evidence of a different key. Abort the
