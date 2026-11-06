@@ -413,6 +413,27 @@ def launch(wizard, projects):
         count = sum(bool(r.get("selected")) for r in rows().values())
         messagebox.showinfo("매핑 저장", str(count) + "개 필드가 선택되었습니다.\n실제 변경은 별도 Import 승인이 있어야 수행됩니다.")
 
+    def verify_selected_mappings():
+        from migration.selected_field_validation import validate_selected
+        scope=current_scope()
+        key=case_set_issue_key.get().strip()
+        if not key:
+            from migration.connected_case_set import first_issue_key
+            key=first_issue_key(wizard,scope)
+            case_set_issue_key.set(key)
+        report=validate_selected(wizard,scope,key)
+        tabs.select(result_tab)
+        append_log("선택 필드 실서버 검증", key + " · Tracker "+str(report["tracker"]) +
+                   " · GET만 사용 / POST 없음")
+        for item in report["rows"]:
+            append_log(item["verdict"],item["source"]+" → "+item["target"]+
+                       " / CB field "+str(item["cb_field_id"])+
+                       " / "+item["reason"])
+        append_log("검증 요약","GET 검증 "+str(report["get_verified"])+
+                   "개, 미검증/차단 "+str(report["blocked"])+
+                   "개, 쓰기 "+str(report["writes"])+"건")
+        status.set("선택 필드 서버 GET 검증 완료 · 실제 POST는 실행하지 않음")
+
     def import_approved():
         tabs.select(result_tab)
         previous_stage_count = len(wizard.plan.get("stages", []))
@@ -662,6 +683,7 @@ def launch(wizard, projects):
               foreground="#aa5700").pack(side="left", padx=10)
 
 
+    ttk.Button(buttons, text="선택 필드 API 검증 (GET)", command=lambda: guarded("선택 필드 API 검증", verify_selected_mappings)).pack(side="left", padx=6)
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
