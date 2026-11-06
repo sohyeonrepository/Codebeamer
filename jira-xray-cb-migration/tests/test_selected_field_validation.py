@@ -61,6 +61,30 @@ class SelectedMappingValidationTests(unittest.TestCase):
         for call in wizard.jira.http.request.call_args_list+wizard.cb.http.request.call_args_list:
             self.assertEqual(call.args[0],"GET")
 
+    def test_field_detail_http_500_reports_field_and_stage(self):
+        from clients.http import ApiError
+        wizard=self.setup_wizard()
+        original=wizard.cb.http.request.side_effect
+        def cb_get(method,path):
+            if path.endswith("/17"):
+                raise ApiError("GET /v3/trackers/500/fields/17 failed: HTTP 500; JSON 오류 응답; 원인 자동 분류 불가")
+            return original(method,path)
+        wizard.cb.http.request.side_effect=cb_get
+        report=validate_selected(wizard,"STGVSTAR:14013","STGVSTAR-12")
+        priority=next(row for row in report["rows"] if row["source"]=="priority")
+        self.assertEqual(priority["verdict"],"BLOCKED")
+        self.assertIn("Codebeamer Field Detail",priority["reason"])
+        self.assertIn("Jira 필드 priority",priority["reason"])
+        self.assertIn("HTTP 500",priority["reason"])
+        self.assertEqual(report["writes"],0)
+
+    def test_tracker_config_http_500_has_context(self):
+        from clients.http import ApiError
+        wizard=self.setup_wizard()
+        wizard.cb.http.request.side_effect=ApiError("GET failed: HTTP 500")
+        with self.assertRaisesRegex(ApiError,"Codebeamer Tracker Configuration"):
+            validate_selected(wizard,"STGVSTAR:14013","STGVSTAR-12")
+
     def test_missing_priority_option_blocks(self):
         wizard=self.setup_wizard()
         original=wizard.cb.http.request.side_effect
