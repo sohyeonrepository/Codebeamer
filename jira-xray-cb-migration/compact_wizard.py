@@ -361,6 +361,49 @@ def launch(wizard, projects):
                     if tracker_box.current() < 0:
                         raise ValueError("참조 대상 Tracker를 선택하세요.")
                     reference_tracker = tracker_items[tracker_box.current()]["id"]
+                # The proposed name can already exist (for example, a prior
+                # create request succeeded but its local receipt was lost).
+                # Never create a duplicate or silently adopt an unrelated field.
+                if semantic in ("option","status"):
+                    from migration.wizard import target_fields,compatible
+                    from migration.option_batch import norm
+                    selected_name=label_var.get().strip()
+                    current_fields=target_fields(wizard.cb,entry["tracker"])
+                    same=[f for f in current_fields if
+                          norm(f.get("label") or f.get("name"))==norm(selected_name)]
+                    if same:
+                        if len(same)!=1:
+                            raise ValueError("동일 이름의 CB 필드가 여러 개입니다. 수동 확인이 필요합니다: "+selected_name)
+                        existing_field=same[0]
+                        existing_id=field_identifier(existing_field)
+                        if (type(existing_id) is not int or
+                            existing_field.get("referenceType")!="ChoiceOptionReference" or
+                            not str(existing_field.get("valueModel") or "").startswith("ChoiceFieldValue") or
+                            not compatible("option",multi_var.get(),existing_field)):
+                            raise ValueError("동일 이름 CB 필드가 있지만 Choice-Option 타입/다중 설정이 다릅니다: "+
+                                             selected_name+" · ID "+str(existing_id)+
+                                             ". 덮어쓰거나 자동 재사용하지 않습니다.")
+                        if not messagebox.askyesno("기존 Choice 필드 확인",
+                            "CB에 동일 이름의 Choice-Option 필드가 존재합니다.\\n"+
+                            "이름: "+selected_name+"\\nField ID: "+str(existing_id)+
+                            "\\n다중 선택: "+str(multi_var.get())+
+                            "\\n\\n새로 생성하지 않고 기존 필드에 연결할까요?",parent=window):
+                            append_log("신규 Choice 중단",source+" · 같은 이름의 CB 필드 "+
+                                       str(existing_id)+" 존재 · 변경 없음")
+                            return
+                        # Reuse only after explicit approval. Existing options
+                        # may be empty; let the Choice editor add missing ones
+                        # under its separate approval/readback workflow.
+                        entry["target_fields"]=current_fields
+                        wizard.manual_mapping(scope,source,existing_id,
+                                              "cb_field_"+str(existing_id),{})
+                        wizard.select_field(scope,source,True)
+                        append_log("기존 Choice 재사용",source+" → CB "+str(existing_id)+
+                                   " · 동일 이름/타입/다중 확인; 신규 필드 생성 생략")
+                        refresh()
+                        window.destroy()
+                        option_mapping_popup(source)
+                        return
                 wizard.configure_creation(scope, source, label_var.get(), semantic,
                                           multi_var.get(), mapping, reference_tracker=reference_tracker)
                 wizard.select_field(scope, source, True)
