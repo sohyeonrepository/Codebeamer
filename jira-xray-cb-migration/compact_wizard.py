@@ -575,7 +575,7 @@ def launch(wizard, projects):
                 "Jira "+key+" → 기존 CB Tracker "+str(entry["tracker"])+"\\n"
                 "선택 필드 "+str(len(selected))+"개를 실제 POST할 수 있습니다.\\n"
                 "기존 Jira Key가 있으면 신규 생성하지 않습니다.\\n\\n"
-                "Text/WikiText 이외의 미지원 필드는 POST 전 차단합니다. 계속할까요?"):
+                "Text/WikiText/Choice(옵션 매핑 완료) 외 필드는 POST 전 차단합니다. 계속할까요?"):
             return
         tabs.select(result_tab)
         append_log("1차 Import","Jira "+key+" · 필드 "+str(len(selected))+"개 · 실제 POST")
