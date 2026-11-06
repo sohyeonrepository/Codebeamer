@@ -93,6 +93,7 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=0, help="0=all matching source issues")
     parser.add_argument("--prompt-auth", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--acknowledge-partial", action="store_true", help="Explicitly accept pending mapped fields when writing")
     parser.add_argument("--include-options", action="store_true", help="Also migrate mapped Choice/Option fields by exact target option names")
     parser.add_argument("--include-users", action="store_true", help="Resolve mapped Jira users by Codebeamer username, without creating accounts")
     parser.add_argument("--capture-relations", action="store_true", help="Capture Xray relation keys for a later phase-2 run")
@@ -102,6 +103,8 @@ def main(argv=None):
         parser.error("Tracker ID positive, batch-size 1..100, limit >= 0")
     if args.execute and args.confirm_project != args.jira_project:
         parser.error("Execute requires --confirm-project identical to --jira-project")
+    if args.execute and not args.acknowledge_partial:
+        parser.error("Full user mapping is not implemented yet (Comments/Attachments/relations/system fields). To test partial writes explicitly add --acknowledge-partial.")
 
     root = Path(__file__).resolve().parent
     mapping = json.loads((root / "mappings" / MAPPINGS[args.kind][0]).read_text(encoding="utf-8"))
