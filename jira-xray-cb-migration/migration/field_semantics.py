@@ -33,6 +33,12 @@ def jira_field_semantics(definition):
     Returns kind=None when source metadata is insufficient or conflicting.
     The third element explains the source of a classification for reviewing.
     """
+    # Jira's native Labels field is a free-form array of strings in REST,
+    # but is mapped as a multi-choice vocabulary by this migration UI.
+    # This is an explicit field-specific adapter, not an assertion that the
+    # Jira REST schema itself is an Option type.
+    if str(definition.get("id") or "").casefold()=="labels":
+        return "option", True, "Jira Labels: free-form tags adapted to CB multi-choice"
     schema = definition.get("schema") or {}
     if not isinstance(schema, dict):
         return None, False, "Jira schema is missing or invalid"
