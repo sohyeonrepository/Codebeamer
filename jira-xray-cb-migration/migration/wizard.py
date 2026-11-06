@@ -468,9 +468,11 @@ def proposals(analysis, targets, config, existing=None):
 def compatible(kind, multiple, target):
     target_kind, target_multiple = semantic_type(target)
     if kind == 'text' and multiple and target_kind == 'text':
-        # A Jira multi-text array can be explicitly converted to CB scalar
-        # Text/WikiText, or kept as an array if the field supports it.
         return type(target_multiple) is bool
+    # A single Jira user is safely representable as ONE UserReference inside
+    # CB's multipleValues=true Assigned to / UserChoiceField.
+    if kind == 'user' and target_kind == 'user' and multiple is False and target_multiple is True:
+        return True
     return bool(kind and (kind == target_kind or kind == 'status' and target_kind == 'option')
                 and type(target_multiple) is bool and multiple == target_multiple)
 
