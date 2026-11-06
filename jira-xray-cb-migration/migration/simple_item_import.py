@@ -171,6 +171,16 @@ def run(wizard, *, progress=None):
         log("중복 발견", key + " → CB " + str(item_id) + " · 신규 생성 생략")
         record = {"jira": key, "status": "SKIPPED", "cb": item_id, "tracker": tracker}
         _journal(journal, record)
+        # A preexisting Item is not evidence the newly selected fields were
+        # migrated. Do not silently count it as first-pass completion.
+        if extras:
+            log("기존 Item 검출", "추가 선택 필드는 UPDATE하지 않았습니다. 신규 생성 완료로 집계하지 않습니다.")
+            return {"complete": False, "counts": {"created": 0, "skipped": 1,
+                    "pending_update": 1},
+                    "issues": [{"key": key, "status": "existing_update_required",
+                                "target_id": item_id}],
+                    "errors": [{"source": key, "error_code": "EXISTING_ITEM_NOT_UPDATED",
+                                "reason": "기존 Item 존재; 신규 추가 필드 미반영. UPDATE 경로 별도 필요"}]}
         return {"complete": True, "counts": {"created": 0, "skipped": 1},
                 "issues": [{"key": key, "status": "skipped", "target_id": item_id}],
                 "errors": []}
