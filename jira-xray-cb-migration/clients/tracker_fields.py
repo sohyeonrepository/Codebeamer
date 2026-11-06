@@ -35,20 +35,34 @@ def read(cb, tracker):
     except ApiError as exc:
         config = {'fields': []}
         warnings.append('Tracker Configuration: '+str(exc))
-    indexed = {str(field_identifier(f)): f for f in config['fields']}
-    result = []
+    # The list endpoint may omit newly created fields while Tracker
+    # Configuration includes them. Merge both by actual server Field ID,
+    # then request Field Detail for each candidate.
+    listed_by_id={}
     for row in listed:
-        fid = field_identifier(row)
-        merged = dict(indexed.get(str(fid), {}), **row)
+        fid=field_identifier(row)
+        if type(fid) is int:
+            listed_by_id[fid]=row
+    config_by_id={}
+    for row in config.get('fields',[]):
+        if not isinstance(row,dict):
+            continue
+        fid=field_identifier(row)
+        if type(fid) is int:
+            config_by_id[fid]=row
+    result=[]
+    for fid in dict.fromkeys([*listed_by_id,*config_by_id]):
+        merged=dict(config_by_id.get(fid,{}),**listed_by_id.get(fid,{}))
         try:
-            detail = cb.http.request('GET', '/v3/trackers/'+segment(tracker)+'/fields/'+segment(fid))
-            if not isinstance(detail, dict) or field_identifier(detail) != fid:
+            detail=cb.http.request('GET','/v3/trackers/'+segment(tracker)+'/fields/'+segment(fid))
+            if not isinstance(detail,dict) or field_identifier(detail)!=fid:
                 raise ApiError('Field Detail ID/response mismatch')
             merged.update(detail)
         except ApiError as exc:
             warnings.append('Field '+str(fid)+': '+str(exc))
-        normalized = normalize(merged)
-        normalized['visibility_unknown'] = not any(type(normalized.get(k)) is bool for k in ('hidden','isHidden','visible'))
+        normalized=normalize(merged)
+        normalized['visibility_unknown']=not any(
+            type(normalized.get(k)) is bool for k in ('hidden','isHidden','visible'))
         result.append(normalized)
     cb.config.setdefault('tracker_field_evidence', {})[str(tracker)] = {'configuration':config, 'warnings':warnings}
     return result
