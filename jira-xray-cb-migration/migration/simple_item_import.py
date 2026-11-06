@@ -161,7 +161,14 @@ def _supported_custom_field_values(entry, fields, source_values, jira_key_field)
             for name in source_names:
                 wanted=mapping.get(name)
                 if not isinstance(wanted,str) or not wanted:
-                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+"'의 CB 대상 옵션 매핑이 없습니다.")
+                    # An option ID in createmeta and a displayed name in the
+                    # actual Issue may differ. Expose mapping keys for debugging
+                    # without fabricating an Option ID or auto-changing values.
+                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+
+                                   "'의 CB 대상 옵션 매핑이 없습니다. "+
+                                   "현재 매핑된 Jira 키="+repr(list(mapping.keys())[:30])+
+                                   ", CB Field ID="+str(fid)+
+                                   ", CB 옵션 이름="+repr([o.get("name") for o in options[:30] if isinstance(o,dict)]))
                 matches=[o for o in options if isinstance(o,dict) and
                          norm(o.get("name"))==norm(wanted) and
                          type(o.get("id")) is int and
