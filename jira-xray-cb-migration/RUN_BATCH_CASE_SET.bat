@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 echo [1] Test Case preview
 echo [2] Test Set preview
@@ -27,12 +27,12 @@ set /p REL=Capture Xray relations for phase 2? ^(Y/N; default N^):
 if /I "%REL%"=="Y" set "EXTRA=%EXTRA% --capture-relations"
 if "%EXEC%"=="1" (
  echo WARNING: This sends real POST requests to Codebeamer.
- echo IMPORTANT: Choice/User, comments, attachments, relations and history are NOT included.
+ echo IMPORTANT: Choice/User only when selected; comments, attachments, relation writes and history are NOT included.
  echo This is a PARTIAL mapping import; comments, attachments, system fields and relations are not written.
  set /p PARTIAL=Type PARTIAL to accept incomplete migration:
- if /I not "%PARTIAL%"=="PARTIAL" exit /b 2
+ if /I not "!PARTIAL!"=="PARTIAL" exit /b 2
  set /p CONFIRM=Retype Jira project key to confirm:
- python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA% --acknowledge-partial --execute --confirm-project "%CONFIRM%"
+ python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA% --acknowledge-partial --execute --confirm-project "!CONFIRM!"
 ) else (
  python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA%
 )
