@@ -399,7 +399,24 @@ def launch(wizard, projects):
         allowed=info.get("allowedValues") or []
         if isinstance(allowed,list):observed.extend(allowed)
         jira_values=source_choices(observed)
+        # Option identities may be Jira IDs while issue payloads use names.
+        # Include the same field's raw display names as aliases for the POST
+        # adapter without guessing or creating any CB option.
+        from migration.option_batch import choice_names
+        aliases={}
+        for sample in observed:
+            try:
+                names=choice_names(sample,source)
+            except Exception:
+                continue
+            for name in names:
+                aliases.setdefault(name,name)
+        for name in aliases:
+            jira_values.setdefault(name,name)
+        append_log("Choice 옵션 조회",str(source)+" → CB "+str(fid)+
+                   " · Jira 값 "+str(len(jira_values))+"개 · CB 옵션 "+str(len(options))+"개")
         if not jira_values:
+            field_diagnostics(source)
             raise ValueError("Jira 원본 옵션값을 확인할 수 없습니다. Jira 필드 데이터를 조회하세요.")
         dlg=tk.Toplevel(root)
         dlg.title("Choice 옵션 매핑 · "+str(source))
@@ -448,6 +465,8 @@ def launch(wizard, projects):
                     return
                 mapping[identity]=target
             entry["rows"][source]["spec"]["value_mapping"]=mapping
+            append_log("Choice 옵션 확정",str(source)+" → CB "+str(fid)+
+                       " · 옵션 "+str(len(mapping))+"개 연결")
             # The actual selected Choice FieldValue and options were read by
             # Field ID from this Tracker, not inferred from a similarly named
             # pre-existing CB field.
