@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "issue_type": "Test Set",
+  "target_tracker": "CONFIGURED_IN_UI",
+  "default_behavior": "skip_unmapped",
+  "phase_1": [
+    {
+      "jira": "summary",
+      "cb": {
+        "label": "Name",
+        "registration": "name",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "ready"
+    },
+    {
+      "jira": "description",
+      "cb": {
+        "label": "Description",
+        "registration": "description",
+        "type": "WikiText"
+      },
+      "mode": "direct",
+      "status": "ready"
+    },
+    {
+      "jira": "reporter.name",
+      "cb": {
+        "label": "Reporter",
+        "registration": "customField[6]",
+        "type": "Choice / User"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "assignee",
+      "cb": {
+        "label": "Assigned to",
+        "registration": "assignedTo",
+        "type": "Members"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "customfield_17552",
+      "cb": {
+        "label": "Squad",
+        "registration": "choiceList[1]",
+        "type": "Choice / option"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "components",
+      "cb": {
+        "label": "Components",
+        "registration": "choiceList[2]",
+        "type": "Choice / work/config"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "security",
+      "cb": {
+        "label": "Security Level",
+        "registration": "choiceList[3]",
+        "type": "Choice / option"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "resolution",
+      "cb": {
+        "label": "Resolution",
+        "registration": "resolutions",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "labels",
+      "cb": {
+        "label": "Labels",
+        "registration": "CREATE_FIELD",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "field_not_created"
+    },
+    {
+      "jira": "priority.name",
+      "cb": {
+        "label": "Jira Priority",
+        "registration": "choiceList[5]",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    }
+  ],
+  "special": [
+    {
+      "jira": "key",
+      "cb": {
+        "label": "jira key",
+        "registration": "customField[4]",
+        "type": "Wiki Link / URL"
+      },
+      "mode": "jira_issue_link",
+      "status": "pending_field_type_confirmation"
+    },
+    {
+      "jira": "comment",
+      "cb": {
+        "label": "Comment",
+        "registration": "attachments",
+        "type": "References"
+      },
+      "mode": "comment_api",
+      "status": "pending_api_validation"
+    },
+    {
+      "jira": "attachment",
+      "cb": {
+        "label": "Attachment",
+        "registration": "attachments",
+        "type": "References"
+      },
+      "mode": "attachment_api",
+      "status": "pending_api_validation"
+    },
+    {
+      "jira": "created",
+      "cb": {
+        "label": "Submitted by",
+        "registration": "submittedAt",
+        "type": "Date"
+      },
+      "mode": "system_field",
+      "status": "invalid_mapping_check_required",
+      "reason": "submittedAt is a date field; Submitted by is a user field"
+    },
+    {
+      "jira": "updated",
+      "cb": {
+        "label": "Modified at",
+        "registration": "modifiedAt",
+        "type": "Date"
+      },
+      "mode": "system_field",
+      "status": "pending_write_contract"
+    },
+    {
+      "jira": "creator",
+      "cb": {
+        "label": "Submitted by",
+        "registration": "submitter",
+        "type": "User"
+      },
+      "mode": "system_field",
+      "status": "pending_write_contract"
+    },
+    {
+      "jira": "status",
+      "cb": {
+        "label": "Status",
+        "registration": "status",
+        "type": "Choice"
+      },
+      "mode": "system_field",
+      "status": "pending_status_mapping"
+    }
+  ],
+  "phase_2": [
+    {
+      "jira": "customfield_17775",
+      "cb": {
+        "label": "Tests association with a Test Set",
+        "registration": "table[0] - tableColumn[0,0]",
+        "type": "Table"
+      },
+      "mode": "xray_test_set_membership",
+      "status": "pending_table_relation_write_contract"
+    }
+  ],
+  "notes": [
+    "Source field names are from user-supplied mappings; verify exact Jira response fields during preview.",
+    "No automatic creation of CB fields and no invented option/user IDs.",
+    "Test Set Tests is not a scalar Choice field; defer to phase 2."
+  ]
+}
