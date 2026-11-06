@@ -636,7 +636,27 @@ def launch(wizard, projects):
             if type(fid) is not int or fid<=0:
                 missing.append(source+" (CB 대상 필드 미지정)")
             elif spec.get("missing_definition") or spec.get("selection_unverified"):
-                missing.append(source+" (매핑 타입/계약 미확인)")
+                # Previously saved User mappings can contain obsolete generic
+                # Choice field warnings. Check actual UserReference metadata.
+                jira_kind=semantic_type(entry["analysis"]["fields"][source],True)[0]
+                if jira_kind=="user":
+                    from clients.jira_client import segment
+                    detail=wizard.cb.http.request("GET",
+                        "/v3/trackers/"+segment(entry["tracker"])+"/fields/"+segment(fid))
+                    if (isinstance(detail,dict) and field_identifier(detail)==fid and
+                        detail.get("referenceType")=="UserReference" and
+                        str(detail.get("valueModel") or "").startswith("ChoiceFieldValue") and
+                        type(detail.get("multipleValues")) is bool):
+                        spec.pop("missing_definition",None)
+                        spec.pop("selection_unverified",None)
+                        spec["user_identity_lookup"]=True
+                        wizard.state.save("wizard","plan",wizard.plan)
+                        append_log("User 필드 검증",source+" → CB "+str(fid)+
+                                   " · 옵션 매핑 없이 계정 자동 조회")
+                    else:
+                        missing.append(source+" (CB UserReference 상세 계약 미확인)")
+                else:
+                    missing.append(source+" (매핑 타입/계약 미확인)")
         if missing:
             for problem in missing:
                 append_log("선택 필드 매핑 누락",problem)
