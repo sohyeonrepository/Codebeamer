@@ -268,9 +268,8 @@ def launch(wizard, projects):
         try:
             jira_key_id=_field(wizard.cb,tracker)
         except Exception as exc:
-            raise ValueError("선택한 CB Tracker에 Jira Key 필드를 사용하세요. "+
-                             "Jira Key 단일 Text 필드를 생성/활성화한 뒤 다시 데이터 가져오기를 실행하세요. "+
-                             "상세: "+str(exc)) from None
+            append_log("Jira Key 필드 진단", "Tracker "+str(tracker)+" · "+str(exc))
+            raise ValueError("Jira Key 필드 확인 실패: "+str(exc)) from None
         append_log("Jira Key 확인","Tracker "+str(tracker)+
                    " · Jira Key Field ID "+str(jira_key_id))
         wizard.analyze(scope)
