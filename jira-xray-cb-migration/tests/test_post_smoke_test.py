@@ -28,11 +28,22 @@ class SmokeTest(unittest.TestCase):
             self.assertTrue(smoke.prior_attempt(path, "ABC-1", 7))
             self.assertFalse(smoke.prior_attempt(path, "ABC-2", 7))
 
+    def test_config_registration_resolves_existing_field(self):
+        config = {"migration": {"post_smoke": {"jira_key_field": {
+            "label": "Jira Key", "type": "WikiText", "registration": "customfield[6]"}}}}
+        field = smoke.configured_jira_key_field(config)
+        client = Mock()
+        client.request.return_value = {"fields": [
+            {"id": 10006, "label": "Jira Key", "typeName": "WikiText"}]}
+        self.assertEqual(smoke.resolve_wikitext_field(client, 4879, field), 10006)
+        client.request.assert_called_once_with("GET", "/v3/tracker/4879/configuration")
+
     def test_wikitext_field_type_mismatch_refuses(self):
         client = Mock()
-        client.request.return_value = {"id": 10006, "valueModel": "TextFieldValue"}
+        client.request.return_value = {"fields": [
+            {"id": 10006, "label": "Jira Key", "typeName": "Text"}]}
         with self.assertRaises(smoke.ApiError):
-            smoke.validate_wikitext_field(client, 4879, 10006)
+            smoke.resolve_wikitext_field(client, 4879, {"label": "Jira Key"})
 
     def test_preview_does_not_post(self):
         # Main is intentionally integration-only; default preview has no POST branch.
