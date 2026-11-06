@@ -93,7 +93,7 @@ def import_comment(cb, item_id, child):
     return comment_id
 
 
-def import_attachment(jira,cb,item_id,child,max_bytes):
+def read_jira_attachment(jira,child,max_bytes):
     size=child.get("size")
     if type(size) is not int or size<0 or size>max_bytes:
         raise ApiError("Attachment size missing or above configured limit: "+child["filename"])
@@ -103,6 +103,10 @@ def import_attachment(jira,cb,item_id,child,max_bytes):
     raw=jira.request("GET",validate_attachment_origin(jira,content_url),raw=True)
     if not isinstance(raw,bytes) or len(raw)!=size:
         raise ApiError("Jira binary size mismatch")
+    return raw
+
+
+def import_attachment(cb,item_id,child,raw):
     payload, headers=multipart(files=[("attachments",child["filename"],raw)])
     created=cb.request("POST",f"/v3/items/{item_id}/attachments",payload,headers=headers)
     if not isinstance(created,list) or len(created)!=1 or type(created[0].get("id")) is not int:
@@ -171,13 +175,15 @@ def main(argv=None):
                 if category=="attachment" and (type(child.get("size")) is not int or
                       child["size"]>args.max_attachment_bytes):
                     raise ApiError("Attachment exceeds maximum allowed size")
+                attachment_bytes = (read_jira_attachment(jira,child,args.max_attachment_bytes)
+                                    if category=="attachment" else None)
                 append_event(journal,{"identity":identity,"jira":key_source,
                                       "status":"POST_ATTEMPT"})
                 try:
                     if category=="comment":
                         created=import_comment(cb,record["cb"],child)
                     else:
-                        created=import_attachment(jira,cb,record["cb"],child,args.max_attachment_bytes)
+                        created=import_attachment(cb,record["cb"],child,attachment_bytes)
                 except Exception as exc:
                     append_event(journal,{"identity":identity,"status":"POST_UNCERTAIN_OR_FAILED",
                                           "error_type":type(exc).__name__})
