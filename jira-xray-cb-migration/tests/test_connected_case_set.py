@@ -48,6 +48,33 @@ class ConnectedCaseSetTests(unittest.TestCase):
         self.assertEqual(wizard.cb.http.request.call_args.args[0],"GET")
         self.assertTrue(result["complete"] is False)
 
+    def test_both_kinds_are_available_in_order(self):
+        from migration.connected_case_set import linked_scopes
+        wizard=self.fixture("Test Set")
+        wizard.plan["scopes"]["STGVSTAR:101"]={
+            "project":"STGVSTAR","tracker":4879,
+            "type":{"id":"101","name":"Test"}}
+        self.assertEqual(linked_scopes(wizard),
+                         [("set","STGVSTAR:100"),("case","STGVSTAR:101")])
+
+    def test_single_smoke_reuses_existing_auth_without_mutating_wizard(self):
+        from unittest.mock import patch
+        from migration.connected_case_set import run_one_smoke
+        wizard=self.fixture("Test")
+        wizard.config={"jira":{"url":"https://jira.example"}}
+        captured=[]
+        def fake_run(limited,progress=None):
+            captured.append(limited)
+            return {"complete":True,"counts":{"created":1},"issues":[],"errors":[]}
+        with patch("migration.connected_case_set.preview",return_value={"blockers":[]}), patch(
+                "migration.simple_item_import.run",side_effect=fake_run):
+            report=run_one_smoke(wizard,"STGVSTAR:100","STGVSTAR-1")
+        self.assertEqual(captured[0].config["jira"]["single_issue_key"],"STGVSTAR-1")
+        self.assertNotIn("single_issue_key",wizard.config["jira"])
+        self.assertEqual(set(captured[0].plan["scopes"]["STGVSTAR:100"]["rows"]),
+                         {"summary","description"})
+        self.assertFalse(report["full_migration_complete"])
+
     def test_rejects_unselected_project(self):
         wizard=self.fixture()
         with self.assertRaises(ApiError):
