@@ -14,6 +14,7 @@ from post_smoke_test import append_event, configured_jira_key_field, make_http, 
 from test_case_set_post import MAPPINGS, mapped_payload, resolve_direct_fields, source_field_names
 from migration.option_batch import prepare_options, choice_rows, add_options
 from migration.user_batch import user_rows, prepare_users, add_users
+from migration.phase2_manifest import extract_relations
 
 
 def load_events(path):
@@ -94,6 +95,7 @@ def main(argv=None):
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--include-options", action="store_true", help="Also migrate mapped Choice/Option fields by exact target option names")
     parser.add_argument("--include-users", action="store_true", help="Resolve mapped Jira users by Codebeamer username, without creating accounts")
+    parser.add_argument("--capture-relations", action="store_true", help="Capture Xray relation keys for a later phase-2 run")
     parser.add_argument("--confirm-project", help="Required for writes: exact Jira project key")
     args = parser.parse_args(argv)
     if args.tracker_id <= 0 or not 1 <= args.batch_size <= 100 or args.limit < 0:
@@ -112,6 +114,7 @@ def main(argv=None):
     short = hashlib.sha256(identity.encode()).hexdigest()[:18]
     journal = state / ("batch-" + short + ".jsonl")
     events = load_events(journal)
+    manifest = state / ("relations-" + short + ".jsonl")
     jira = make_http(config["jira"], state / "jira-requests.jsonl", prompt_auth=args.prompt_auth)
     cb = make_http(config["codebeamer"], state / "cb-requests.jsonl", prompt_auth=args.prompt_auth)
 
@@ -120,6 +123,8 @@ def main(argv=None):
         columns += [row["jira"].split(".")[0] for row in choice_rows(mapping)]
     if args.include_users:
         columns += [row["jira"].split(".")[0] for row in user_rows(mapping)]
+    if args.capture_relations:
+        columns += (["customfield_17775"] if args.kind == "set" else ["customfield_17770", "customfield_17772"])
     columns = list(dict.fromkeys(columns))
     configuration = cb.request("GET", f"/v3/tracker/{args.tracker_id}/configuration")
     cb_fields = configuration.get("fields") if isinstance(configuration, dict) else None
@@ -140,6 +145,7 @@ def main(argv=None):
                       "mapped_text_fields":source_field_names(mapping),
                       "mapped_choice_fields":[row["cb"]["label"] for row in choice_rows(mapping)] if args.include_options else [],
                       "mapped_user_fields":[row["cb"]["label"] for row in user_rows(mapping)] if args.include_users else [],
+                      "relation_capture":args.capture_relations,
                       "out_of_scope":"Unsupported Choice / work-config, Comments, Attachments, Relations, Test Run, History"},
                      ensure_ascii=False), flush=True)
     visited = set()
@@ -166,6 +172,7 @@ def main(argv=None):
                 raise ApiError("Jira page returned an Issue outside selected project/type")
             visited.add(key)
             inspected += 1
+            relations = extract_relations(args.kind, issue) if args.capture_relations else []
             old = events.get(key)
             if old is not None:
                 if old.get("status") == "VERIFIED":
