@@ -465,6 +465,11 @@ def launch(wizard, projects):
             editor[0].destroy()
             editor[0] = None
         scope = current_scope()
+        # Refresh CB fields when the dropdown opens, including fields
+        # present in Tracker Configuration but omitted by the list endpoint.
+        from migration.wizard import target_fields
+        entry=wizard.plan["scopes"][scope]
+        entry["target_fields"]=target_fields(wizard.cb,entry["tracker"])
         candidates = [c for c in wizard.mapping_candidates(scope, source) if not hidden(c["field"])]
         choices = ["— 대상 미지정 —"]
         for candidate in candidates:
