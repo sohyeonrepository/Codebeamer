@@ -587,6 +587,32 @@ def launch(wizard, projects):
 
     ttk.Button(case_set_controls, text="자동으로 1건 조회 (GET)",
                command=lambda: guarded("Test Set/Case 1건 자동 미리보기", auto_preview_case_set)).pack(side="left", padx=8)
+    def preview_set_case_together():
+        from migration.connected_case_set import preview_both, coverage_summary
+        reports=preview_both(wizard)
+        tabs.select(result_tab)
+        append_log("매핑 일괄 검수", "연결된 Test Set → Test Case 순서로 Jira 1건씩 GET 조회")
+        for report in reports:
+            summary=coverage_summary(report)
+            append_log("선택된 유형", str(report["kind"]) + " · " + report["jira_key"] +
+                       " → Tracker " + str(report["tracker"]))
+            append_log("매핑 파일", "전체 " + str(summary["total"]) +
+                       "개 / 기본 변환 후보 " + str(summary["direct_candidates"]) +
+                       "개 / 추가 계약 검증 " + str(summary["pending"]) + "개")
+            for row in report["mapped_fields"]:
+                append_log("매핑", row["source"] + " → " + row["target"] +
+                           " : " + row["stage"] +
+                           (" (값 있음)" if row["non_null"] else " (원본 null/없음)"))
+            for err in summary["blockers"]:
+                append_log("오류", err)
+        append_log("이관 제한", "쓰기 0건 · 미검증 매핑이 남아 있어 전체 Import는 비활성화")
+        status.set("Test Set / Test Case 매핑 검수 완료 · 실제 생성 없음 · 상세 내용은 Import 결과 / 로그")
+        return reports
+
+    ttk.Button(case_set_panel, text="Test Set + Test Case 매핑 한번에 검수 (GET만)",
+               command=lambda: guarded("Test Set / Test Case 매핑 일괄 검수",
+                                       preview_set_case_together)).pack(anchor="w", pady=(7, 0))
+
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
