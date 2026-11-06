@@ -291,7 +291,11 @@ def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100, index_
             cb.last_api_call = {"capability":"jira_identity_lookup","phase":"detail",
                                 "method":"GET","path_template":"/v3/items/{itemId}",
                                 "parameter_names":["itemId"]}
-            item = cb.call("item_get", {"itemId":item_id})
+            # The installed 3.0 Swagger may not expose an item_get
+            # capability even when the live GET endpoint is available.
+            # Use the same verified REST read as simple_item_import's
+            # post-create readback; never relax the exact identity check.
+            item = cb.http.request("GET", "/v3/items/" + segment(item_id))
             if item.get("id")!=item_id:
                 raise ApiError("JIRA_LOOKUP_ITEM_MISMATCH: GET Item 상세 ID가 참조 ID와 다릅니다.")
             observed_key = item_identity(item,field_id)
