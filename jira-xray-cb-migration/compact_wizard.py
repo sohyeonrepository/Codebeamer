@@ -392,7 +392,8 @@ def launch(wizard, projects):
         options=[o for o in detail["options"] if isinstance(o,dict) and
                  type(o.get("id")) is int and isinstance(o.get("name"),str)]
         if not options:
-            raise ValueError("CB 대상 Choice 옵션이 비어 있습니다. 먼저 옵션을 생성하세요.")
+            append_log("Choice 옵션 없음",source+" → CB "+str(fid)+
+                       " · Jira 값으로 신규 옵션 생성 필요")
         info=entry["analysis"]["fields"].get(source,{})
         from mapping_helper import source_choices
         observed=list(entry["analysis"].get("values",{}).get(source,[]))
@@ -425,7 +426,7 @@ def launch(wizard, projects):
         dlg.grab_set()
         ttk.Label(dlg,text="Jira 원본 옵션 → CB 대상 옵션",
                   font=("",14,"bold")).pack(anchor="w",padx=16,pady=(15,4))
-        ttk.Label(dlg,text="같은 이름의 옵션도 선택값을 확인하세요. 기존 필드는 수정하지 않습니다.",
+        ttk.Label(dlg,text="같은 이름은 자동 선택합니다. 없는 옵션은 승인 후 CB Tracker에 생성할 수 있습니다.",
                   wraplength=640).pack(anchor="w",padx=16,pady=(0,10))
         outer=ttk.Frame(dlg)
         outer.pack(fill="both",expand=True,padx=16)
@@ -445,39 +446,68 @@ def launch(wizard, projects):
                 row=i,column=0,sticky="w",pady=4)
             variable=tk.StringVar()
             wanted=saved.get(identity,saved.get(label,label))
-            if wanted in option_names:
-                variable.set(wanted)
-            selector=ttk.Combobox(inner,values=option_names,state="readonly",
+            matching=[name for name in option_names if norm(name)==norm(wanted)]
+            if len(matching)==1:
+                variable.set(matching[0])
+            elif not matching:
+                variable.set(str(label))
+            selector=ttk.Combobox(inner,values=list(dict.fromkeys(option_names+[str(label)])),
+                                  state="normal",
                                   textvariable=variable,width=34)
             selector.grid(row=i,column=1,sticky="w",pady=4)
             edits[identity]=variable
         def save_choices():
             mapping={}
+            requested=[]
             for identity,variable in edits.items():
-                target=variable.get()
-                if target not in option_names:
-                    messagebox.showerror("옵션 미매핑",
-                        "Jira 값 "+str(identity)+"의 CB 옵션을 지정하세요.",parent=dlg)
+                target=variable.get().strip()
+                if not target:
+                    messagebox.showerror("옵션 누락",
+                        "Jira 값 "+str(identity)+"의 CB 옵션 이름을 입력하세요.",parent=dlg)
                     return
-                if sum(norm(o["name"])==norm(target) for o in options)!=1:
-                    messagebox.showerror("중복 옵션",
-                        "CB 옵션 이름이 중복되어 ID를 확정할 수 없습니다: "+target,parent=dlg)
+                matching=[o for o in options if norm(o["name"])==norm(target)]
+                if len(matching)>1:
+                    messagebox.showerror("중복 옵션","CB 옵션 이름이 중복됩니다: "+target,parent=dlg)
                     return
-                mapping[identity]=target
-            entry["rows"][source]["spec"]["value_mapping"]=mapping
+                mapping[identity]=matching[0]["name"] if matching else target
+                requested.append(mapping[identity])
+            from migration.choice_option_creation import diff_options,append_missing
+            missing=diff_options(detail,requested)
+            if missing:
+                if not messagebox.askyesno("CB 신규 옵션 실제 생성",
+                    "기존 CB 필드 "+str(fid)+"에 다음 옵션을 추가합니다.\\n\\n"+
+                    "\\n".join(missing[:35])+
+                    ("\\n..." if len(missing)>35 else "")+
+                    "\\n\\nTracker 설정 변경을 승인할까요?",parent=dlg):
+                    append_log("Choice 옵션 생성 취소",source+" · 생성 전 중단")
+                    return
+                try:
+                    actual=append_missing(wizard.cb,tracker,fid,requested,
+                        wizard.state.root,approved=True,progress=append_log)
+                except Exception as exc:
+                    append_log("Choice 옵션 생성 실패",source+" → CB "+str(fid)+" · "+str(exc))
+                    messagebox.showerror("Choice 옵션 생성 실패",str(exc),parent=dlg)
+                    return
+            else:
+                actual=detail
+            actual_names={norm(o.get("name")):o["name"] for o in actual.get("options",[])
+                          if isinstance(o,dict) and type(o.get("id")) is int}
+            if any(norm(name) not in actual_names for name in requested):
+                messagebox.showerror("옵션 검증 오류","CB 생성 후 옵션 ID를 재확인하지 못했습니다.",parent=dlg)
+                return
+            mapping={k:actual_names[norm(v)] for k,v in mapping.items()}
+            spec=entry["rows"][source]["spec"]
+            spec["value_mapping"]=mapping
+            spec["choice_options_verified"]=True
+            spec.pop("selection_unverified",None)
+            spec.pop("missing_definition",None)
+            wizard.state.save("wizard","plan",wizard.plan)
             append_log("Choice 옵션 확정",str(source)+" → CB "+str(fid)+
                        " · 옵션 "+str(len(mapping))+"개 연결")
-            # The actual selected Choice FieldValue and options were read by
-            # Field ID from this Tracker, not inferred from a similarly named
-            # pre-existing CB field.
-            entry["rows"][source]["spec"]["choice_options_verified"]=True
-            entry["rows"][source]["spec"].pop("selection_unverified",None)
-            entry["rows"][source]["spec"].pop("missing_definition",None)
-            wizard.state.save("wizard","plan",wizard.plan)
             dlg.destroy()
             refresh()
-        ttk.Button(dlg,text="옵션 매핑 확정",command=save_choices).pack(
-            side="right",padx=16,pady=12)
+        ttk.Button(dlg,text="옵션 매핑 확정 / 없는 옵션 생성",
+                   command=save_choices).pack(side="right",padx=16,pady=12)
 
     def field_diagnostics(source, candidates=None):
         import json
