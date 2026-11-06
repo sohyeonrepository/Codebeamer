@@ -23,6 +23,12 @@ def normalize(field):
                   'DecimalFieldValue':'Decimal','BooleanFieldValue':'Boolean','DateFieldValue':'Date',
                   'DateTimeFieldValue':'Datetime','DatetimeFieldValue':'Datetime'}
         if model in models: result['typeName'] = models[model]
+        elif model == 'ChoiceFieldValue':
+            reference=field.get('referenceType')
+            if reference == 'ChoiceOptionReference':
+                result['typeName'] = 'Choice'
+            elif reference == 'UserReference':
+                result['typeName'] = 'User'
     if type(field.get('multipleValues')) is bool: result['multipleSelection'] = field['multipleValues']
     return result
 
