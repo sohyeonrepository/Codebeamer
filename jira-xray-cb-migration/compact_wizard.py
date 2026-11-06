@@ -460,6 +460,43 @@ def launch(wizard, projects):
         ttk.Button(dlg,text="옵션 매핑 확정",command=save_choices).pack(
             side="right",padx=16,pady=12)
 
+    def field_diagnostics(source, candidates=None):
+        import json
+        from pathlib import Path
+        from migration.field_semantics import jira_field_semantics
+        scope=current_scope()
+        entry=wizard.plan["scopes"][scope]
+        info=entry["analysis"]["fields"].get(source,{})
+        kind,multiple,evidence=jira_field_semantics(info)
+        candidates=candidates if candidates is not None else wizard.mapping_candidates(scope,source)
+        report={
+            "scope":scope,"jira_field_id":source,"jira_name":info.get("name"),
+            "jira_schema":info.get("schema"),"jira_allowed_values":info.get("allowedValues"),
+            "jira_kind":kind,"jira_multiple":multiple,"classification_evidence":evidence,
+            "observed_value_shapes":[type(v).__name__ for v in
+                 entry["analysis"].get("values",{}).get(source,[])[:12]],
+            "current_target_id":(entry["rows"].get(source,{}).get("spec") or {}).get("field_id"),
+            "candidates":[{"field_id":field_identifier(c["field"]),
+                           "name":c["field"].get("label") or c["field"].get("name"),
+                           "type":c["field"].get("type"),
+                           "typeName":c["field"].get("typeName"),
+                           "valueModel":c["field"].get("valueModel"),
+                           "referenceType":c["field"].get("referenceType"),
+                           "multipleSelection":c["field"].get("multipleSelection"),
+                           "multipleValues":c["field"].get("multipleValues"),
+                           "hidden":hidden(c["field"]),"reason":c.get("reason") or "호환"}
+                          for c in candidates]}
+        output=Path(wizard.state.root)/"field-mapping-diagnostic.json"
+        output.parent.mkdir(parents=True,exist_ok=True)
+        output.write_text(json.dumps(report,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+        append_log("필드 상세",str(source)+" · Jira "+str(kind)+
+                   ("/multi" if multiple else "/single")+
+                   " · 후보 "+str(len(candidates))+"개 · "+str(output))
+        if source.casefold()=="labels":
+            append_log("Labels 진단","source ID="+str(info.get("id"))+
+                       " · schema="+str(info.get("schema"))[:200])
+        return report
+
     def open_target_dropdown(source):
         if editor[0] is not None:
             editor[0].destroy()
@@ -470,12 +507,15 @@ def launch(wizard, projects):
         from migration.wizard import target_fields
         entry=wizard.plan["scopes"][scope]
         entry["target_fields"]=target_fields(wizard.cb,entry["tracker"])
-        candidates = [c for c in wizard.mapping_candidates(scope, source) if not hidden(c["field"])]
+        all_candidates=wizard.mapping_candidates(scope,source)
+        field_diagnostics(source,all_candidates)
+        candidates=[c for c in all_candidates if not hidden(c["field"])]
         choices = ["— 대상 미지정 —"]
         for candidate in candidates:
             field = candidate["field"]
             name = field.get("label") or field.get("name") or "Field"
-            choices.append(str(name) + " · ID " + str(field_identifier(field)))
+            warning=" [확인 필요: "+str(candidate["reason"])[:55]+"]" if candidate.get("reason") else ""
+            choices.append(str(name) + " · ID " + str(field_identifier(field)) + warning)
         choices.append("＋ 신규 필드 생성…")
         bounds = table.bbox(source, "cb")
         if not bounds:
@@ -503,7 +543,14 @@ def launch(wizard, projects):
                               "description" if source == "description" else
                               "cb_field_" + str(fid))
                 def connect():
-                    wizard.manual_mapping(scope,source,fid,target_key,{})
+                    try:
+                        wizard.manual_mapping(scope,source,fid,target_key,{})
+                    except Exception as exc:
+                        append_log("필드 연결 거부",str(source)+" → CB "+str(fid)+" · "+str(exc))
+                        field_diagnostics(source)
+                        raise
+                    append_log("필드 연결 성공",str(source)+" → CB "+str(fid)+
+                               " · CB type="+str(field.get("typeName") or field.get("type")))
                     refresh()
                     kind=semantic_type(field)[0]
                     if (kind in ("option","status") or
