@@ -31,6 +31,8 @@ def error_classification(error):
     """Classify predictable failures without recording potentially sensitive raw text."""
     import re
     message = str(error)
+    if isinstance(getattr(error,'safe_verification',None),dict):
+        return 'POST_READBACK_MISMATCH', 'An Item was created but its Jira Key or Name did not match GET readback'
     if 'Unconfigured API capability:' in message:
         return 'UNCONFIGURED_API_CAPABILITY', 'An API operation was called without a Swagger-backed capability binding'
     if 'Source fields/values changed' in message:
@@ -72,6 +74,8 @@ def safe_exception_details(error):
         summary = 'Source Choice options unavailable'
     elif 'FieldValue schema unverified' in message:
         summary = 'FieldValue write contract unavailable'
+    elif isinstance(getattr(error,'safe_verification',None),dict):
+        summary = 'POST returned an Item ID; Jira Key or Name readback mismatch'
     else:
         summary = 'Exception message shown only in Wizard UI'
     return {'summary': summary, 'frames': frames}
@@ -128,6 +132,9 @@ def write_diagnostic(wizard, stage, error, field_id=None, issue_scope=None, repo
         'stage': stage, 'error_type': type(error).__name__,
         'error_code': error_code, 'error_detail': error_detail,
         'exception': safe_exception_details(error),
+        # Schema-based, value-free evidence attached at the exact failure site.
+        'post_write_verification': getattr(error,'safe_verification',None)
+            if isinstance(getattr(error,'safe_verification',None),dict) else None,
         'last_codebeamer_api_call': getattr(wizard.cb, 'last_api_call', None),
         'configured_codebeamer_capabilities': sorted(str(k) for k in
               wizard.cb.config.get('operations', {})),
