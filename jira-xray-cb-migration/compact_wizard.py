@@ -573,9 +573,11 @@ def launch(wizard, projects):
                     refresh()
                     kind=semantic_type(field)[0]
                     if (kind in ("option","status") or
-                        field.get("referenceType")=="ChoiceOptionReference" or
-                        str(field.get("valueModel") or "").startswith("ChoiceFieldValue")):
+                        field.get("referenceType")=="ChoiceOptionReference"):
                         option_mapping_popup(source)
+                    elif kind=="user" or field.get("referenceType")=="UserReference":
+                        append_log("User 연결",str(source)+" → CB "+str(fid)+
+                                   " · 같은 로그인 ID의 사용자만 자동 연결; 미확인 사용자는 수동 지정 필요")
                 guarded("기존 필드 연결",connect)
         dropdown.bind("<<ComboboxSelected>>", changed)
         dropdown.bind("<Escape>", lambda event: (dropdown.destroy(), editor.__setitem__(0, None)))
