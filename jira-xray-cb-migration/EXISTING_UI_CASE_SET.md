@@ -1,21 +1,28 @@
-# Existing RUN_WINDOWS.bat: Test Set / Test Case mapping in the same UI
+# RUN_WINDOWS.bat — unified Test Set/Test Case UI
 
-**Updated compact Wizard** (`compact_wizard.py`) now includes a Test Set/Test Case mapping preview panel in Step 2. You do not open `RUN_BATCH_CASE_SET.bat`, re-enter CB account credentials, or manually type Codebeamer project/Tracker numeric IDs.
+**Use the existing `RUN_WINDOWS.bat` only.** The old experimental `RUN_BATCH_CASE_SET.bat`, `START_TEST_SET.bat`, and standalone Python commands remain in the branch for developer/debug purposes but are **not** the user workflow.
 
-1. Start `RUN_WINDOWS.bat`.
-2. Login in the existing connection screen (Jira token, CB username/password). No credentials are copied into config or state.
-3. In **1. 프로젝트 연결**, select Jira project and Codebeamer project, then choose Jira **Test Set** and its existing Codebeamer Tracker, click **연결 저장**. To preview Test Case, choose **Test** and its existing CB Test Case Tracker instead.
-4. Open **2. 데이터 가져오기**. Under **Test Set / Test Case · 제공한 매핑 파일**, click **자동으로 1건 조회 (GET)** to choose the first available Issue automatically, or enter a known Jira Issue Key and click **매핑 Config 미리보기 (POST 없음)**.
-5. In **3. Import 결과 / 로그**, review each source field, target field, presence of source values, and unverified contracts.
+## UI workflow
 
-The existing **실제 Import 실행…** button now explicitly warns Test Set/Test Case users that it does NOT consume the entire supplied JSON mapping.\n\nThe new preview reads the provided mapping JSON files, Jira Issue and CB Tracker config using the **same authenticated wizard.jira.http / wizard.cb.http clients**. It does not use `config.local.json` credentials again and does not require an independent CLI or subprocess. It explicitly indicates that this is **not** full coverage and does not write any Items.
+1. **RUN_WINDOWS.bat** opens the original Jira Token / Codebeamer username/password connection window. The Wizard keeps both authenticated clients in memory.
+2. **1. 프로젝트 연결**: choose Jira project + CB project. Choose Jira `Test Set` and its existing CB Test Set Tracker, click **연결 저장**. Repeat for Jira `Test` and its CB Test Case Tracker. No numeric ID entry is needed; the UI dropdown holds the real selected IDs.
+3. **2. 데이터 가져오기**: under `Test Set / Test Case · 제공한 매핑 파일`, click **Test Set + Test Case 매핑 한번에 검수 (GET만)**. This automatically selects up to one Jira Issue from each connected kind (Test Set first, Test second), loads `mappings/test_set.mapping.json` and `mappings/test_case.mapping.json`, fetches target tracker configuration, and reports source/target field coverage. No POST, PUT or PATCH.
+4. **3. Import 결과 / 로그**: see the per-field mapping status. Unsupported fields are marked for additional validation; this report never means full migration is ready.
+5. For an *existing proven limited Item smoke*, choose the desired single type/Tracker from the registered scope dropdown; in step 2 enter a Jira Key or leave blank to use first available issue, then click **선택한 유형 1건 생성 테스트 (부분 범위)**. A confirmation dialog explicitly states that only Name, Description, and a verified single Text Jira Key field are written. The actual POST uses `migration.simple_item_import.run` and existing Wizard-authenticated clients, including full Tracker Jira Key duplicate lookup. If the selected target has a `Wiki Link/URL` (not Text) Jira Key field, this smoke refuses the write instead of inventing a payload.
+6. The **전체 이관** button remains disabled until every nonempty mapped field and separate relation/child work has validated write and readback contracts, as well as a safe resume story.
 
-**Important:** The compact Wizard's existing **실제 Import 실행…** button is still its original separately validated single-Issue engine, **not** the new batch/full-mapping engine. Do not assume that clicking it performs every row of the Test Set/Test Case JSON. The new mapping preview is deliberately GET-only until missing contracts, user/choice/reference mappings and existing-item reconciliation have been verified against the target server.
+### Behavior when source data is empty
 
-For local logic tests:
+Read-only review shows empty source values separately from supported write contracts. A nullable mapped field is **not** evidence its API payload is supported. Do not report full coverage or consider unsupported field values imported.
+
+### Existing button caveat
+
+The original **실제 Import 실행…** button is unchanged. It uses checked Wizard fields and `simple_item_import`, **not** a full import driven by the supplied mapping files. For `Test Set` and `Test`, it displays a scope warning before any action.
+
+### Developer test
 
 ```bat
 python -m unittest discover -s tests -p test_connected_case_set.py -v
 ```
 
-Existing `RUN_WINDOWS.bat` entry point and authentication/project-selection behavior are preserved.
+Live Jira/CB tests have not been run in this assistant session. Tests added to the repository are regression definitions, not proof of live success.
