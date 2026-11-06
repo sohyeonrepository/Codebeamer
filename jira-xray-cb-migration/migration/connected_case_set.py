@@ -136,3 +136,36 @@ def coverage_summary(report):
             "pending":len(unresolved),
             "blockers":list(report.get("blockers",[])),
             "full_migration_ready":False}
+
+
+def run_one_smoke(wizard, scope, key, progress=None):
+    """Reuse already tested single-Item engine inside existing connected UI.
+
+    This is explicitly a *partial Name/Description + Jira Key smoke*, not a
+    user-mapping full import. Original wizard plan and config are not modified.
+    """
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from migration.simple_item_import import run
+    kind,project,tracker=selected_scope(wizard,scope)
+    if not isinstance(key,str) or not key.startswith(project+"-"):
+        raise ApiError("Jira Issue Key가 선택한 프로젝트와 일치하지 않습니다.")
+    # A read-only field check is required before authorizing a smoke write.
+    report=preview(wizard,scope,key)
+    if report["blockers"]:
+        raise ApiError("사전 검수에서 기본 매핑 오류 발생: "+"; ".join(report["blockers"][:3]))
+    entry=deepcopy(wizard.plan["scopes"][scope])
+    entry["rows"]={
+        "summary":{"selected":True},
+        "description":{"selected":True},
+    }
+    config=deepcopy(wizard.config)
+    config.setdefault("jira",{})["single_issue_key"]=key
+    limited=SimpleNamespace(
+        plan={"scopes":{scope:entry}},
+        jira=wizard.jira,cb=wizard.cb,state=wizard.state,config=config
+    )
+    result=run(limited,progress=progress)
+    result["coverage"]="SMOKE_ONLY_NAME_DESCRIPTION_JIRA_KEY"
+    result["full_migration_complete"]=False
+    return result
