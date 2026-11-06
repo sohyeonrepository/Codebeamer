@@ -569,6 +569,14 @@ def launch(wizard, projects):
 
     ttk.Button(case_set_controls, text="매핑 Config 미리보기 (POST 없음)",
                command=lambda: guarded("Test Set/Case 매핑 미리보기", preview_case_set_mapping)).pack(side="left")
+    def auto_preview_case_set():
+        from migration.connected_case_set import first_issue_key
+        key = first_issue_key(wizard, current_scope())
+        case_set_issue_key.set(key)
+        preview_case_set_mapping()
+
+    ttk.Button(case_set_controls, text="자동으로 1건 조회 (GET)",
+               command=lambda: guarded("Test Set/Case 1건 자동 미리보기", auto_preview_case_set)).pack(side="left", padx=8)
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
