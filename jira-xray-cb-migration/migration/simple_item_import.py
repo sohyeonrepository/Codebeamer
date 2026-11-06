@@ -286,8 +286,12 @@ def run(wizard, *, progress=None):
         selected_id=(row.get("spec") or {}).get("field_id")
         if type(selected_id) is not int or selected_id not in indexed:
             raise ApiError("필드 "+selected_field+": 대상 실제 CB Field ID를 선택하세요.")
+        source_kind=semantic_type(entry["analysis"]["fields"].get(selected_field,{}),True)[0]
         if (not indexed[selected_id].get("valueModel") or
+                source_kind=="user" or
                 str(indexed[selected_id].get("valueModel") or "").startswith("ChoiceFieldValue") and
+                not indexed[selected_id].get("referenceType") or
+                indexed[selected_id].get("referenceType")=="ChoiceOptionReference" and
                 not isinstance(indexed[selected_id].get("options"),list)):
             try:
                 detail=wizard.cb.http.request("GET",
