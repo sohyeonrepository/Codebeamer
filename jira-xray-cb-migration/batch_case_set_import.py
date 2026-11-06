@@ -212,6 +212,12 @@ def main(argv=None):
             old = events.get(key)
             if old is not None:
                 if old.get("status") == "VERIFIED":
+                    if args.execute and args.capture_relations:
+                        append_event(manifest, {"jira":key,"cb":old["cb"],"relations":relations})
+                    if args.execute and args.capture_children:
+                        captured = source_children(jira,key)
+                        append_event(children_manifest, {"jira":key,"cb":old["cb"],**captured,
+                                                         "status":"SOURCE_CAPTURED_NOT_IMPORTED"})
                     skipped += 1
                     print(json.dumps({"jira":key,"status":"SKIPPED_VERIFIED","cb":old.get("cb")}),
                           flush=True)
@@ -246,6 +252,11 @@ def main(argv=None):
             append_event(journal, {"jira":key,"tracker":args.tracker_id,
                                    "status":"POST_RETURNED","cb":item_id})
             verify_item(cb, item_id, payload)
+            if args.capture_relations:
+                append_event(manifest, {"jira":key,"cb":item_id,"relations":relations})
+            if args.capture_children:
+                append_event(children_manifest, {"jira":key,"cb":item_id,**child_records,
+                                                 "status":"SOURCE_CAPTURED_NOT_IMPORTED"})
             append_event(journal, {"jira":key,"tracker":args.tracker_id,
                                    "status":"VERIFIED","cb":item_id})
             events[key] = {"jira":key,"status":"VERIFIED","cb":item_id}
