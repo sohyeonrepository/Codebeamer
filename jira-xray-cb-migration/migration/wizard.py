@@ -823,6 +823,19 @@ class ImportWizard:
         if kind=='reference':
             spec['deferred_reference']=True
             spec.pop('missing_definition',None)
+        if (kind=='user' and target_kind=='user' and
+                target.get('referenceType')=='UserReference' and
+                str(target.get('valueModel') or '').startswith('ChoiceFieldValue') and
+                type(target_multiple) is bool):
+            # User values are resolved by account identity during Import;
+            # unlike Choice, users do not have a tracker option list.
+            missing=spec.get('missing_definition') or []
+            remaining=[key for key in missing if key not in ('typeId','mandatory','options','reference')]
+            if remaining:
+                spec['missing_definition']=remaining
+            else:
+                spec.pop('missing_definition',None)
+            spec['user_identity_lookup']=True
         if source == 'components': spec['source_identity'] = 'id'
         # Choice option mapping is supplied in the compact UI immediately
         # after choosing the target field. Do not reject an empty mapping
