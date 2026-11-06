@@ -25,10 +25,12 @@ set /p USERS=Include User/Assignee mappings? ^(Y/N; default N^):
 if /I "%USERS%"=="Y" set "EXTRA=%EXTRA% --include-users"
 set /p REL=Capture Xray relations for phase 2? ^(Y/N; default N^):
 if /I "%REL%"=="Y" set "EXTRA=%EXTRA% --capture-relations"
+set /p CHILDREN=Capture comments and attachment metadata for later import? ^(Y/N; default N^):
+if /I "%CHILDREN%"=="Y" set "EXTRA=%EXTRA% --capture-children"
 if "%EXEC%"=="1" (
  echo WARNING: This sends real POST requests to Codebeamer.
  echo IMPORTANT: Choice/User only when selected; comments, attachments, relation writes and history are NOT included.
- echo This is a PARTIAL mapping import; comments, attachments, system fields and relations are not written.
+ echo This is a PARTIAL Item write. Children and Test Set membership are separate scripts.
  set /p PARTIAL=Type PARTIAL to accept incomplete migration:
  if /I not "!PARTIAL!"=="PARTIAL" exit /b 2
  set /p CONFIRM=Retype Jira project key to confirm:
