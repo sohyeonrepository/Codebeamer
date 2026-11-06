@@ -333,9 +333,31 @@ def run(wizard, *, progress=None):
         identity_value=wiki_link(wizard.config["jira"]["url"],key)
     else:
         identity_value=key
+    # CB's native Assigned to is an explicit TrackerItem property, not a
+    # customFields entry. The live Field Detail identifies this via
+    # trackerItemField=assignedTo. Never infer native behavior from ID=5.
+    native_fields={}
+    custom_extras=[]
+    for value in extras:
+        definition=indexed.get(value["fieldId"]) or {}
+        native=definition.get("trackerItemField")
+        if native=="assignedTo":
+            if (definition.get("referenceType")!="UserReference" or
+                    value.get("type")!="ChoiceFieldValue" or
+                    not isinstance(value.get("values"),list)):
+                raise ApiError("Assigned to 필드의 UserReference 쓰기 계약 불일치")
+            if "assignedTo" in native_fields:
+                raise ApiError("Assigned to 중복 매핑")
+            native_fields["assignedTo"]=value
+            log("User 필드 요청","Assigned to → Item.assignedTo · CB Field ID "+
+                str(value["fieldId"])+" · User ID "+
+                ",".join(str(ref["id"]) for ref in value["values"]))
+        else:
+            custom_extras.append(value)
     payload = {"name": summary,
                "customFields": [{"fieldId": field_id, "type": identity["type"],
-                                 "value":identity_value}]+extras}
+                                 "value":identity_value}]+custom_extras,
+               **native_fields}
     if "description" in selected and description is not None:
         payload["description"] = description
     if "summary" not in selected:
@@ -360,26 +382,63 @@ def run(wizard, *, progress=None):
     if "description" in payload and actual.get("description") != description:
         raise ApiError("생성된 Item의 Description 확인 실패. CB Item ID " + str(item_id))
     actual_custom=actual.get("customFields")
-    if extras and not isinstance(actual_custom,list):
+    if custom_extras and not isinstance(actual_custom,list):
         raise ApiError("CB Item "+str(item_id)+" 생성 후 customFields GET 누락; 확인 필요")
     actual_by_id={v.get("fieldId"):v for v in (actual_custom or [])
                   if isinstance(v,dict)}
+
+    def observed_ids(data):
+        if isinstance(data,dict):
+            refs=data.get("values")
+        elif isinstance(data,list):
+            refs=data
+        else:
+            return None
+        if not isinstance(refs,list):
+            return None
+        if any(not isinstance(ref,dict) or type(ref.get("id")) is not int for ref in refs):
+            return None
+        return sorted(ref["id"] for ref in refs)
+
     missing=[]
     for requested in extras:
-        received=actual_by_id.get(requested["fieldId"])
-        if not isinstance(received,dict):
-            missing.append(requested["fieldId"])
-        elif requested["type"]=="ChoiceFieldValue":
-            expected_ids=sorted(v["id"] for v in requested["values"])
-            actual_refs=received.get("values")
-            if (not isinstance(actual_refs,list) or
-                sorted(ref.get("id") for ref in actual_refs if isinstance(ref,dict))!=expected_ids):
-                missing.append(requested["fieldId"])
-        elif received.get("value")!=requested["value"]:
-            missing.append(requested["fieldId"])
+        fid=requested["fieldId"]
+        definition=indexed.get(fid) or {}
+        native=definition.get("trackerItemField")
+        received=actual.get(native) if native=="assignedTo" else actual_by_id.get(fid)
+        # A server may mirror a native field in customFields. Verify its
+        # authoritative native property first and do not confuse a missing
+        # customFields entry with lost data.
+        if received is None and native=="assignedTo":
+            received=actual_by_id.get(fid)
+        if requested["type"]=="ChoiceFieldValue":
+            expected_ids=observed_ids(requested)
+            found_ids=observed_ids(received)
+            if expected_ids is None or found_ids!=expected_ids:
+                missing.append({"field_id":fid,"location":native or "customFields",
+                                "expected_user_ids":expected_ids,
+                                "observed_user_ids":found_ids,
+                                "observed_shape":type(received).__name__})
+                log("필드 불일치",str(fid)+" · "+
+                    str(native or "customFields")+" · 요청 ID="+str(expected_ids)+
+                    " · 실제 ID="+str(found_ids)+
+                    " · 응답 형식="+type(received).__name__)
+            else:
+                log("필드 검증 성공",str(fid)+" · "+str(native or "customFields")+
+                    " · 참조 ID="+str(found_ids))
+        elif not isinstance(received,dict) or received.get("value")!=requested.get("value"):
+            missing.append({"field_id":fid,"location":native or "customFields",
+                            "observed_shape":type(received).__name__})
+            log("필드 불일치",str(fid)+" · "+
+                str(native or "customFields")+" · 값/응답 형식 불일치")
     if missing:
+        _journal(journal, {"jira": key, "status": "RECONCILIATION_REQUIRED",
+                           "cb": item_id, "tracker": tracker,
+                           "missing_fields":missing})
         raise ApiError("CB Item "+str(item_id)+" 생성 후 추가 필드 불일치 "+
-                       str(len(missing))+"건. 재시도 전 서버 확인 필요")
+                       str(len(missing))+"건: "+
+                       ", ".join(str(m["field_id"])+"/"+m["location"] for m in missing)+
+                       ". 재POST하지 말고 서버에서 확인하세요.")
     record = {"jira": key, "status": "CREATED", "cb": item_id, "tracker": tracker}
     _journal(journal, record)
     log("Item 생성 성공", key + " → CB Item " + str(item_id))
