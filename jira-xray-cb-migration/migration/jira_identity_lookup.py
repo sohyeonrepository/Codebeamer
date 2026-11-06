@@ -194,6 +194,31 @@ def identity_field(cb, fields, verified_template_binding=None):
     return {"field_id": identifier, "binding": contract, "payload_key": "cb_field_" + str(identifier)}
 
 
+
+def canonical_jira_identity(value):
+    """Recognize a plain Jira Key, the earlier successful WikiText link,
+    or a browse URL. Do not guess identity from arbitrary wiki prose."""
+    import re
+    if not isinstance(value,str):
+        raise ApiError("JIRA_LOOKUP_NON_TEXT: Jira Key 저장 값이 문자열이 아닙니다.")
+    value=value.strip()
+    if not value:
+        return None
+    key_pattern=r"[A-Za-z][A-Za-z0-9_]*-[0-9]+"
+    if re.fullmatch(key_pattern,value):
+        return value
+    wiki=re.fullmatch(r"\\[("+key_pattern+r")\\|https?://[^\\]\\s]+/browse/\\1/?\\]",value)
+    if wiki:
+        return wiki.group(1)
+    url=re.fullmatch(r"https?://[^\\s]+/browse/("+key_pattern+r")/?",value)
+    if url:
+        return url.group(1)
+    # Unrecognized format is not evidence of a different key. Abort the
+    # full scan instead of claiming that a matching Item does not exist.
+    raise ApiError("JIRA_LOOKUP_IDENTITY_FORMAT: Jira Key 필드에 예상하지 못한 " 
+                   "WikiText/URL 형식이 있습니다. 중복 안전 확인 전 POST 금지.")
+
+
 def item_identity(item, field_id):
     """Read exactly one FieldValue from a complete GET /items/{id} response."""
     if not isinstance(item, dict) or type(item.get("id")) is not int:
@@ -218,7 +243,7 @@ def item_identity(item, field_id):
         return None
     if not isinstance(value, str):
         raise ApiError("JIRA_LOOKUP_NON_TEXT: Jira Key 필드의 응답이 문자열이 아닙니다.")
-    return value
+    return canonical_jira_identity(value)
 
 
 def lookup_by_jira_key(cb, tracker_id, jira_key, field_id, page_size=100, index_cache=None):
