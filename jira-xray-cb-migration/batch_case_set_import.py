@@ -15,6 +15,7 @@ from test_case_set_post import MAPPINGS, mapped_payload, resolve_direct_fields, 
 from migration.option_batch import prepare_options, choice_rows, add_options
 from migration.user_batch import user_rows, prepare_users, add_users
 from migration.phase2_manifest import extract_relations
+from mapping_helper import field_identifier
 
 
 def load_events(path):
@@ -31,6 +32,30 @@ def load_events(path):
             if key:
                 events[key] = event
     return events
+
+
+def enrich_direct_field_types(cb, tracker, configuration_fields, mapping):
+    """Read missing Text/WikiText metadata once, outside the issue loop."""
+    if not isinstance(configuration_fields, list):
+        raise ApiError("CB configuration field list missing")
+    needed = {row["cb"]["label"].casefold() for row in mapping["phase_1"]
+              if row.get("mode") == "direct" and row["jira"] not in ("summary", "description")}
+    enriched = []
+    for field in configuration_fields:
+        row = dict(field) if isinstance(field, dict) else field
+        if isinstance(row, dict) and str(row.get("label") or row.get("name") or "").casefold() in needed:
+            if not row.get("typeName") and not row.get("valueModel"):
+                identifier = field_identifier(row)
+                if type(identifier) is not int:
+                    raise ApiError("CB field metadata missing internal ID")
+                detail = cb.request("GET", f"/v3/trackers/{tracker}/fields/{identifier}")
+                if not isinstance(detail,dict) or detail.get("id") != identifier:
+                    raise ApiError("CB field detail ID mismatch")
+                row.update(detail)
+                # Preserve the configuration's exact displayed label for matching.
+                row["label"] = field.get("label") or field.get("name") or detail.get("name")
+        enriched.append(row)
+    return enriched
 
 
 def search_page(jira, project_key, kind, field_names, offset, size):
@@ -131,6 +156,7 @@ def main(argv=None):
     columns = list(dict.fromkeys(columns))
     configuration = cb.request("GET", f"/v3/tracker/{args.tracker_id}/configuration")
     cb_fields = configuration.get("fields") if isinstance(configuration, dict) else None
+    cb_fields = enrich_direct_field_types(cb, args.tracker_id, cb_fields, mapping)
     resolved = resolve_direct_fields(cb_fields, mapping)
     option_bindings = prepare_options(cb, args.tracker_id, cb_fields, mapping) if args.include_options else {}
     user_bindings = prepare_users(cb, args.tracker_id, cb_fields, mapping) if args.include_users else {}
