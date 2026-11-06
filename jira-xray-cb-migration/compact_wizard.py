@@ -448,7 +448,12 @@ def launch(wizard, projects):
                     return
                 mapping[identity]=target
             entry["rows"][source]["spec"]["value_mapping"]=mapping
+            # The actual selected Choice FieldValue and options were read by
+            # Field ID from this Tracker, not inferred from a similarly named
+            # pre-existing CB field.
+            entry["rows"][source]["spec"]["choice_options_verified"]=True
             entry["rows"][source]["spec"].pop("selection_unverified",None)
+            entry["rows"][source]["spec"].pop("missing_definition",None)
             wizard.state.save("wizard","plan",wizard.plan)
             dlg.destroy()
             refresh()
