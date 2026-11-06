@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from clients.http import ApiError
 from post_smoke_test import append_event, configured_jira_key_field, make_http, resolve_wikitext_field
 from test_case_set_post import MAPPINGS, mapped_payload, resolve_direct_fields, source_field_names
+from migration.option_batch import prepare_options, choice_rows, add_options
 
 
 def load_events(path):
@@ -58,14 +59,20 @@ def verify_item(cb, item_id, payload):
         raise ApiError("Item POST returned but Name GET verification failed; ID " + str(item_id))
     if "description" in payload and actual.get("description") != payload["description"]:
         raise ApiError("Item POST returned but Description GET verification failed; ID " + str(item_id))
-    expected = {row["fieldId"]: row["value"] for row in payload.get("customFields", [])}
+    expected = {row["fieldId"]: row.get("value") for row in payload.get("customFields", []) if row.get("type") != "ChoiceFieldValue"}
+    expected_choices = {row["fieldId"]: {v["id"] for v in row["values"]} for row in payload.get("customFields", []) if row.get("type") == "ChoiceFieldValue"}
     found = actual.get("customFields")
-    if expected and not isinstance(found, list):
+    if (expected or expected_choices) and not isinstance(found, list):
         raise ApiError("Item GET omitted customFields; ID " + str(item_id))
     observed = {field.get("fieldId"): field.get("value") for field in found or []
                 if isinstance(field, dict)}
     if any(observed.get(field_id) != value for field_id, value in expected.items()):
         raise ApiError("Item custom fields verification failed; ID " + str(item_id))
+    for field_id, ids in expected_choices.items():
+        choice = next((f for f in found if isinstance(f,dict) and f.get("fieldId")==field_id), None)
+        actual_values = choice.get("values") if isinstance(choice,dict) else None
+        if not isinstance(actual_values,list) or {v.get("id") for v in actual_values if isinstance(v,dict)} != ids:
+            raise ApiError("Item Choice options verification failed; ID " + str(item_id))
 
 
 def main(argv=None):
@@ -79,6 +86,7 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=0, help="0=all matching source issues")
     parser.add_argument("--prompt-auth", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--include-options", action="store_true", help="Also migrate mapped Choice/Option fields by exact target option names")
     parser.add_argument("--confirm-project", help="Required for writes: exact Jira project key")
     args = parser.parse_args(argv)
     if args.tracker_id <= 0 or not 1 <= args.batch_size <= 100 or args.limit < 0:
@@ -101,8 +109,13 @@ def main(argv=None):
     cb = make_http(config["codebeamer"], state / "cb-requests.jsonl", prompt_auth=args.prompt_auth)
 
     columns = ["summary", "description", "issuetype", "project"] + source_field_names(mapping)
+    if args.include_options:
+        columns += [row["jira"].split(".")[0] for row in choice_rows(mapping)]
+    columns = list(dict.fromkeys(columns))
     configuration = cb.request("GET", f"/v3/tracker/{args.tracker_id}/configuration")
-    resolved = resolve_direct_fields(configuration.get("fields") if isinstance(configuration, dict) else None, mapping)
+    cb_fields = configuration.get("fields") if isinstance(configuration, dict) else None
+    resolved = resolve_direct_fields(cb_fields, mapping)
+    option_bindings = prepare_options(cb, args.tracker_id, cb_fields, mapping) if args.include_options else {}
     link_id = None
     if args.kind == "case":
         registration = configured_jira_key_field(config)
@@ -114,7 +127,8 @@ def main(argv=None):
                       "issue_type":MAPPINGS[args.kind][1],
                       "source_project":args.jira_project, "target_tracker":args.tracker_id,
                       "mapped_text_fields":source_field_names(mapping),
-                      "out_of_scope":"Choice/User, Comments, Attachments, Relations, Test Run, History"},
+                      "mapped_choice_fields":[row["cb"]["label"] for row in choice_rows(mapping)] if args.include_options else [],
+                      "out_of_scope":"User, unsupported Choice / work-config, Comments, Attachments, Relations, Test Run, History"},
                      ensure_ascii=False), flush=True)
     visited = set()
     while True:
@@ -151,6 +165,9 @@ def main(argv=None):
                                ". Inspect Codebeamer and journal before retrying.")
             payload = mapped_payload(mapping, src, resolved, jira_url=config["jira"]["url"],
                                      jira_key=key, link_field_id=link_id)
+            if args.include_options:
+                overrides = config.get("migration", {}).get("option_name_mapping", {}).get(args.kind, {})
+                add_options(payload, src, mapping, option_bindings, overrides)
             if not args.execute:
                 print(json.dumps({"jira":key,"status":"READY",
                                   "field_count":len(payload.get("customFields", []))},
