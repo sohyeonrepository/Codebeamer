@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "issue_type": "Test",
+  "target_tracker": "CONFIGURED_IN_UI",
+  "default_behavior": "skip_unmapped",
+  "phase_1": [
+    {
+      "jira": "summary",
+      "cb": {
+        "label": "Name",
+        "registration": "name",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "ready"
+    },
+    {
+      "jira": "description",
+      "cb": {
+        "label": "Description",
+        "registration": "description",
+        "type": "WikiText"
+      },
+      "mode": "direct",
+      "status": "ready"
+    },
+    {
+      "jira": "customfield_19102",
+      "cb": {
+        "label": "[TC] ID",
+        "registration": "customField[74]",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19807",
+      "cb": {
+        "label": "[TC] RB-Test Environments",
+        "registration": "customField[75]",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19809",
+      "cb": {
+        "label": "[TC] RB-Test Output",
+        "registration": "customField[77]",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19808",
+      "cb": {
+        "label": "[TC] RB-Test Script",
+        "registration": "customField[76]",
+        "type": "Text"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19805",
+      "cb": {
+        "label": "시험 방법",
+        "registration": "customField[14]",
+        "type": "WikiText"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19804",
+      "cb": {
+        "label": "시험 전 조건",
+        "registration": "customField[13]",
+        "type": "WikiText"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "customfield_19806",
+      "cb": {
+        "label": "판정 조건",
+        "registration": "customField[15]",
+        "type": "WikiText"
+      },
+      "mode": "direct",
+      "status": "pending_post_validation"
+    },
+    {
+      "jira": "assignee",
+      "cb": {
+        "label": "Assigned to",
+        "registration": "assignedTo",
+        "type": "Members"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "priority.name",
+      "cb": {
+        "label": "Jira Priority",
+        "registration": "choiceList[17]",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "components",
+      "cb": {
+        "label": "Components",
+        "registration": "choiceList[14]",
+        "type": "Choice / work/config"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "labels",
+      "cb": {
+        "label": "Labels",
+        "registration": "choiceList[18]",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "customfield_17552",
+      "cb": {
+        "label": "Squad",
+        "registration": "choiceList[13]",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "security",
+      "cb": {
+        "label": "Security Level",
+        "registration": "choiceList[15]",
+        "type": "Choice"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    },
+    {
+      "jira": "reporter.name",
+      "cb": {
+        "label": "Reporter",
+        "registration": "choiceList[16]",
+        "type": "Choice / User"
+      },
+      "mode": "mapped",
+      "status": "pending_value_mapping"
+    }
+  ],
+  "special": [
+    {
+      "jira": "key",
+      "cb": {
+        "label": "Jira Key",
+        "type": "WikiText",
+        "registration": "SET_ACTUAL_REGISTRATION"
+      },
+      "mode": "jira_issue_link",
+      "status": "ready_if_field_exists"
+    },
+    {
+      "jira": "created",
+      "cb": {
+        "label": "Submitted at",
+        "registration": "submittedAt",
+        "type": "Date"
+      },
+      "mode": "system_field",
+      "status": "pending_write_contract"
+    },
+    {
+      "jira": "updated",
+      "cb": {
+        "label": "Modified at",
+        "registration": "modifiedAt",
+        "type": "Date"
+      },
+      "mode": "system_field",
+      "status": "pending_write_contract"
+    },
+    {
+      "jira": "comment",
+      "cb": {
+        "label": "Comment",
+        "registration": "attachments"
+      },
+      "mode": "comment_api",
+      "status": "pending_api_validation"
+    },
+    {
+      "jira": "attachment",
+      "cb": {
+        "label": "Attachment",
+        "registration": "attachments"
+      },
+      "mode": "attachment_api",
+      "status": "pending_api_validation"
+    }
+  ],
+  "phase_2": [
+    {
+      "jira": "customfield_17770",
+      "cb": {
+        "label": "Test Sets",
+        "registration": "choiceList[19]",
+        "type": "Choice / work/config"
+      },
+      "mode": "xray_membership",
+      "status": "pending_relationship_design"
+    },
+    {
+      "jira": "customfield_17772",
+      "cb": {
+        "label": "Test Plans",
+        "registration": "choiceList[20]",
+        "type": "Choice / work/config"
+      },
+      "mode": "xray_membership",
+      "status": "pending_relationship_design"
+    },
+    {
+      "jira": "xray:test_runs",
+      "mode": "test_run",
+      "status": "pending_execution_api"
+    }
+  ]
+}
