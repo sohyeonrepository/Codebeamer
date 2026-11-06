@@ -85,3 +85,17 @@ def preview(wizard, scope, key):
             "tracker":tracker,"mapped_fields":coverage,"blockers":blockers,
             "direct_payload_fields":list(direct_payload or {}),
             "complete":False,"note":"이번 버튼은 원본/대상 GET과 매핑 검수만 수행하며 POST하지 않습니다."}
+
+
+def first_issue_key(wizard, scope):
+    """Auto-select one Jira Issue of the user-selected project/type (read-only)."""
+    from batch_case_set_import import search_page
+    kind,project,_=selected_scope(wizard,scope)
+    issues,total=search_page(wizard.jira.http,project,kind,
+                            ["summary","issuetype","project"],0,1)
+    if total==0 or not issues:
+        raise ApiError("선택한 Jira 프로젝트/Issue Type에 조회 가능한 이슈가 없습니다.")
+    key=issues[0].get("key") if isinstance(issues[0],dict) else None
+    if not isinstance(key,str) or not key.startswith(project+"-"):
+        raise ApiError("Jira 자동 선택 결과의 Issue Key가 잘못되었습니다.")
+    return key
