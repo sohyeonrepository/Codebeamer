@@ -194,6 +194,13 @@ def launch(wizard, projects):
     filter_box = ttk.Combobox(toolbar, textvariable=filter_var, state="readonly", width=24,
                               values=["현재 사용 중인 필드", "전체 필드"])
     filter_box.pack(side="left")
+    ttk.Label(toolbar,text="필드 검색").pack(side="left",padx=(12,4))
+    field_search=tk.StringVar()
+    search_box=ttk.Entry(toolbar,textvariable=field_search,width=25)
+    search_box.pack(side="left")
+    ttk.Label(toolbar,text="Jira Issue Key").pack(side="left",padx=(12,4))
+    import_issue_key=tk.StringVar()
+    ttk.Entry(toolbar,textvariable=import_issue_key,width=20).pack(side="left")
     shown_count = tk.StringVar(value="0개")
     ttk.Label(toolbar, textvariable=shown_count).pack(side="left", padx=12)
     ttk.Button(toolbar, text="필드 다시 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(side="right", padx=5)
@@ -233,6 +240,13 @@ def launch(wizard, projects):
             info = entry["analysis"]["fields"].get(source, {})
             if filter_var.get() == "현재 사용 중인 필드" and not used_field(info):
                 continue
+            needle=field_search.get().strip().casefold()
+            if needle and needle not in " ".join((
+                str(source),str(info.get("name") or ""),
+                str((row.get("target") or {}).get("label") or ""),
+                str((row.get("target") or {}).get("name") or "")
+            )).casefold():
+                continue
             target = row.get("target") or {}
             if row.get("creation"):
                 target_name = str(row["creation"].get("label", source)) + " (신규 생성 예정)"
@@ -247,6 +261,18 @@ def launch(wizard, projects):
 
     def analyze():
         scope = current_scope()
+        from migration.simple_item_import import _field
+        tracker=wizard.plan["scopes"][scope].get("tracker")
+        if type(tracker) is not int:
+            raise ValueError("기존 CB Tracker를 먼저 연결하세요.")
+        try:
+            jira_key_id=_field(wizard.cb,tracker)
+        except Exception as exc:
+            raise ValueError("선택한 CB Tracker에 Jira Key 필드를 사용하세요. "+
+                             "Jira Key 단일 Text 필드를 생성/활성화한 뒤 다시 데이터 가져오기를 실행하세요. "+
+                             "상세: "+str(exc)) from None
+        append_log("Jira Key 확인","Tracker "+str(tracker)+
+                   " · Jira Key Field ID "+str(jira_key_id))
         wizard.analyze(scope)
         # The user's default is always unchecked after collecting source fields.
         wizard.select_all_fields(scope, False)
@@ -255,6 +281,7 @@ def launch(wizard, projects):
 
     ttk.Button(project_tab, text="완료 · 데이터 가져오기", command=lambda: guarded("필드 분석", analyze)).pack(anchor="w", pady=8)
     filter_box.bind("<<ComboboxSelected>>", lambda event: guarded("필드 필터", refresh))
+    field_search.trace_add("write",lambda *_: refresh() if active_scope[0] in wizard.plan.get("scopes",{}) and "rows" in wizard.plan["scopes"][active_scope[0]] else None)
 
     def toggle(source):
         scope = current_scope()
@@ -413,108 +440,59 @@ def launch(wizard, projects):
         count = sum(bool(r.get("selected")) for r in rows().values())
         messagebox.showinfo("매핑 저장", str(count) + "개 필드가 선택되었습니다.\n실제 변경은 별도 Import 승인이 있어야 수행됩니다.")
 
-    def verify_selected_mappings():
-        from migration.selected_field_validation import validate_selected
-        scope=current_scope()
-        key=case_set_issue_key.get().strip()
-        if not key:
-            from migration.connected_case_set import first_issue_key
-            key=first_issue_key(wizard,scope)
-            case_set_issue_key.set(key)
-        report=validate_selected(wizard,scope,key)
-        tabs.select(result_tab)
-        append_log("선택 필드 실서버 검증", key + " · Tracker "+str(report["tracker"]) +
-                   " · GET만 사용 / POST 없음")
-        for item in report["rows"]:
-            append_log(item["verdict"],item["source"]+" → "+item["target"]+
-                       " / CB field "+str(item["cb_field_id"])+
-                       " / "+item["reason"])
-        append_log("검증 요약","GET 검증 "+str(report["get_verified"])+
-                   "개, 미검증/차단 "+str(report["blocked"])+
-                   "개, 쓰기 "+str(report["writes"])+"건")
-        status.set("선택 필드 서버 GET 검증 완료 · 실제 POST는 실행하지 않음")
-
     def import_approved():
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from migration.simple_item_import import run as import_one
+        scope = current_scope()
+        key = import_issue_key.get().strip()
+        if not key:
+            raise ValueError("1차 Import할 Jira Issue Key를 입력하세요.")
+        selected = [source for source,row in rows().items() if row.get("selected",False)]
+        if "summary" not in selected:
+            raise ValueError("Summary → Name 필드를 선택하세요.")
+        entry=wizard.plan["scopes"][scope]
+        project=entry["project"]
+        if not key.startswith(project+"-"):
+            raise ValueError("선택한 Jira 프로젝트의 Issue Key를 입력하세요.")
+        # Verify the reserved, unique Jira Key field BEFORE user approval.
+        from migration.simple_item_import import _field
+        _field(wizard.cb,entry["tracker"])
+        if not messagebox.askyesno("1차 데이터 실제 Import",
+                "Jira "+key+" → 기존 CB Tracker "+str(entry["tracker"])+"\\n"
+                "선택 필드 "+str(len(selected))+"개를 실제 POST할 수 있습니다.\\n"
+                "기존 Jira Key가 있으면 신규 생성하지 않습니다.\\n\\n"
+                "Text/WikiText 이외의 미지원 필드는 POST 전 차단합니다. 계속할까요?"):
+            return
         tabs.select(result_tab)
-        previous_stage_count = len(wizard.plan.get("stages", []))
-        def log_identity_stages():
-            for scope_key in wizard.plan.get("scopes", {}):
-                evidence = wizard.state.load("wizard-identity-resolution", scope_key)
-                if isinstance(evidence, dict):
-                    append_log("Jira Key 판정", str(scope_key) + " · " +
-                               str(evidence.get("status", "미확인")) + " · Field ID " +
-                               str(evidence.get("field_id", "생성 전")))
-            for entry in wizard.plan.get("stages", [])[previous_stage_count:]:
-                name = str(entry.get("stage") or "")
-                result = entry.get("result") or {}
-                if name.startswith("identity-field:") and isinstance(result,dict):
-                    append_log("Jira Key 필드", "생성 후 조회 확인 · CB Field ID " +
-                               str(result.get("field_id", "미확인")))
-                elif name.startswith("identity-ready:") and isinstance(result,dict):
-                    append_log("Jira Key 전달", "검증 완료 · Tracker " +
-                               str(result.get("tracker_id", "미확인")) +
-                               " / Field ID " + str(result.get("jira_key_field_id", "미확인")))
-        
-        append_log("Import", "사용자 승인 대기")
+        append_log("1차 Import","Jira "+key+" · 필드 "+str(len(selected))+"개 · 실제 POST")
+        for source in selected:
+            spec=rows()[source].get("spec") or {}
+            append_log("필드 선택",source+" → "+str(spec.get("target") or spec.get("field_id") or "기본 필드"))
+        settings=deepcopy(wizard.config)
+        settings.setdefault("jira",{})["single_issue_key"]=key
+        # One selected type per write; other saved mappings remain untouched.
+        limited=SimpleNamespace(plan={"scopes":{scope:deepcopy(entry)}},
+                  config=settings,jira=wizard.jira,cb=wizard.cb,state=wizard.state)
         try:
-            scope = current_scope()
-            # Fail before approval when the selected fields exceed the proven
-            # legacy 1-issue smoke engine's scope. Do not accept confirmation
-            # then fail mysteriously at simple_item_import.py:83.
-            selected = [(field, row) for field, row in rows().items()
-                        if row.get("selected", False)]
-            unsupported = [field for field, _ in selected
-                           if field not in ("summary", "description")]
-            if unsupported:
-                append_log("Import 사전검사", "기존 엔진의 미지원 필드: " +
-                           ", ".join(unsupported))
-                append_log("조치", "체크를 임의로 해제하지 마세요. " +
-                           "전체 매핑은 아직 이관 불가하며 " +
-                           "Test Set/Case 매핑 검수 버튼을 사용하세요.")
-                messagebox.showwarning(
-                    "이관 차단 · 선택 필드가 미지원",
-                    "현재 '실제 Import 실행'은 Summary/Description/Jira Key만 지원합니다.\\n\\n"
-                    "선택한 미지원 필드: " + ", ".join(unsupported) +
-                    "\\n\\n체크 해제로 데이터를 누락시키지 마세요. " +
-                    "Test Set/Case 매핑 검수를 먼저 진행하세요.")
-                return
-            name = (wizard.plan["scopes"][scope].get("type") or {}).get("name")
-            if name in ("Test", "Test Set") and not messagebox.askyesno(
-                    "제한된 1건 테스트",
-                    "기존 엔진은 전체 매핑을 사용하지 않습니다.\\n"
-                    "Name/Description/Jira Key(Text)만 처리하는\\n"
-                    "1건 테스트를 진행할까요?"):
-                return
-            append_log("범위", str(scope) + " · 체크된 필드 " + str(len(selected)) + "개")
-            for name, row in selected:
-                spec = row.get("spec") or {}
-                target = (row.get("creation") or {}).get("label") or spec.get("target") or "매핑 확인 필요"
-                append_log("매핑", name + " → " + target)
-            review = wizard.visibility_review()
-            if not messagebox.askyesno("실제 Import 승인",
-                "선택한 Jira Issue 1건을 기존 Codebeamer Tracker에 생성합니다.\n기존 Jira Key가 있으면 중복 생성하지 않습니다. 계속할까요?"):
-                append_log("Import", "사용자가 실행을 취소했습니다.")
-                return
-            append_log("Import", "단일 Issue 빠른 생성 경로 시작 · 신규 Tracker/필드 생성 없음")
-            from migration.simple_item_import import run as run_simple_item_import
-            report = run_simple_item_import(wizard, progress=append_log)
+            report=import_one(limited,progress=append_log)
             summarize_report(report)
+            status.set("1차 Import: "+("완료" if report.get("complete") else "미완료")+
+                       " · CB 조회 검증 결과를 확인하세요.")
         except Exception as exc:
-            log_identity_stages()
-            from migration.diagnostics import safe_exception_details, write_diagnostic
-            details = safe_exception_details(exc)
-            frames = details.get("frames") or []
+            from migration.diagnostics import safe_exception_details,write_diagnostic
+            details=safe_exception_details(exc)
+            frames=details.get("frames") or []
             if frames:
-                frame = frames[-1]
-                append_log("오류 호출 위치", str(frame.get("file")) + ":" +
-                           str(frame.get("line")) + " · " + str(frame.get("function")))
+                frame=frames[-1]
+                append_log("오류 위치",str(frame.get("file"))+":"+
+                           str(frame.get("line"))+" · "+str(frame.get("function")))
             try:
-                filepath = write_diagnostic(wizard, "Import", exc)
-                append_log("상세 진단", filepath)
-            except Exception as logging_error:
-                append_log("로그 저장 오류", type(logging_error).__name__)
-            append_log("Import 실패", str(exc) if isinstance(exc, Exception) else type(exc).__name__)
-            status.set("Import 실패: " + str(exc)[:250])
+                append_log("상세 로그",write_diagnostic(wizard,"Import",exc))
+            except Exception as log_exc:
+                append_log("로그 저장 실패",type(log_exc).__name__)
+            append_log("Import 실패",str(exc))
+            status.set("Import 실패: "+str(exc)[:250])
 
     def advanced():
         # The compact UI owns its own relation editor; never launch the legacy UI.
@@ -581,109 +559,6 @@ def launch(wizard, projects):
         ttk.Button(controls, text="관계 유형 조회", command=lambda: guarded("관계 조회", load_catalog)).pack(side="left")
         ttk.Button(controls, text="매핑 저장", command=lambda: guarded("관계 저장", save_relation)).pack(side="left", padx=10)
         ttk.Button(controls, text="닫기", command=dialog.destroy).pack(side="right")
-    # Reuse this Wizard's authenticated HTTP clients, Jira project and CB Tracker.
-    # Unlike the old external BAT, this requires no second login or numeric ID entry.
-    case_set_panel = ttk.LabelFrame(auto_tab, text="Test Set / Test Case · 제공한 매핑 파일", padding=8)
-    case_set_panel.pack(fill="x", pady=(7, 2))
-    ttk.Label(case_set_panel,
-              text="STEP 1에서 Test Set 또는 Test Case(Test)와 Tracker를 연결한 뒤, Jira Issue Key 한 건으로 매핑을 확인합니다. GET만 사용합니다.",
-              wraplength=950).pack(anchor="w", pady=(0, 5))
-    case_set_controls = ttk.Frame(case_set_panel)
-    case_set_controls.pack(fill="x")
-    ttk.Label(case_set_controls, text="Jira Issue Key").pack(side="left")
-    case_set_issue_key = tk.StringVar()
-    ttk.Entry(case_set_controls, textvariable=case_set_issue_key, width=27).pack(side="left", padx=(6, 10))
-
-    def preview_case_set_mapping():
-        from migration.connected_case_set import preview
-        scope = current_scope()
-        key = case_set_issue_key.get().strip()
-        if not key:
-            raise ValueError("테스트할 Jira Issue Key를 입력하세요. 예: STGVSTAR-2715")
-        report = preview(wizard, scope, key)
-        tabs.select(result_tab)
-        append_log("Test Set/Case 미리보기", str(report["kind"]) + " · " +
-                   report["jira_key"] + " → Tracker " + str(report["tracker"]))
-        for row in report["mapped_fields"]:
-            append_log("필드 매핑", row["source"] + " → " + row["target"] +
-                       " · " + row["stage"] +
-                       (" · 값 있음" if row["non_null"] else " · 원본 값 없음"))
-        for error in report["blockers"]:
-            append_log("확인 필요", error)
-        append_log("쓰기", "0건 · 연결된 기존 UI 인증 사용 · 전체 매핑 검수만 실행")
-        status.set("Test Set/Case 미리보기 완료 · 실제 생성 없음 · 확인 필요 " +
-                   str(len(report["blockers"])) + "건")
-
-    ttk.Button(case_set_controls, text="매핑 Config 미리보기 (POST 없음)",
-               command=lambda: guarded("Test Set/Case 매핑 미리보기", preview_case_set_mapping)).pack(side="left")
-    def auto_preview_case_set():
-        from migration.connected_case_set import first_issue_key
-        key = first_issue_key(wizard, current_scope())
-        case_set_issue_key.set(key)
-        preview_case_set_mapping()
-
-    ttk.Button(case_set_controls, text="자동으로 1건 조회 (GET)",
-               command=lambda: guarded("Test Set/Case 1건 자동 미리보기", auto_preview_case_set)).pack(side="left", padx=8)
-    def preview_set_case_together():
-        from migration.connected_case_set import preview_both, coverage_summary
-        reports=preview_both(wizard)
-        tabs.select(result_tab)
-        append_log("매핑 일괄 검수", "연결된 Test Set → Test Case 순서로 Jira 1건씩 GET 조회")
-        for report in reports:
-            summary=coverage_summary(report)
-            append_log("선택된 유형", str(report["kind"]) + " · " + report["jira_key"] +
-                       " → Tracker " + str(report["tracker"]))
-            append_log("매핑 파일", "전체 " + str(summary["total"]) +
-                       "개 / 기본 변환 후보 " + str(summary["direct_candidates"]) +
-                       "개 / 추가 계약 검증 " + str(summary["pending"]) + "개")
-            for row in report["mapped_fields"]:
-                append_log("매핑", row["source"] + " → " + row["target"] +
-                           " : " + row["stage"] +
-                           (" (값 있음)" if row["non_null"] else " (원본 null/없음)"))
-            for err in summary["blockers"]:
-                append_log("오류", err)
-        append_log("이관 제한", "쓰기 0건 · 미검증 매핑이 남아 있어 전체 Import는 비활성화")
-        status.set("Test Set / Test Case 매핑 검수 완료 · 실제 생성 없음 · 상세 내용은 Import 결과 / 로그")
-        return reports
-
-    ttk.Button(case_set_panel, text="Test Set + Test Case 매핑 한번에 검수 (GET만)",
-               command=lambda: guarded("Test Set / Test Case 매핑 일괄 검수",
-                                       preview_set_case_together)).pack(anchor="w", pady=(7, 0))
-    def run_case_set_one_smoke():
-        from migration.connected_case_set import selected_scope, first_issue_key, run_one_smoke
-        scope=current_scope()
-        kind,project,tracker=selected_scope(wizard,scope)
-        key=case_set_issue_key.get().strip()
-        if not key:
-            key=first_issue_key(wizard,scope)
-            case_set_issue_key.set(key)
-        if not messagebox.askyesno("1건 테스트 범위 확인",
-            "Jira "+key+" → CB Tracker "+str(tracker)+"\\n\\n"
-            "실제 Item 1건을 POST할 수 있습니다.\\n"
-            "범위: Name, Description, Jira Key(Text)만 처리합니다.\\n"
-            "기타 제공 매핑, Comment, Attachment, 관계는 이 테스트에서 제외됩니다.\\n\\n"
-            "Jira Key 중복 조회 후 진행합니다. 계속할까요?"):
-            append_log("1건 테스트", "사용자가 취소했습니다.")
-            return
-        tabs.select(result_tab)
-        append_log("1건 테스트", "기존 인증과 기존 단일 Item POST 엔진 재사용")
-        report=run_one_smoke(wizard,scope,key,progress=append_log)
-        summarize_report(report)
-        append_log("범위 경고", "Name/Description/Jira Key만 검증. 제공 매핑 전체 이관 완료 아님.")
-        status.set("1건 테스트 종료 · " + key + " · 전체 매핑 이관은 아직 차단")
-
-    ttk.Button(case_set_panel, text="선택한 유형 1건 생성 테스트 (부분 범위)",
-               command=lambda: guarded("Test Set/Case 1건 생성 테스트",
-                                       run_case_set_one_smoke)).pack(anchor="w", pady=(6, 0))
-    full_notice=ttk.Frame(case_set_panel)
-    full_notice.pack(fill="x", pady=(6, 0))
-    ttk.Button(full_notice, text="전체 이관 (매핑 검증 전 비활성화)",
-               state="disabled").pack(side="left")
-    ttk.Label(full_notice, text="Work/config·시스템 필드·첨부·관계 포함 전체 계약 검증 후 활성화",
-              foreground="#aa5700").pack(side="left", padx=10)
-
-
-    ttk.Button(buttons, text="선택 필드 API 검증 (GET)", command=lambda: guarded("선택 필드 API 검증", verify_selected_mappings)).pack(side="left", padx=6)
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
