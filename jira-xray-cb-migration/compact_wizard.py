@@ -372,6 +372,89 @@ def launch(wizard, projects):
         ttk.Button(content, text="취소", command=window.destroy).pack(side="right", padx=10, pady=8)
         window.protocol("WM_DELETE_WINDOW", window.destroy)
 
+    def option_mapping_popup(source):
+        from migration.option_batch import norm
+        scope=current_scope()
+        entry=wizard.plan["scopes"][scope]
+        row=entry["rows"][source]
+        spec=row.get("spec") or {}
+        fid=spec.get("field_id")
+        if type(fid) is not int:
+            raise ValueError("먼저 CB Choice 대상 필드를 선택하세요.")
+        tracker=entry["tracker"]
+        detail=wizard.cb.http.request("GET",
+            "/v3/trackers/"+str(tracker)+"/fields/"+str(fid))
+        if not isinstance(detail,dict) or detail.get("id")!=fid or (
+                detail.get("referenceType")!="ChoiceOptionReference" or
+                not str(detail.get("valueModel") or "").startswith("ChoiceFieldValue") or
+                not isinstance(detail.get("options"),list)):
+            raise ValueError("CB Choice 필드 옵션 상세를 읽을 수 없습니다. Field ID "+str(fid))
+        options=[o for o in detail["options"] if isinstance(o,dict) and
+                 type(o.get("id")) is int and isinstance(o.get("name"),str)]
+        if not options:
+            raise ValueError("CB 대상 Choice 옵션이 비어 있습니다. 먼저 옵션을 생성하세요.")
+        info=entry["analysis"]["fields"].get(source,{})
+        from mapping_helper import source_choices
+        observed=list(entry["analysis"].get("values",{}).get(source,[]))
+        allowed=info.get("allowedValues") or []
+        if isinstance(allowed,list):observed.extend(allowed)
+        jira_values=source_choices(observed)
+        if not jira_values:
+            raise ValueError("Jira 원본 옵션값을 확인할 수 없습니다. Jira 필드 데이터를 조회하세요.")
+        dlg=tk.Toplevel(root)
+        dlg.title("Choice 옵션 매핑 · "+str(source))
+        dlg.geometry("690x540")
+        dlg.transient(root)
+        dlg.grab_set()
+        ttk.Label(dlg,text="Jira 원본 옵션 → CB 대상 옵션",
+                  font=("",14,"bold")).pack(anchor="w",padx=16,pady=(15,4))
+        ttk.Label(dlg,text="같은 이름의 옵션도 선택값을 확인하세요. 기존 필드는 수정하지 않습니다.",
+                  wraplength=640).pack(anchor="w",padx=16,pady=(0,10))
+        outer=ttk.Frame(dlg)
+        outer.pack(fill="both",expand=True,padx=16)
+        canvas=tk.Canvas(outer,highlightthickness=0)
+        bar=ttk.Scrollbar(outer,orient="vertical",command=canvas.yview)
+        inner=ttk.Frame(canvas)
+        inner.bind("<Configure>",lambda e:canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0),window=inner,anchor="nw")
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left",fill="both",expand=True)
+        bar.pack(side="right",fill="y")
+        option_names=[o["name"] for o in options]
+        saved=dict(spec.get("value_mapping") or {})
+        edits={}
+        for i,(identity,label) in enumerate(jira_values.items()):
+            ttk.Label(inner,text=str(label)+"  ["+str(identity)+"]",width=40).grid(
+                row=i,column=0,sticky="w",pady=4)
+            variable=tk.StringVar()
+            wanted=saved.get(identity,saved.get(label,label))
+            if wanted in option_names:
+                variable.set(wanted)
+            selector=ttk.Combobox(inner,values=option_names,state="readonly",
+                                  textvariable=variable,width=34)
+            selector.grid(row=i,column=1,sticky="w",pady=4)
+            edits[identity]=variable
+        def save_choices():
+            mapping={}
+            for identity,variable in edits.items():
+                target=variable.get()
+                if target not in option_names:
+                    messagebox.showerror("옵션 미매핑",
+                        "Jira 값 "+str(identity)+"의 CB 옵션을 지정하세요.",parent=dlg)
+                    return
+                if sum(norm(o["name"])==norm(target) for o in options)!=1:
+                    messagebox.showerror("중복 옵션",
+                        "CB 옵션 이름이 중복되어 ID를 확정할 수 없습니다: "+target,parent=dlg)
+                    return
+                mapping[identity]=target
+            entry["rows"][source]["spec"]["value_mapping"]=mapping
+            entry["rows"][source]["spec"].pop("selection_unverified",None)
+            wizard.state.save("wizard","plan",wizard.plan)
+            dlg.destroy()
+            refresh()
+        ttk.Button(dlg,text="옵션 매핑 확정",command=save_choices).pack(
+            side="right",padx=16,pady=12)
+
     def open_target_dropdown(source):
         if editor[0] is not None:
             editor[0].destroy()
@@ -409,9 +492,13 @@ def launch(wizard, projects):
                 target_key = ("name" if source == "summary" else
                               "description" if source == "description" else
                               "cb_field_" + str(fid))
-                guarded("기존 필드 연결",
-                        lambda: (wizard.manual_mapping(scope, source, fid, target_key, {}),
-                                 refresh()))
+                def connect():
+                    wizard.manual_mapping(scope,source,fid,target_key,{})
+                    refresh()
+                    kind=semantic_type(field)[0]
+                    if kind in ("option","status") or str(field.get("valueModel") or "").startswith("ChoiceFieldValue"):
+                        option_mapping_popup(source)
+                guarded("기존 필드 연결",connect)
         dropdown.bind("<<ComboboxSelected>>", changed)
         dropdown.bind("<Escape>", lambda event: (dropdown.destroy(), editor.__setitem__(0, None)))
 
@@ -433,6 +520,13 @@ def launch(wizard, projects):
     buttons.pack(fill="x", pady=10)
     ttk.Button(buttons, text="보이는 필드 전체 체크", command=lambda: guarded("전체 선택", lambda: select_visible(True))).pack(side="left")
     ttk.Button(buttons, text="보이는 필드 체크 해제", command=lambda: guarded("전체 해제", lambda: select_visible(False))).pack(side="left", padx=8)
+    def map_selected_options():
+        selected=table.selection()
+        if not selected:
+            raise ValueError("옵션을 매핑할 Jira 필드 행을 먼저 클릭하세요.")
+        option_mapping_popup(selected[0])
+    ttk.Button(buttons,text="선택 필드 옵션 매핑",
+               command=lambda: guarded("Choice 옵션 매핑",map_selected_options)).pack(side="left",padx=8)
 
     def import_approved():
         from copy import deepcopy
