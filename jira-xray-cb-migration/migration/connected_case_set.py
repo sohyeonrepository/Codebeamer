@@ -99,3 +99,40 @@ def first_issue_key(wizard, scope):
     if not isinstance(key,str) or not key.startswith(project+"-"):
         raise ApiError("Jira 자동 선택 결과의 Issue Key가 잘못되었습니다.")
     return key
+
+
+def linked_scopes(wizard):
+    """Return only currently mapped real Test Set/Test Case scopes, in import order."""
+    choices={}
+    for scope in wizard.plan.get("scopes",{}):
+        try:
+            kind,project,tracker=selected_scope(wizard,scope)
+        except ApiError:
+            continue
+        if kind in choices:
+            raise ApiError("동일 Jira Issue Type이 중복 연결되었습니다: "+kind)
+        choices[kind]=scope
+    return [(kind,choices[kind]) for kind in ("set","case") if kind in choices]
+
+
+def preview_both(wizard):
+    """Read at most one issue from each selected type, no new credentials or writes."""
+    scopes=linked_scopes(wizard)
+    if not scopes:
+        raise ApiError("1. 프로젝트 연결에서 Test Set과 Test Case(Test)의 Tracker를 연결하세요.")
+    reports=[]
+    for kind,scope in scopes:
+        key=first_issue_key(wizard,scope)
+        reports.append(preview(wizard,scope,key))
+    return reports
+
+
+def coverage_summary(report):
+    """Expose missing full-migration contracts, never describe a partial preview as ready."""
+    rows=report.get("mapped_fields",[])
+    unresolved=[r for r in rows if r.get("stage")!="기본값 변환 확인"]
+    return {"total":len(rows),
+            "direct_candidates":sum(r.get("stage")=="기본값 변환 확인" for r in rows),
+            "pending":len(unresolved),
+            "blockers":list(report.get("blockers",[])),
+            "full_migration_ready":False}
