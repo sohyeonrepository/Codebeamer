@@ -13,6 +13,7 @@ from clients.http import ApiError
 from post_smoke_test import append_event, configured_jira_key_field, make_http, resolve_wikitext_field
 from test_case_set_post import MAPPINGS, mapped_payload, resolve_direct_fields, source_field_names
 from migration.option_batch import prepare_options, choice_rows, add_options
+from migration.user_batch import user_rows, prepare_users, add_users
 
 
 def load_events(path):
@@ -68,6 +69,11 @@ def verify_item(cb, item_id, payload):
                 if isinstance(field, dict)}
     if any(observed.get(field_id) != value for field_id, value in expected.items()):
         raise ApiError("Item custom fields verification failed; ID " + str(item_id))
+    if "assignedTo" in payload:
+        actual_assigned = actual.get("assignedTo")
+        expected_ids = {v["id"] for v in payload["assignedTo"]["values"]}
+        if not isinstance(actual_assigned, list) or {v.get("id") for v in actual_assigned if isinstance(v,dict)} != expected_ids:
+            raise ApiError("Item Assigned to verification failed; ID " + str(item_id))
     for field_id, ids in expected_choices.items():
         choice = next((f for f in found if isinstance(f,dict) and f.get("fieldId")==field_id), None)
         actual_values = choice.get("values") if isinstance(choice,dict) else None
@@ -87,6 +93,7 @@ def main(argv=None):
     parser.add_argument("--prompt-auth", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--include-options", action="store_true", help="Also migrate mapped Choice/Option fields by exact target option names")
+    parser.add_argument("--include-users", action="store_true", help="Resolve mapped Jira users by Codebeamer username, without creating accounts")
     parser.add_argument("--confirm-project", help="Required for writes: exact Jira project key")
     args = parser.parse_args(argv)
     if args.tracker_id <= 0 or not 1 <= args.batch_size <= 100 or args.limit < 0:
@@ -111,11 +118,15 @@ def main(argv=None):
     columns = ["summary", "description", "issuetype", "project"] + source_field_names(mapping)
     if args.include_options:
         columns += [row["jira"].split(".")[0] for row in choice_rows(mapping)]
+    if args.include_users:
+        columns += [row["jira"].split(".")[0] for row in user_rows(mapping)]
     columns = list(dict.fromkeys(columns))
     configuration = cb.request("GET", f"/v3/tracker/{args.tracker_id}/configuration")
     cb_fields = configuration.get("fields") if isinstance(configuration, dict) else None
     resolved = resolve_direct_fields(cb_fields, mapping)
     option_bindings = prepare_options(cb, args.tracker_id, cb_fields, mapping) if args.include_options else {}
+    user_bindings = prepare_users(cb, args.tracker_id, cb_fields, mapping) if args.include_users else {}
+    user_cache = {}
     link_id = None
     if args.kind == "case":
         registration = configured_jira_key_field(config)
@@ -128,7 +139,8 @@ def main(argv=None):
                       "source_project":args.jira_project, "target_tracker":args.tracker_id,
                       "mapped_text_fields":source_field_names(mapping),
                       "mapped_choice_fields":[row["cb"]["label"] for row in choice_rows(mapping)] if args.include_options else [],
-                      "out_of_scope":"User, unsupported Choice / work-config, Comments, Attachments, Relations, Test Run, History"},
+                      "mapped_user_fields":[row["cb"]["label"] for row in user_rows(mapping)] if args.include_users else [],
+                      "out_of_scope":"Unsupported Choice / work-config, Comments, Attachments, Relations, Test Run, History"},
                      ensure_ascii=False), flush=True)
     visited = set()
     while True:
@@ -168,6 +180,9 @@ def main(argv=None):
             if args.include_options:
                 overrides = config.get("migration", {}).get("option_name_mapping", {}).get(args.kind, {})
                 add_options(payload, src, mapping, option_bindings, overrides)
+            if args.include_users:
+                overrides = config.get("migration", {}).get("user_name_mapping", {}).get(args.kind, {})
+                add_users(payload, src, mapping, user_bindings, cb, overrides, user_cache)
             if not args.execute:
                 print(json.dumps({"jira":key,"status":"READY",
                                   "field_count":len(payload.get("customFields", []))},
