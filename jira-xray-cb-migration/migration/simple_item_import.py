@@ -377,8 +377,28 @@ def run(wizard, *, progress=None):
         raise ApiError("POST 후 CB Item ID를 확인하지 못했습니다. 재실행 전 Jira Key 중복 조회가 필요합니다.")
     _journal(journal, {"jira": key, "status": "POST_RETURNED", "cb": item_id, "tracker": tracker})
     actual = wizard.cb.http.request("GET", "/v3/items/" + segment(item_id))
-    if item_identity(actual, field_id) != key or actual.get("name") != summary:
-        raise ApiError("생성된 Item의 Jira Key 또는 Name이 예상 값과 다릅니다. CB Item ID " + str(item_id))
+    observed_key=item_identity(actual, field_id)
+    observed_name=actual.get("name")
+    key_matches=observed_key==key
+    name_matches=observed_name==summary
+    if not key_matches or not name_matches:
+        # The POST has already returned an Item ID. Do not retry a create
+        # because readback differs: preserve the ID for reconciliation.
+        _journal(journal, {"jira":key,"cb":item_id,"tracker":tracker,
+                           "status":"POST_VERIFY_MISMATCH",
+                           "jira_key_matches":key_matches,
+                           "name_matches":name_matches})
+        log("POST 후 검증 불일치","CB Item ID "+str(item_id)+
+            " · Jira Key "+("일치" if key_matches else "불일치/누락")+
+            " · Name "+("일치" if name_matches else "불일치/누락")+
+            " · GET name type="+type(observed_name).__name__+
+            " · expected name length="+str(len(summary))+
+            " · observed name length="+
+            (str(len(observed_name)) if isinstance(observed_name,str) else "n/a"))
+        raise ApiError("POST는 Item ID "+str(item_id)+"로 반환됐으나 저장 후 검증 실패: "+
+                       ("Jira Key " if not key_matches else "")+
+                       ("Name " if not name_matches else "")+
+                       "불일치. 중복 생성 금지; 기존 Item의 실제 값을 확인하세요.")
     if "description" in payload and actual.get("description") != description:
         raise ApiError("생성된 Item의 Description 확인 실패. CB Item ID " + str(item_id))
     actual_custom=actual.get("customFields")
