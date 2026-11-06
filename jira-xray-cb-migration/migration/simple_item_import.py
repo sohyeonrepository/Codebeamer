@@ -14,11 +14,11 @@ from migration.wizard import semantic_type
 from urllib.parse import quote
 
 
-def _field(cb, tracker):
-    """Find the unique Jira Key Text field using both real CB read endpoints.
+def _identity_profile(cb, tracker):
+    """Find the unique Jira Key Text/WikiText field using both read endpoints.
 
     A missing Configuration display label does not mean the field is absent.
-    Never guess the field ID or silently accept a WikiText/URL field.
+    Never guess a Field ID or assume an unknown field model.
     """
     configuration=cb.configuration(tracker)
     configured=configuration.get("fields") if isinstance(configuration,dict) else None
@@ -74,17 +74,25 @@ def _field(cb, tracker):
     kind,multi=semantic_type(field)
     model=str(field.get("valueModel") or "").split("<",1)[0]
     explicit_type=str(field.get("typeName") or "")
-    if multi is True or model in ("WikiTextFieldValue","UrlFieldValue") or (
-            explicit_type.casefold() in ("wikitext","wiki link / url","url")):
-        raise ApiError("Jira Key 필드는 존재합니다 (Field ID "+str(field_id)+
-                       ") 그러나 타입이 "+str(explicit_type or model or kind)+
-                       "입니다. 현재 이관은 단일 Text만 지원합니다.")
-    if kind!="text" and model!="TextFieldValue":
-        raise ApiError("Jira Key 필드를 찾았습니다 (Field ID "+str(field_id)+
-                       ") 하지만 Text 타입을 확인할 수 없습니다. typeName="+
-                       repr(explicit_type)+", valueModel="+repr(model)+
-                       ". 대상 필드를 임의로 변경하지 않습니다.")
-    return field_id
+    if multi is True:
+        raise ApiError("Jira Key 필드는 단일값이어야 합니다 (Field ID "+str(field_id)+").")
+    typename=explicit_type.casefold()
+    if model=="WikiTextFieldValue" or typename in ("wikitext","wikitextfield"):
+        if model and model!="WikiTextFieldValue":
+            raise ApiError("Jira Key WikiText 타입 정보 불일치: "+model)
+        return {"field_id":field_id,"type":"WikiTextFieldValue","mode":"wiki"}
+    if model=="TextFieldValue" or typename in ("text","textfield"):
+        if model and model!="TextFieldValue":
+            raise ApiError("Jira Key Text 타입 정보 불일치: "+model)
+        return {"field_id":field_id,"type":"TextFieldValue","mode":"text"}
+    raise ApiError("Jira Key 필드는 찾았지만 Text/WikiText 타입을 확인하지 못했습니다. "+
+                   "Field ID "+str(field_id)+", typeName="+repr(explicit_type)+
+                   ", valueModel="+repr(model))
+
+
+def _field(cb,tracker):
+    """Original UI preflight compatibility: verified field ID."""
+    return _identity_profile(cb,tracker)["field_id"]
 
 def _read_issue(wizard, scope):
     key = wizard.config["jira"].get("single_issue_key")
@@ -188,8 +196,10 @@ def run(wizard, *, progress=None):
     if "summary" not in selected:
         raise ApiError("Summary → Name 필드를 반드시 선택하세요.")
 
-    field_id = _field(wizard.cb, tracker)
-    log("기존 Jira Key", "CB Field ID " + str(field_id) + " 재사용 (신규 생성 없음)")
+    identity=_identity_profile(wizard.cb,tracker)
+    field_id=identity["field_id"]
+    log("기존 Jira Key", "CB Field ID "+str(field_id)+
+        " · "+identity["type"]+" 재사용 (신규 생성 없음)")
     key, source_values = _read_selected_issue(wizard, scope, selected)
     summary, description = source_values["summary"],source_values.get("description")
     log("Jira 조회", key + " · 선택 필드 "+str(len(selected))+"개")
@@ -249,8 +259,14 @@ def run(wizard, *, progress=None):
 
     # A previous uncertain write cannot be blindly reissued. Reconciliation
     # above guarantees that an existing Jira Key will never be duplicated.
+    if identity["mode"]=="wiki":
+        from post_smoke_test import wiki_link
+        identity_value=wiki_link(wizard.config["jira"]["url"],key)
+    else:
+        identity_value=key
     payload = {"name": summary,
-               "customFields": [{"fieldId": field_id, "type": "TextFieldValue", "value": key}]+extras}
+               "customFields": [{"fieldId": field_id, "type": identity["type"],
+                                 "value":identity_value}]+extras}
     if "description" in selected and description is not None:
         payload["description"] = description
     if "summary" not in selected:
