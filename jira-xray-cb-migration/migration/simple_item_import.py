@@ -173,9 +173,26 @@ def _read_selected_issue(wizard, scope, selected):
     fields=issue.get("fields")
     if not isinstance(fields,dict):
         raise ApiError("Jira Issue fields 누락")
-    if str((fields.get("project") or {}).get("key"))+":"+str(
-            (fields.get("issuetype") or {}).get("id"))!=scope:
-        raise ApiError("선택 프로젝트/Issue Type과 Jira 이슈가 다릅니다.")
+    actual_project=(fields.get("project") or {}).get("key")
+    actual_type=fields.get("issuetype") or {}
+    expected_scope=wizard.plan["scopes"].get(scope) or {}
+    expected_project=expected_scope.get("project")
+    expected_type=expected_scope.get("type") or {}
+    # Compare the actual metadata, not only a string generated from the
+    # scope key. In particular, Jira Issue Type IDs must not be guessed from
+    # labels or confused with CB Tracker IDs.
+    if actual_project!=expected_project or str(actual_type.get("id"))!=str(expected_type.get("id")):
+        raise ApiError(
+            "Jira Issue 프로젝트/유형 불일치 · Jira "+key+
+            " 실제 프로젝트="+str(actual_project)+
+            ", Issue Type="+str(actual_type.get("name"))+
+            " (ID "+str(actual_type.get("id"))+")"+
+            " · 선택 프로젝트="+str(expected_project)+
+            ", Issue Type="+str(expected_type.get("name"))+
+            " (ID "+str(expected_type.get("id"))+")"+
+            " · Scope="+str(scope)+
+            ". 다른 유형이라면 Tracker 매핑을 변경하세요. POST는 실행하지 않았습니다."
+        )
     if not isinstance(fields.get("summary"),str) or not fields["summary"].strip():
         raise ApiError("Jira Summary 없음: Item 생성 불가")
     if fields.get("description") is not None and not isinstance(fields["description"],str):
