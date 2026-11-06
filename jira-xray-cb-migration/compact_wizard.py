@@ -337,7 +337,7 @@ def launch(wizard, projects):
         tracker_box = ttk.Combobox(content, state="readonly", width=56,
                                    values=[str(t["id"]) + " · " + t.get("name", "") for t in tracker_items])
         tracker_box.pack(anchor="w")
-        ttk.Label(content, text="Choice 필드는 확인 후 Tracker에 실제 생성하고 Field ID/Option ID를 조회합니다. 그 외 타입은 설정만 저장합니다.",
+        ttk.Label(content, text="Choice-Option/User는 승인 후 실제 필드 생성과 Field ID 검증을 진행합니다. User 계정 생성과는 별개입니다.",
                   wraplength=610).pack(anchor="w", pady=12)
 
         def save_new():
@@ -364,7 +364,7 @@ def launch(wizard, projects):
                 # The proposed name can already exist (for example, a prior
                 # create request succeeded but its local receipt was lost).
                 # Never create a duplicate or silently adopt an unrelated field.
-                if semantic in ("option","status"):
+                if semantic in ("option","status","user"):
                     from migration.wizard import target_fields,compatible
                     from migration.option_batch import norm
                     selected_name=label_var.get().strip()
@@ -376,16 +376,19 @@ def launch(wizard, projects):
                             raise ValueError("동일 이름의 CB 필드가 여러 개입니다. 수동 확인이 필요합니다: "+selected_name)
                         existing_field=same[0]
                         existing_id=field_identifier(existing_field)
+                        expected_ref="UserReference" if semantic=="user" else "ChoiceOptionReference"
+                        expected_kind="user" if semantic=="user" else "option"
                         if (type(existing_id) is not int or
-                            existing_field.get("referenceType")!="ChoiceOptionReference" or
+                            existing_field.get("referenceType")!=expected_ref or
                             not str(existing_field.get("valueModel") or "").startswith("ChoiceFieldValue") or
-                            not compatible("option",multi_var.get(),existing_field)):
-                            raise ValueError("동일 이름 CB 필드가 있지만 Choice-Option 타입/다중 설정이 다릅니다: "+
+                            not compatible(expected_kind,multi_var.get(),existing_field)):
+                            raise ValueError("동일 이름 CB 필드가 있지만 Choice 참조 유형/다중 설정이 다릅니다: "+
                                              selected_name+" · ID "+str(existing_id)+
                                              ". 덮어쓰거나 자동 재사용하지 않습니다.")
-                        if not messagebox.askyesno("기존 Choice 필드 확인",
-                            "CB에 동일 이름의 Choice-Option 필드가 존재합니다.\\n"+
+                        if not messagebox.askyesno("기존 필드 확인",
+                            "CB에 동일 이름의 Choice 필드가 존재합니다.\\n"+
                             "이름: "+selected_name+"\\nField ID: "+str(existing_id)+
+                            "\\n참조 유형: "+expected_ref+
                             "\\n다중 선택: "+str(multi_var.get())+
                             "\\n\\n새로 생성하지 않고 기존 필드에 연결할까요?",parent=window):
                             append_log("신규 Choice 중단",source+" · 같은 이름의 CB 필드 "+
@@ -402,16 +405,19 @@ def launch(wizard, projects):
                                    " · 동일 이름/타입/다중 확인; 신규 필드 생성 생략")
                         refresh()
                         window.destroy()
-                        option_mapping_popup(source)
+                        if semantic in ("option","status"):
+                            option_mapping_popup(source)
                         return
                 wizard.configure_creation(scope, source, label_var.get(), semantic,
                                           multi_var.get(), mapping, reference_tracker=reference_tracker)
                 wizard.select_field(scope, source, True)
-                if semantic in ("option","status"):
-                    if not messagebox.askyesno("신규 Choice 실제 생성",
+                if semantic in ("option","status","user"):
+                    detail_message=("와 옵션 "+str(len(set(mapping.values())))+"개" if semantic in ("option","status")
+                                    else " (Choice-UserReference, 사용자 계정 생성 아님)")
+                    if not messagebox.askyesno("신규 필드 실제 생성",
                         "CB Tracker "+str(entry["tracker"])+"에 신규 필드 '"+label_var.get()+
-                        "'와 옵션 "+str(len(set(mapping.values())))+
-                        "개를 실제 생성합니다. 계속할까요?",parent=window):
+                        "'"+detail_message+
+                        "를 실제 생성합니다. 계속할까요?",parent=window):
                         append_log("신규 Choice 계획 저장",source+" · 서버 변경 없음")
                         refresh()
                         window.destroy()
@@ -426,6 +432,25 @@ def launch(wizard, projects):
                         raise ValueError("신규 필드 실제 CB ID를 확인하지 못했습니다.")
                     actual=wizard.cb.http.request("GET",
                         "/v3/trackers/"+str(entry["tracker"])+"/fields/"+str(fid))
+                    if semantic=="user":
+                        if (not isinstance(actual,dict) or field_identifier(actual)!=fid or
+                            actual.get("referenceType")!="UserReference" or
+                            not str(actual.get("valueModel") or "").startswith("ChoiceFieldValue")):
+                            raise ValueError("생성된 필드가 Choice-UserReference가 아닙니다. 서버에서 확인하세요.")
+                        spec["target"]="cb_field_"+str(fid)
+                        spec["user_identity_lookup"]=True
+                        spec.pop("missing_definition",None)
+                        spec.pop("selection_unverified",None)
+                        entry["rows"][source].update(spec=spec,target=actual,
+                                                    mapping_mode="manual",status="mapped")
+                        entry["rows"][source].pop("creation",None)
+                        entry["rows"][source].pop("creation_saved",None)
+                        wizard.state.save("wizard","plan",wizard.plan)
+                        append_log("신규 User 필드 검증",source+" → CB "+str(fid)+
+                                   " · 사용자 자동 매핑 연결")
+                        refresh()
+                        window.destroy()
+                        return
                     existing={norm(o.get("name")):o for o in actual.get("options",[])
                               if isinstance(o,dict) and type(o.get("id")) is int}
                     if any(norm(name) not in existing for name in mapping.values()):
