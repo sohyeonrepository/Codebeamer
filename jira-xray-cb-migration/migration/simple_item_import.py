@@ -15,33 +15,76 @@ from urllib.parse import quote
 
 
 def _field(cb, tracker):
-    configuration = cb.configuration(tracker)
-    fields = configuration.get("fields")
-    if not isinstance(fields, list):
-        raise ApiError("기존 Tracker Configuration의 fields 목록을 읽을 수 없습니다.")
-    matches = [f for f in fields if isinstance(f, dict) and any(
-        normalized_jira_key_label(f.get(k)) == "jirakey" for k in ("label", "name"))]
-    if len(matches) != 1:
-        raise ApiError("대상 Tracker에 단일 Text 'jira key' 필드가 정확히 1개 필요합니다. "
-                       "발견: " + str(len(matches)) + ". UI에서 수동 생성하고 재시도하세요.")
-    field = matches[0]
-    field_id = field_identifier(field)
-    # Tracker Configuration often omits the semantic Text type. Use the
-    # existing Field list/detail for the SAME Field ID, not a guessed typeId.
-    if type(field_id) is int and not field.get("typeName") and not field.get("valueModel"):
-        listed = cb.fields(tracker)
-        if not isinstance(listed, list):
-            raise ApiError("기존 Jira Key의 필드 타입을 조회하지 못했습니다.")
-        matching = [f for f in listed if isinstance(f, dict) and field_identifier(f) == field_id]
-        if len(matching) != 1:
-            raise ApiError("기존 Jira Key Field ID의 타입 상세 조회가 필요합니다.")
-        field = dict(field, **matching[0])
-    kind, multi = semantic_type(field)
-    if type(field_id) is not int or kind != "text" or multi is True or (
-            str(field.get("typeName", "")).casefold() == "wikitext"):
-        raise ApiError("기존 Jira Key 필드는 Field ID가 있는 단일 Text 타입이어야 합니다.")
-    return field_id
+    """Find the unique Jira Key Text field using both real CB read endpoints.
 
+    A missing Configuration display label does not mean the field is absent.
+    Never guess the field ID or silently accept a WikiText/URL field.
+    """
+    configuration=cb.configuration(tracker)
+    configured=configuration.get("fields") if isinstance(configuration,dict) else None
+    if not isinstance(configured,list):
+        raise ApiError("Jira Key 확인 실패: Tracker Configuration fields 응답이 없습니다.")
+    listed=cb.fields(tracker)
+    if not isinstance(listed,list):
+        raise ApiError("Jira Key 확인 실패: Tracker Field 목록 응답이 없습니다.")
+    merged={}
+    unnamed=0
+    for collection,source in ((configured,"configuration"),(listed,"field-list")):
+        for row in collection:
+            if not isinstance(row,dict):
+                continue
+            fid=field_identifier(row)
+            if type(fid) is not int or fid<=0:
+                unnamed+=1
+                continue
+            merged.setdefault(fid,{})
+            # Do not overwrite a populated field name/model with missing metadata.
+            for k,v in row.items():
+                if v is not None and v!="":
+                    merged[fid][k]=v
+            merged[fid]["_sources"]=sorted(set(merged[fid].get("_sources",[])+[source]))
+    matches=[(fid,f) for fid,f in merged.items() if any(
+        normalized_jira_key_label(f.get(k))=="jirakey" for k in ("label","name"))]
+    if not matches:
+        observed=[str(f.get("label") or f.get("name")) for f in merged.values()
+                  if any("jira" in str(f.get(k) or "").casefold()
+                         for k in ("label","name"))]
+        raise ApiError("Jira Key 필드를 찾지 못했습니다. Tracker="+str(tracker)+
+                       ", Configuration 필드="+str(len(configured))+
+                       ", Field 목록="+str(len(listed))+
+                       ", ID 미확인="+str(unnamed)+
+                       ", Jira 이름 후보="+(", ".join(observed[:8]) if observed else "없음")+
+                       ". CB Tracker에 단일 Text 'Jira Key' 필드를 사용하세요.")
+    if len(matches)!=1:
+        raise ApiError("Jira Key 이름의 실제 Field ID가 "+str(len(matches))+
+                       "개입니다 ("+", ".join(str(i) for i,_ in matches)+
+                       "). 중복 필드를 정리하세요.")
+    field_id,field=matches[0]
+    if not field.get("typeName") and not field.get("valueModel"):
+        try:
+            detail=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
+                                    "/fields/"+segment(field_id))
+        except ApiError as exc:
+            raise ApiError("Jira Key 필드 ID "+str(field_id)+
+                           " 타입 상세 조회 실패: "+str(exc)) from None
+        if not isinstance(detail,dict) or field_identifier(detail)!=field_id:
+            raise ApiError("Jira Key 필드 ID "+str(field_id)+
+                           " 상세 응답 ID가 일치하지 않습니다.")
+        field.update(detail)
+    kind,multi=semantic_type(field)
+    model=str(field.get("valueModel") or "").split("<",1)[0]
+    explicit_type=str(field.get("typeName") or "")
+    if multi is True or model in ("WikiTextFieldValue","UrlFieldValue") or (
+            explicit_type.casefold() in ("wikitext","wiki link / url","url")):
+        raise ApiError("Jira Key 필드는 존재합니다 (Field ID "+str(field_id)+
+                       ") 그러나 타입이 "+str(explicit_type or model or kind)+
+                       "입니다. 현재 이관은 단일 Text만 지원합니다.")
+    if kind!="text" and model!="TextFieldValue":
+        raise ApiError("Jira Key 필드를 찾았습니다 (Field ID "+str(field_id)+
+                       ") 하지만 Text 타입을 확인할 수 없습니다. typeName="+
+                       repr(explicit_type)+", valueModel="+repr(model)+
+                       ". 대상 필드를 임의로 변경하지 않습니다.")
+    return field_id
 
 def _read_issue(wizard, scope):
     key = wizard.config["jira"].get("single_issue_key")
