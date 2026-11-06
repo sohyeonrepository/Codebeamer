@@ -6,10 +6,10 @@ echo [2] Test Set preview
 echo [3] Test Case batch import (real POST)
 echo [4] Test Set batch import (real POST)
 set /p MODE=Choose 1-4:
-if "%MODE%"=="1" set KIND=case&set EXEC=0
-if "%MODE%"=="2" set KIND=set&set EXEC=0
-if "%MODE%"=="3" set KIND=case&set EXEC=1
-if "%MODE%"=="4" set KIND=set&set EXEC=1
+if "%MODE%"=="1" (set "KIND=case" & set "EXEC=0")
+if "%MODE%"=="2" (set "KIND=set" & set "EXEC=0")
+if "%MODE%"=="3" (set "KIND=case" & set "EXEC=1")
+if "%MODE%"=="4" (set "KIND=set" & set "EXEC=1")
 if not defined KIND (
  echo Invalid selection
  exit /b 2
