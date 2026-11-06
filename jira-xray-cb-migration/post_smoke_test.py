@@ -78,13 +78,40 @@ def make_http(settings, log_path, *, prompt_auth=False):
     )
 
 
-def validate_wikitext_field(cb, tracker_id, field_id):
-    info = cb.request("GET", f"/v3/trackers/{tracker_id}/fields/{field_id}")
-    model = str(info.get("valueModel", ""))
-    actual_id = info.get("id")
-    if actual_id != field_id or "WikiTextFieldValue" not in model:
-        raise ApiError("Selected Jira Key field is not confirmed as WikiTextFieldValue; no POST")
-    return info
+def configured_jira_key_field(config):
+    """Field registration is expressed using CB UI metadata, never a required numeric ID."""
+    entry = config.get("migration", {}).get("post_smoke", {}).get("jira_key_field")
+    if entry is None:
+        return None
+    if not isinstance(entry, dict) or not isinstance(entry.get("label"), str) or not entry["label"].strip():
+        raise ApiError("migration.post_smoke.jira_key_field.label must be a field name")
+    if str(entry.get("type", "WikiText")).casefold() != "wikitext":
+        raise ApiError("Jira Key link target must be WikiText")
+    return entry
+
+
+def resolve_wikitext_field(cb, tracker_id, registration):
+    """Resolve by the CB field's displayed name from existing Tracker configuration."""
+    from mapping_helper import field_identifier
+    response = cb.request("GET", f"/v3/tracker/{tracker_id}/configuration")
+    fields = response.get("fields") if isinstance(response, dict) else None
+    if not isinstance(fields, list):
+        raise ApiError("Target Tracker configuration did not return fields")
+    normalize = lambda value: "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
+    label = normalize(registration["label"])
+    matches = [f for f in fields if isinstance(f, dict) and any(
+        normalize(f.get(name)) == label for name in ("label", "name"))]
+    if len(matches) != 1:
+        raise ApiError("Expected exactly one target field with label: " + registration["label"])
+    field = matches[0]
+    type_name = str(field.get("typeName") or field.get("valueModel") or "")
+    if "wikitext" not in normalize(type_name):
+        raise ApiError("Jira Key field WikiText type not confirmed in Tracker configuration; no POST")
+    field_id = field_identifier(field)
+    if type(field_id) is not int or field_id <= 0:
+        raise ApiError("Jira Key field internal ID not returned by Codebeamer; no POST")
+    # registration (e.g. customfield[6]) is a UI display hint, not assumed to be API field ID.
+    return field_id
 
 
 def main(argv=None):
@@ -92,8 +119,6 @@ def main(argv=None):
     parser.add_argument("--config", default="config.local.json")
     parser.add_argument("--jira-key", required=True)
     parser.add_argument("--tracker-id", required=True, type=int)
-    parser.add_argument("--jira-link-field-id", type=int,
-                        help="Existing CB WikiText field ID; optional. Without it POST sends only name/description.")
     parser.add_argument("--state-dir", default=".migration/post-smoke")
     parser.add_argument("--prompt-auth", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Actually send exactly one POST")
@@ -117,18 +142,19 @@ def main(argv=None):
     fields = issue.get("fields")
     if not isinstance(fields, dict):
         raise ApiError("Jira fields missing; no POST")
-    if args.jira_link_field_id is not None:
-        validate_wikitext_field(cb, args.tracker_id, args.jira_link_field_id)
+    field_registration = configured_jira_key_field(config)
+    link_field_id = resolve_wikitext_field(cb, args.tracker_id, field_registration) if field_registration else None
     payload = build_payload(
         fields.get("summary"), fields.get("description"),
         jira_url=config["jira"]["url"], issue_key=args.jira_key,
-        link_field_id=args.jira_link_field_id,
+        link_field_id=link_field_id,
     )
     print(json.dumps({
         "mode": "LIVE_POST" if args.execute else "READ_ONLY_PREVIEW",
         "jira_key": args.jira_key,
         "tracker_id": args.tracker_id,
         "payload_fields": list(payload),
+        "jira_key_field": field_registration,
         "jira_link": wiki_link(config["jira"]["url"], args.jira_key),
         "note": "Jira issue text is not printed. Tracker required fields may still reject the POST.",
     }, ensure_ascii=False, indent=2))
@@ -154,9 +180,9 @@ def main(argv=None):
         raise ApiError(f"Created Item {item_id}, but GET Name verification failed")
     if "description" in payload and actual.get("description") != payload["description"]:
         raise ApiError(f"Created Item {item_id}, but GET Description verification failed")
-    if args.jira_link_field_id is not None:
+    if link_field_id is not None:
         values = actual.get("customFields")
-        matches = [f for f in values if isinstance(f, dict) and f.get("fieldId") == args.jira_link_field_id] if isinstance(values, list) else []
+        matches = [f for f in values if isinstance(f, dict) and f.get("fieldId") == link_field_id] if isinstance(values, list) else []
         if not any(f.get("value") == payload["customFields"][0]["value"] for f in matches):
             raise ApiError(f"Created Item {item_id}, but Jira WikiText link verification failed")
     append_event(journal, {"jira": args.jira_key, "tracker": args.tracker_id,
