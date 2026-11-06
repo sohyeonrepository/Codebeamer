@@ -12,7 +12,7 @@ if "%MODE%"=="3" (set "KIND=case" & set "EXEC=1")
 if "%MODE%"=="4" (set "KIND=set" & set "EXEC=1")
 if not defined KIND (
  echo Invalid selection
- exit /b 2
+ goto FINISH
 )
 set /p PROJECT=Jira project key:
 set /p TRACKER=Existing CB tracker numeric ID:
@@ -32,7 +32,7 @@ if "%EXEC%"=="1" (
  echo IMPORTANT: Choice/User only when selected; comments, attachments, relation writes and history are NOT included.
  echo This is a PARTIAL Item write. Children and Test Set membership are separate scripts.
  set /p PARTIAL=Type PARTIAL to accept incomplete migration:
- if /I not "!PARTIAL!"=="PARTIAL" exit /b 2
+ if /I not "!PARTIAL!"=="PARTIAL" goto FINISH
  set /p CONFIRM=Retype Jira project key to confirm:
  python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA% --acknowledge-partial --execute --confirm-project "!CONFIRM!"
 ) else (
@@ -40,5 +40,8 @@ if "%EXEC%"=="1" (
 )
 echo.
 echo Check output and .migration\test-case-set-batch journal before retrying.
+:FINISH
+echo.
+echo [INFO] The window will stay open for errors.
 pause
 endlocal
