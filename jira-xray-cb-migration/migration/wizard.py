@@ -827,7 +827,7 @@ class ImportWizard:
         # Choice option mapping is supplied in the compact UI immediately
         # after choosing the target field. Do not reject an empty mapping
         # before the user is given the option-mapping dialog.
-        if kind not in ('reference','option','status') and not spec.get('selection_unverified'):
+        if kind not in ('reference','option','status','user') and not spec.get('selection_unverified'):
             for value in entry['analysis']['values'].get(source, []):
                 checked_value(value, spec['type'], values, target, 'id' if source == 'components' else None)
         entry['rows'][source].pop('creation_saved',None)
