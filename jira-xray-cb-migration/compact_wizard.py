@@ -612,6 +612,39 @@ def launch(wizard, projects):
     ttk.Button(case_set_panel, text="Test Set + Test Case 매핑 한번에 검수 (GET만)",
                command=lambda: guarded("Test Set / Test Case 매핑 일괄 검수",
                                        preview_set_case_together)).pack(anchor="w", pady=(7, 0))
+    def run_case_set_one_smoke():
+        from migration.connected_case_set import selected_scope, first_issue_key, run_one_smoke
+        scope=current_scope()
+        kind,project,tracker=selected_scope(wizard,scope)
+        key=case_set_issue_key.get().strip()
+        if not key:
+            key=first_issue_key(wizard,scope)
+            case_set_issue_key.set(key)
+        if not messagebox.askyesno("1건 테스트 범위 확인",
+            "Jira "+key+" → CB Tracker "+str(tracker)+"\\n\\n"
+            "실제 Item 1건을 POST할 수 있습니다.\\n"
+            "범위: Name, Description, Jira Key(Text)만 처리합니다.\\n"
+            "기타 제공 매핑, Comment, Attachment, 관계는 이 테스트에서 제외됩니다.\\n\\n"
+            "Jira Key 중복 조회 후 진행합니다. 계속할까요?"):
+            append_log("1건 테스트", "사용자가 취소했습니다.")
+            return
+        tabs.select(result_tab)
+        append_log("1건 테스트", "기존 인증과 기존 단일 Item POST 엔진 재사용")
+        report=run_one_smoke(wizard,scope,key,progress=append_log)
+        summarize_report(report)
+        append_log("범위 경고", "Name/Description/Jira Key만 검증. 제공 매핑 전체 이관 완료 아님.")
+        status.set("1건 테스트 종료 · " + key + " · 전체 매핑 이관은 아직 차단")
+
+    ttk.Button(case_set_panel, text="선택한 유형 1건 생성 테스트 (부분 범위)",
+               command=lambda: guarded("Test Set/Case 1건 생성 테스트",
+                                       run_case_set_one_smoke)).pack(anchor="w", pady=(6, 0))
+    full_notice=ttk.Frame(case_set_panel)
+    full_notice.pack(fill="x", pady=(6, 0))
+    ttk.Button(full_notice, text="전체 이관 (매핑 검증 전 비활성화)",
+               state="disabled").pack(side="left")
+    ttk.Label(full_notice, text="Work/config·시스템 필드·첨부·관계 포함 전체 계약 검증 후 활성화",
+              foreground="#aa5700").pack(side="left", padx=10)
+
 
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
