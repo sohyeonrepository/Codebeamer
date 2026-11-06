@@ -18,13 +18,20 @@ set /p PROJECT=Jira project key:
 set /p TRACKER=Existing CB tracker numeric ID:
 set /p LIMIT=Maximum issues ^(0=all; first run recommended 1^):
 if "%LIMIT%"=="" set LIMIT=1
+set "EXTRA="
+set /p CHOICE=Include Choice/Option mappings? ^(Y/N; default N^):
+if /I "%CHOICE%"=="Y" set "EXTRA=%EXTRA% --include-options"
+set /p USERS=Include User/Assignee mappings? ^(Y/N; default N^):
+if /I "%USERS%"=="Y" set "EXTRA=%EXTRA% --include-users"
+set /p REL=Capture Xray relations for phase 2? ^(Y/N; default N^):
+if /I "%REL%"=="Y" set "EXTRA=%EXTRA% --capture-relations"
 if "%EXEC%"=="1" (
  echo WARNING: This sends real POST requests to Codebeamer.
  echo IMPORTANT: Choice/User, comments, attachments, relations and history are NOT included.
  set /p CONFIRM=Retype Jira project key to confirm:
- python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth --execute --confirm-project "%CONFIRM%"
+ python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA% --execute --confirm-project "%CONFIRM%"
 ) else (
- python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth
+ python batch_case_set_import.py --kind %KIND% --jira-project "%PROJECT%" --tracker-id %TRACKER% --limit %LIMIT% --config config.local.json --prompt-auth %EXTRA%
 )
 echo.
 echo Check output and .migration\test-case-set-batch journal before retrying.
