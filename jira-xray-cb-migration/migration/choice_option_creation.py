@@ -60,26 +60,55 @@ def append_missing(cb, tracker, field_id, desired, state_root, approved=False, p
     if len(matches)!=1:
         raise ApiError("Tracker Configuration의 대상 필드를 유일하게 찾지 못했습니다.")
     target=matches[0]
-    if not isinstance(target.get("options"),list):
-        raise ApiError("Tracker Configuration 옵션 목록 형식 미확인: 쓰기 중단")
-    existing=target["options"]
-    existing_names={norm(o.get("name")) for o in existing if isinstance(o,dict)}
-    if len(existing_names)!=len(existing):
-        raise ApiError("Tracker Configuration 기존 옵션이 중복되거나 형식이 잘못되었습니다.")
-    if {norm(o.get("name")) for o in detail["options"]}!=existing_names:
-        raise ApiError("Tracker Configuration과 Field Detail의 옵션이 일치하지 않습니다.")
+    config_options=target.get("options")
+    log("Choice 옵션 설정 진단","CB Field ID "+str(field_id)+
+        " · configuration.options="+("absent" if "options" not in target else
+        type(config_options).__name__)+
+        " · detail.options="+str(len(detail["options"])))
     if getattr(cb,"spec",None) is None:
         cb.discover()
     operation=cb.operation("tracker_configuration_update")
-    if operation.get("method","").upper()!="POST":
+    if operation.get("method","").upper()!="POST" or operation.get("path")!="/v3/tracker/configuration":
         raise ApiError("서버에서 검증된 Tracker Configuration POST 계약이 없습니다.")
 
-    # Preserve the full current configuration; only append new name-only
-    # option definitions. The backend assigns authoritative option IDs.
+    # In CB 3.0 Field Detail may supply Choice options while Tracker
+    # Configuration omits them. Only use the detail options if the target's
+    # actual OpenAPI Configuration schema explicitly supports options[].
+    from mapping_helper import request_schema,schema_object,prepare_configuration_permissions
+    from single_import import validate
+    api=cb.spec.get("paths",{}).get(operation["path"],{}).get("post")
+    if not isinstance(api,dict):
+        raise ApiError("Tracker Configuration POST OpenAPI 계약 없음")
+    schema=request_schema(cb.spec,api)
+    field_array=schema_object(cb.spec,schema.get("properties",{}).get("fields",{}))
+    field_schema=schema_object(cb.spec,field_array.get("items",{}))
+    option_schema=schema_object(cb.spec,field_schema.get("properties",{}).get("options",{}))
+    if option_schema.get("type")!="array":
+        raise ApiError("Tracker Configuration 쓰기 스키마에 options 배열 없음; 안전하게 중단")
+    if isinstance(config_options,list):
+        existing=deepcopy(config_options)
+        existing_names={norm(o.get("name")) for o in existing if isinstance(o,dict)}
+        if len(existing_names)!=len(existing):
+            raise ApiError("Tracker Configuration 기존 옵션 형식 오류/중복")
+        if {norm(o.get("name")) for o in detail["options"]}!=existing_names:
+            raise ApiError("Tracker Configuration과 Field Detail 옵션 불일치")
+    elif config_options is None:
+        # Do NOT assume null implies no options; the read endpoint was the
+        # authoritative source and may already include existing options.
+        existing=deepcopy(detail["options"])
+        log("Choice 옵션 복원","Configuration options 누락; Field Detail "+
+            str(len(existing))+"개를 근거로 사용 (OpenAPI 검증 필수)")
+    else:
+        raise ApiError("Tracker Configuration options 형식 미지원: "+
+                       type(config_options).__name__)
+
     expected=deepcopy(original)
-    original_options=next(f for f in expected["fields"] if field_identifier(f)==field_id)["options"]
-    for name in missing:
-        original_options.append({"name":name})
+    updated=next(f for f in expected["fields"] if field_identifier(f)==field_id)
+    updated["options"]=existing+[{"name":name} for name in missing]
+    expected=prepare_configuration_permissions(cb,expected)
+    validate(cb.spec,expected,schema)
+    log("Choice 옵션 사전검증","OpenAPI Configuration 요청 스키마 검증 성공 · 신규 "+
+        str(len(missing))+"개")
 
     journal_path=Path(state_root)/("choice-add-"+hashlib.sha256((str(tracker)+":"+str(field_id)).encode()).hexdigest()[:20]+".json")
     journal_path.parent.mkdir(parents=True,exist_ok=True)
