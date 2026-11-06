@@ -534,6 +534,41 @@ def launch(wizard, projects):
         ttk.Button(controls, text="관계 유형 조회", command=lambda: guarded("관계 조회", load_catalog)).pack(side="left")
         ttk.Button(controls, text="매핑 저장", command=lambda: guarded("관계 저장", save_relation)).pack(side="left", padx=10)
         ttk.Button(controls, text="닫기", command=dialog.destroy).pack(side="right")
+    # Reuse this Wizard's authenticated HTTP clients, Jira project and CB Tracker.
+    # Unlike the old external BAT, this requires no second login or numeric ID entry.
+    case_set_panel = ttk.LabelFrame(auto_tab, text="Test Set / Test Case · 제공한 매핑 파일", padding=8)
+    case_set_panel.pack(fill="x", pady=(7, 2))
+    ttk.Label(case_set_panel,
+              text="STEP 1에서 Test Set 또는 Test Case(Test)와 Tracker를 연결한 뒤, Jira Issue Key 한 건으로 매핑을 확인합니다. GET만 사용합니다.",
+              wraplength=950).pack(anchor="w", pady=(0, 5))
+    case_set_controls = ttk.Frame(case_set_panel)
+    case_set_controls.pack(fill="x")
+    ttk.Label(case_set_controls, text="Jira Issue Key").pack(side="left")
+    case_set_issue_key = tk.StringVar()
+    ttk.Entry(case_set_controls, textvariable=case_set_issue_key, width=27).pack(side="left", padx=(6, 10))
+
+    def preview_case_set_mapping():
+        from migration.connected_case_set import preview
+        scope = current_scope()
+        key = case_set_issue_key.get().strip()
+        if not key:
+            raise ValueError("테스트할 Jira Issue Key를 입력하세요. 예: STGVSTAR-2715")
+        report = preview(wizard, scope, key)
+        tabs.select(result_tab)
+        append_log("Test Set/Case 미리보기", str(report["kind"]) + " · " +
+                   report["jira_key"] + " → Tracker " + str(report["tracker"]))
+        for row in report["mapped_fields"]:
+            append_log("필드 매핑", row["source"] + " → " + row["target"] +
+                       " · " + row["stage"] +
+                       (" · 값 있음" if row["non_null"] else " · 원본 값 없음"))
+        for error in report["blockers"]:
+            append_log("확인 필요", error)
+        append_log("쓰기", "0건 · 연결된 기존 UI 인증 사용 · 전체 매핑 검수만 실행")
+        status.set("Test Set/Case 미리보기 완료 · 실제 생성 없음 · 확인 필요 " +
+                   str(len(report["blockers"])) + "건")
+
+    ttk.Button(case_set_controls, text="매핑 Config 미리보기 (POST 없음)",
+               command=lambda: guarded("Test Set/Case 매핑 미리보기", preview_case_set_mapping)).pack(side="left")
     ttk.Button(buttons, text="완료 · 매핑 저장", command=lambda: guarded("매핑 저장", finish)).pack(side="right", padx=6)
     ttk.Button(buttons, text="실제 Import 실행…", command=lambda: guarded("Import", import_approved)).pack(side="right", padx=6)
     ttk.Button(buttons, text="Xray / Reference 고급 설정", command=advanced).pack(side="right", padx=6)
