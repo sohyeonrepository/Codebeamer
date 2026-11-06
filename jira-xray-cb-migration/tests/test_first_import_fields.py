@@ -36,6 +36,29 @@ class FirstImportFieldTests(unittest.TestCase):
                 [{"id":17,"valueModel":"ChoiceFieldValue","typeName":"Choice"}],
                 {"priority":{"name":"High"}},999)
 
+    def test_choice_option_reference_mapped(self):
+        entry={"rows":{"labels":{"selected":True,
+                "spec":{"field_id":18,"value_mapping":{"alpha":"ALPHA","beta":"BETA"}}}}}
+        target=[{"id":18,"valueModel":"ChoiceFieldValue",
+                 "referenceType":"ChoiceOptionReference","multipleValues":True,
+                 "options":[{"id":101,"name":"ALPHA","type":"ChoiceOptionReference"},
+                            {"id":102,"name":"BETA","type":"ChoiceOptionReference"}]}]
+        actual=_supported_custom_field_values(entry,target,
+                                               {"labels":["alpha","beta"]},999)
+        self.assertEqual(actual,[{"fieldId":18,"type":"ChoiceFieldValue",
+                                  "values":[{"id":101,"name":"ALPHA","type":"ChoiceOptionReference"},
+                                            {"id":102,"name":"BETA","type":"ChoiceOptionReference"}]}])
+
+    def test_unmapped_choice_blocks_write(self):
+        entry={"rows":{"priority":{"selected":True,
+                "spec":{"field_id":17,"value_mapping":{}}}}}
+        target=[{"id":17,"valueModel":"ChoiceFieldValue",
+                 "referenceType":"ChoiceOptionReference","multipleValues":False,
+                 "options":[{"id":1,"name":"High","type":"ChoiceOptionReference"}]}]
+        with self.assertRaisesRegex(ApiError,"매핑이 없습니다"):
+            _supported_custom_field_values(entry,target,
+                                           {"priority":{"name":"High"}},999)
+
     def test_mapping_missing_fails(self):
         entry={"rows":{"customfield_19806":{"selected":True,"spec":None}}}
         with self.assertRaisesRegex(ApiError,"customfield_19806"):
