@@ -1,28 +1,35 @@
-# RUN_WINDOWS.bat — unified Test Set/Test Case UI
+# 1차 Jira → Codebeamer 데이터 Import — RUN_WINDOWS.bat
 
-**Use the existing `RUN_WINDOWS.bat` only.** The old experimental `RUN_BATCH_CASE_SET.bat`, `START_TEST_SET.bat`, and standalone Python commands remain in the branch for developer/debug purposes but are **not** the user workflow.
+## Only user entry point
 
-## UI workflow
+Run **RUN_WINDOWS.bat**. Use existing login and project selection. No separate BAT, mapping JSON preview, or explicit GET verification screen.
 
-1. **RUN_WINDOWS.bat** opens the original Jira Token / Codebeamer username/password connection window. The Wizard keeps both authenticated clients in memory.
-2. **1. 프로젝트 연결**: choose Jira project + CB project. Choose Jira `Test Set` and its existing CB Test Set Tracker, click **연결 저장**. Repeat for Jira `Test` and its CB Test Case Tracker. No numeric ID entry is needed; the UI dropdown holds the real selected IDs.
-3. **2. 데이터 가져오기**: under `Test Set / Test Case · 제공한 매핑 파일`, click **Test Set + Test Case 매핑 한번에 검수 (GET만)**. This automatically selects up to one Jira Issue from each connected kind (Test Set first, Test second), loads `mappings/test_set.mapping.json` and `mappings/test_case.mapping.json`, fetches target tracker configuration, and reports source/target field coverage. No POST, PUT or PATCH.
-4. **3. Import 결과 / 로그**: see the per-field mapping status. Unsupported fields are marked for additional validation; this report never means full migration is ready.
-5. For an *existing proven limited Item smoke*, choose the desired single type/Tracker from the registered scope dropdown; in step 2 enter a Jira Key or leave blank to use first available issue, then click **선택한 유형 1건 생성 테스트 (부분 범위)**. A confirmation dialog explicitly states that only Name, Description, and a verified single Text Jira Key field are written. The actual POST uses `migration.simple_item_import.run` and existing Wizard-authenticated clients, including full Tracker Jira Key duplicate lookup. If the selected target has a `Wiki Link/URL` (not Text) Jira Key field, this smoke refuses the write instead of inventing a payload.
-6. The **전체 이관** button remains disabled until every nonempty mapped field and separate relation/child work has validated write and readback contracts, as well as a safe resume story.
+1. Select existing Jira and Codebeamer projects.
+2. Connect Jira Issue Type to its Codebeamer Tracker with **연결 저장**.
+3. Click **완료 · 데이터 가져오기**. Before fetching Jira fields, the UI inspects the selected CB Tracker for **exactly one single Text Jira Key field**. If none exists, an error says **"선택한 CB Tracker에 Jira Key 필드를 사용하세요"**, and field analysis is not started.
+4. On **데이터 가져오기**, use **필드 검색** (Jira ID/name or CB target label), assign the correct CB fields and check the fields to import. Search is a display filter, not a scope reset.
+5. Enter the exact Jira Issue key in **Jira Issue Key** and press **실제 Import 실행…**. This single action internally fetches the source values and destination FieldValue metadata, checks duplicates, and submits an actual POST **only if all non-null selected values are supported**. It verifies created Name, Description, Jira Key, selected custom Text/WikiText fields by GET.
+6. See **3. Import 결과 / 로그** for created item ID or specific reasons for blocked fields.
 
-### Behavior when source data is empty
+### Current first-pass import scope
 
-Read-only review shows empty source values separately from supported write contracts. A nullable mapped field is **not** evidence its API payload is supported. Do not report full coverage or consider unsupported field values imported.
+Existing successful Name, Description, Jira Key paths are retained. New selected **Text/WikiText** fields with confirmed Codebeamer Field IDs and exact `TextFieldValue`/`WikiTextFieldValue` type are included in the same POST, and their values are checked afterward.
 
-### Existing button caveat
+Selected User, Choice, Status, Reference, system metadata, attachments and Xray relations are **not implemented in this first-pass write engine**. When a selected field has a nonempty unsupported value, the engine **fails before POST**, logging the Jira source field and reason. It does not silently discard values or treat omitted fields as migrated. Null selected fields are skipped without a write. For a preexisting Jira Key, the Item is never duplicated, but when additional custom fields are requested it reports pending update rather than claiming migration success.
 
-The original **실제 Import 실행…** button is unchanged. It uses checked Wizard fields and `simple_item_import`, **not** a full import driven by the supplied mapping files. For `Test Set` and `Test`, it displays a scope warning before any action.
+**One exact Jira Issue per click**, not bulk; no ability to set or rewrite native history. The broad target of all source data, attachments, and relations remains incomplete.
 
-### Developer test
+### Removed from current UI
+
+- "Test Set / Test Case · 제공한 매핑 파일" panel and its GET-only actions.
+- "선택 필드 API 검증 (GET)" button.
+
+The importer still uses GET internally to read metadata, check duplicates, and verify real POST success; it does not perform a separate GET-only validation workflow.
+
+### Developer regression checks
 
 ```bat
-python -m unittest discover -s tests -p test_connected_case_set.py -v
+python -m unittest discover -s tests -p test_first_import_fields.py -v
 ```
 
-Live Jira/CB tests have not been run in this assistant session. Tests added to the repository are regression definitions, not proof of live success.
+**Live server validation not performed in this GitHub change.** Do not assume a successful POST based solely on a successful test or commit.
