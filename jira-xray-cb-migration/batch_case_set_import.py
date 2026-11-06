@@ -15,6 +15,7 @@ from test_case_set_post import MAPPINGS, mapped_payload, resolve_direct_fields, 
 from migration.option_batch import prepare_options, choice_rows, add_options
 from migration.user_batch import user_rows, prepare_users, add_users
 from migration.phase2_manifest import extract_relations
+from migration.phase1_children import source_children
 from mapping_helper import field_identifier
 
 
@@ -122,6 +123,7 @@ def main(argv=None):
     parser.add_argument("--include-options", action="store_true", help="Also migrate mapped Choice/Option fields by exact target option names")
     parser.add_argument("--include-users", action="store_true", help="Resolve mapped Jira users by Codebeamer username, without creating accounts")
     parser.add_argument("--capture-relations", action="store_true", help="Capture Xray relation keys for a later phase-2 run")
+    parser.add_argument("--capture-children", action="store_true", help="Archive Jira comments and attachment metadata (not yet uploaded to CB)")
     parser.add_argument("--confirm-project", help="Required for writes: exact Jira project key")
     args = parser.parse_args(argv)
     if args.tracker_id <= 0 or not 1 <= args.batch_size <= 100 or args.limit < 0:
@@ -143,6 +145,7 @@ def main(argv=None):
     journal = state / ("batch-" + short + ".jsonl")
     events = load_events(journal)
     manifest = state / ("relations-" + short + ".jsonl")
+    children_manifest = state / ("children-" + short + ".jsonl")
     jira = make_http(config["jira"], state / "jira-requests.jsonl", prompt_auth=args.prompt_auth)
     cb = make_http(config["codebeamer"], state / "cb-requests.jsonl", prompt_auth=args.prompt_auth)
 
@@ -175,6 +178,7 @@ def main(argv=None):
                       "mapped_choice_fields":[row["cb"]["label"] for row in choice_rows(mapping)] if args.include_options else [],
                       "mapped_user_fields":[row["cb"]["label"] for row in user_rows(mapping)] if args.include_users else [],
                       "relation_capture":args.capture_relations,
+                      "children_capture":args.capture_children,
                       "out_of_scope":"Unsupported Choice / work-config, Comments, Attachments, Relations, Test Run, History"},
                      ensure_ascii=False), flush=True)
     visited = set()
@@ -216,6 +220,7 @@ def main(argv=None):
             if args.include_options:
                 overrides = config.get("migration", {}).get("option_name_mapping", {}).get(args.kind, {})
                 add_options(payload, src, mapping, option_bindings, overrides)
+            child_records = source_children(jira,key) if args.capture_children else None
             if args.include_users:
                 overrides = config.get("migration", {}).get("user_name_mapping", {}).get(args.kind, {})
                 add_users(payload, src, mapping, user_bindings, cb, overrides, user_cache)
