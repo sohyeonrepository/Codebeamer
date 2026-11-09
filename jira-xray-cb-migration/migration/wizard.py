@@ -118,6 +118,35 @@ def target_multiple_for(kind, multiple):
     return False if kind == 'text' and multiple else multiple
 
 
+def pending_field_message(label, tracker, receipt_path):
+    """Explain the recorded failure without exposing request bodies or credentials."""
+    import re
+    from pathlib import Path
+    receipt_path = Path(receipt_path)
+    errors = []
+    if receipt_path.exists():
+        try:
+            journal = json.loads(receipt_path.read_text(encoding='utf-8'))
+            errors = [v.get('error','') for v in journal.values()
+                      if isinstance(v,dict) and v.get('tracker') == tracker]
+        except (OSError,ValueError,AttributeError):
+            pass
+    statuses = [m.group(1) for error in errors if isinstance(error,str)
+                for m in [re.search(r'HTTP\s+(\d{3})',error)] if m]
+    status = statuses[-1] if statuses else None
+    reason = {
+        '400':'요청 형식/값 거부입니다. 권한 부족으로 단정하지 않습니다.',
+        '401':'인증이 거부되었습니다. 인증정보를 확인하세요.',
+        '403':'접근이 거부되었습니다. Tracker 설정 변경 권한 및 서버 접근 정책을 확인하세요.'
+    }.get(status, '서버 처리 결과를 확정할 수 없습니다. 생성 내역 확인이 필요합니다.')
+    return ('신규 필드 '+str(label)+' (Tracker '+str(tracker)+')가 현재 목록에 없습니다. '
+            +('이전 요청 응답: HTTP '+status+'. ' if status else
+              '이전 HTTP 상태가 기록에 없어 권한 부족 여부를 판단할 수 없습니다. ')
+            +reason+' 동일 POST는 자동 재실행하지 않습니다. '
+            '기존 호환 필드에 연결하거나 관리자가 필드 생성 결과를 확인한 뒤 다시 분석하세요. '
+            '이전 요청 기록: '+str(receipt_path))
+
+
 def field_analysis(jira, project, issue_type):
     profile = jira.config.get('field_configuration')
     configured = []
@@ -1091,13 +1120,8 @@ class ImportWizard:
         if known:
             if len(matches) != 1:
                 if len(matches) == 0:
-                    raise ApiError(
-                        '이전 신규 필드 생성 시도의 결과가 확인되지 않았습니다: '
-                        +str(proposal['label'])+' (Tracker '+str(tracker)+'). '
-                        '서버 Field 목록에는 동일 이름 필드가 없습니다. '
-                        '이전 POST가 HTTP 400/권한 거부였다면 서버 권한 및 요청 계약부터 수정해야 합니다. '
-                        '저장된 pending 이력을 임의로 삭제하거나 POST를 자동 재실행하지 않습니다. '
-                        '관리자가 Tracker 필드 생성 여부와 쓰기 권한을 확인한 후 재조정하세요.')
+                    receipt_path=self.state.root/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
+                    raise ApiError(pending_field_message(proposal['label'],tracker,receipt_path))
                 raise ApiError('동일 이름 필드가 여러 개입니다: '+str(proposal['label'])+
                                ' · 중복 자동 연결/재생성을 중단합니다.')
             created = matches[0]
