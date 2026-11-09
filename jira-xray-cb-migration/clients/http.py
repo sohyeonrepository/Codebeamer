@@ -152,8 +152,10 @@ def http_failure_detail(body, content_type, login_reason):
             value=json.loads(body)
             messages=json.dumps(value.get('errorMessages',value.get('message',''))).lower() if isinstance(value,dict) else ''
         except (ValueError,UnicodeError):return 'JSON Content-Type이지만 본문 JSON 해석 실패'
-        if any(word in messages for word in ('permission','forbidden','not authorized','not permitted')):
+        if any(word in messages for word in ('permission denied','access denied','forbidden','not authorized','not permitted','insufficient permission','do not have permission','does not have permission','no permission')):
             return 'JSON 오류 응답에 권한/접근 거부 메시지 포함'
+        if 'permission' in messages:
+            return 'JSON 오류 응답에 permission 관련 내용 포함; 권한 부족인지 permission 속성 검증 오류인지 미확정'
         if any(word in messages for word in ('token','authentication','authenticated','credentials')):
             return 'JSON 오류 응답에 인증/토큰 관련 메시지 포함'
         return 'JSON 오류 응답; 원인 자동 분류 불가 (민감정보 보호를 위해 원문 생략)'

@@ -16,3 +16,12 @@ class ConnectionDiagnostics(unittest.TestCase):
   self.assertIn('import_wizard.py --config config.local.json --prompt-auth',text)
   self.assertNotIn('--live-test',text)
   self.assertIn('if not exist "config.local.json"',text)
+
+class PermissionClassificationTests(__import__('unittest').TestCase):
+ def test_permission_property_is_not_access_denial(self):
+  result=http_failure_detail(b'{"message":"permission must not be null"}','application/json','')
+  self.assertIn('속성 검증',result)
+  self.assertNotIn('접근 거부 메시지 포함',result)
+ def test_actual_denial_is_classified(self):
+  result=http_failure_detail(b'{"message":"permission denied"}','application/json','')
+  self.assertIn('접근 거부',result)
