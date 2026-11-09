@@ -731,10 +731,11 @@ def launch(wizard, projects):
         # Otherwise a successful configuration POST could precede a blocked Item POST.
         from migration.simple_item_import import _field
         _field(wizard.cb, entry["tracker"])
-        pending=[source for source in selected
-                 if issue_values.get(source) is not None
-                 and entry["rows"][source].get("creation")
-                 and entry["rows"][source].get("status")=="create"]
+        from migration.simple_item_import import pending_creation_fields, require_created_fields
+        pending=pending_creation_fields(entry)
+        invalid=[source for source in pending if not entry['rows'][source].get('creation')]
+        if invalid:
+            raise ValueError('신규 필드 생성 계획 누락: '+', '.join(invalid)+'. 생성 설정을 다시 저장하세요. POST 미실행')
         if pending:
             names=[str((entry["rows"][source].get("creation") or {}).get("label") or source)
                    for source in pending]
@@ -776,7 +777,7 @@ def launch(wizard, projects):
                                  and type(o.get("id")) is int}
                         option_map={}
                         proposed=planned.get("choices") or {}
-                        for raw in [issue_values[source]]:
+                        for raw in [issue_values.get(source)]:
                             for name in choice_names(raw,source):
                                 wanted=next((v for k,v in proposed.items()
                                     if norm(k)==norm(name)),None)
@@ -938,6 +939,7 @@ def launch(wizard, projects):
                 return
             for source in excluded_sources:
                 append_log("이번 Import 제외",source+" · 미매핑/미검증 (실제 POST에 포함하지 않음)")
+        require_created_fields(entry)
         effective_selected=[source for source in selected if source not in set(excluded_sources)]
         # Verify the reserved, unique Jira Key field BEFORE user approval.
         from migration.simple_item_import import _field

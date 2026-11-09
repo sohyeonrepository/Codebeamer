@@ -121,6 +121,19 @@ def _journal(path, event):
 
 
 
+def pending_creation_fields(entry):
+    """Selected creation plans must finish even if this issue's value is null."""
+    return [source for source,row in entry.get('rows',{}).items()
+            if row.get('selected',False) and (row.get('creation') or row.get('status')=='create')]
+
+
+def require_created_fields(entry):
+    pending = pending_creation_fields(entry)
+    if pending:
+        raise ApiError('신규 필드 생성/Field ID 검증 미완료: '+', '.join(pending)+
+                       '. Item POST 미실행. Wizard에서 필드 생성 단계를 먼저 완료하세요.')
+
+
 def _supported_custom_field_values(entry, fields, source_values, jira_key_field, cb=None, progress=None):
     """Prepare requested scalar CB fields before POST, never drop selected data.
 
@@ -257,6 +270,7 @@ def run(wizard, *, progress=None):
     if "summary" not in selected:
         raise ApiError("Summary → Name 필드를 반드시 선택하세요.")
 
+    require_created_fields(entry)
     identity=_identity_profile(wizard.cb,tracker)
     field_id=identity["field_id"]
     log("기존 Jira Key", "CB Field ID "+str(field_id)+
