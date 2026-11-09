@@ -164,18 +164,25 @@ def launch(wizard, projects):
     scope_box.pack(anchor="w")
 
     def save_tracker():
-        if not project_key[0] or types_box.current() < 0 or trackers_box.current() < 0:
+        if not project_key[0] or types_box.current() < 0:
             raise ValueError("프로젝트와 Jira TYPE, CB Tracker를 선택하세요.")
         kind = issue_types[types_box.current()]
-        tracker = cb_trackers[trackers_box.current()]
-        wizard.map_tracker(project_key[0], kind["id"], tracker["id"])
+        from migration.xray_review import issue_kind
+        if issue_kind(kind,wizard.config['migration']) == 'execution':
+            wizard.map_execution_context(project_key[0],kind['id'])
+            target_name='실행 맥락 보존 (CB Tracker 생성 없음)'
+        else:
+            if trackers_box.current() < 0:raise ValueError('CB Tracker를 선택하세요.')
+            tracker = cb_trackers[trackers_box.current()]
+            wizard.map_tracker(project_key[0], kind['id'], tracker['id'])
+            target_name=tracker.get('name',str(tracker['id']))
         scope = project_key[0] + ":" + str(kind["id"])
         active_scope[0] = scope
         if scope not in scope_names:
             scope_names.append(scope)
         scope_box.configure(values=scope_names)
         scope_box.set(scope)
-        status.set(kind["name"] + " → " + tracker.get("name", str(tracker["id"])) + " 연결 완료")
+        status.set(kind["name"] + " → " + target_name + " 연결 완료")
 
     def current_scope():
         scope = scope_box.get() or active_scope[0]
@@ -700,6 +707,25 @@ def launch(wizard, projects):
         option_mapping_popup(selected[0])
     ttk.Button(buttons,text="선택 필드 옵션 매핑",
                command=lambda: guarded("Choice 옵션 매핑",map_selected_options)).pack(side="left",padx=8)
+
+    def import_test_lifecycle():
+        from migration.test_lifecycle import validate
+        contract=validate(wizard)
+        append_log("전체 테스트 이관 사전검증",str(contract))
+        if not messagebox.askyesno("전체 테스트 이관 승인",
+            "선택 범위의 Test Case → Test Set → Test Run → Release를 생성하고 관계를 연결합니다.\n"
+            "첨부·댓글·Legacy History도 처리합니다. 실제 서버 쓰기를 승인할까요?"):
+            return
+        review=wizard.visibility_review()
+        if review and not messagebox.askyesno('표시 상태 미확인 필드 검토',
+                'Hidden 여부를 확인하지 못한 필드가 있습니다. 선택한 필드와 누락 위험을 검토했습니까?'):
+            return
+        report=wizard.execute(approved=True,visibility_review=review)
+        summarize_report(report)
+        tabs.select(result_tab)
+
+    ttk.Button(buttons,text="전체 테스트 이관 (설정 검증 후 승인)",
+               command=lambda: guarded("전체 테스트 이관",import_test_lifecycle)).pack(side="left",padx=8)
 
     def import_approved():
         from copy import deepcopy

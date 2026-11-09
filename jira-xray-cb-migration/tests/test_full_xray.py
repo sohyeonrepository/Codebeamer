@@ -53,7 +53,7 @@ class FullXrayTests(unittest.TestCase):
         engine.issue = issue
         engine.children = lambda *args: None
         engine.relations = lambda *args: None
-        with patch('migration.full_xray.JiraClient', Jira), patch('migration.full_xray.mapped_record') as relation, patch('migration.records.test_run', return_value={'id':300}) as run_write:
+        with patch('migration.full_xray.JiraClient', Jira), patch('migration.full_xray.mapped_record') as relation, patch('migration.records.test_run', side_effect=lambda *a: (writes.append('Test Run') or {'id':300})) as run_write:
             report = engine.migrate()
             if with_run and run_write.called:
                 args = run_write.call_args.args
@@ -62,11 +62,11 @@ class FullXrayTests(unittest.TestCase):
                 self.assertEqual(args[4]['_executionSourceContext']['id'], '2')
             return report, writes, relation.call_count
 
-    def test_plan_first_then_memberships(self):
+    def test_cases_sets_then_plan_and_memberships(self):
         report, writes, calls = self.run_profile()
         self.assertFalse(report['complete'])  # Execution has no individual Run details.
         self.assertTrue(any('Individual Test Runs' in r['reason'] for r in report['limitations']))
-        self.assertEqual(writes, ['Test Plan', 'Test', 'Test Set'])
+        self.assertEqual(writes, ['Test', 'Test Set', 'Test Plan'])
         self.assertEqual(calls, 1)
         self.assertEqual(report['relationships'][0]['status'], 'verified')
 
@@ -89,6 +89,7 @@ class FullXrayTests(unittest.TestCase):
     def test_execution_is_preserved_without_target_item(self):
         report, writes, _ = self.run_profile(with_run=True)
         self.assertTrue(report['complete'])
+        self.assertEqual(writes,['Test','Test Set','Test Run','Test Plan'])
         self.assertNotIn('Test Execution', writes)
         self.assertEqual(report['source_executions'][0]['key'], 'P-2')
         self.assertEqual(report['runs'][0]['target_id'], 300)

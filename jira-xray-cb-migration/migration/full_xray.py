@@ -5,7 +5,7 @@ from clients.jira_client import JiraClient
 from clients.xray_client import XrayClient
 from migration.records import mapped_record, read_path
 
-ORDER = ('plan', 'test', 'set', 'execution')
+ORDER = ('test', 'set', 'execution', 'plan')
 
 
 def migrate_full(engine):
@@ -13,6 +13,7 @@ def migrate_full(engine):
     report.update(scope='full-xray', creation_order=list(ORDER), relationships=[])
     bundles = []
     target_bundles = []
+    early_runs = {}
     try:
         profile = engine.settings.get('full_xray', {})
         types = profile.get('issue_types', {})
@@ -160,12 +161,28 @@ def migrate_full(engine):
                 if edges and not engine.settings.get('relation_adapter', {}).get('fields'):
                     raise ApiError('Configure relation_adapter.fields before creating objects')
         for kind in ORDER:
+            # Runs require Cases, but not a target Execution or Release Item.
+            # Create them after Sets and before Release plans; membership writes
+            # still wait until all endpoint IDs exist.
+            if kind == 'execution' and original_write and not execution_target:
+                from migration.records import test_run
+                for source_kind, _, execution in bundles:
+                    if source_kind == 'execution':
+                        for run in execution['_runs']:
+                            early_runs[str(run['id'])] = test_run(engine.cb, engine.state, engine.settings,
+                                engine.jira.http, execution, None, run)
             for current, project, issue in target_bundles:
                 if current == kind:
                     engine.issue(project, issue, definitions)
                     if original_write:
                         saved = engine.state.get('item:' + str(issue['id']))
                         engine.state.mark('item:' + issue['key'], saved[0], saved[1])
+                        if kind == 'test' and issue['key'] in test_step_plans:
+                            from migration.xray_run_collections import write_test_steps
+                            steps, files = test_step_plans[issue['key']]
+                            result = write_test_steps(engine.cb, engine.state, engine.settings, engine.jira.http,
+                                issue, saved[1]['id'], steps, files)
+                            report.setdefault('test_steps', []).append(result)
         # Memberships are connected only after all four object kinds have IDs.
         for issue, other, adapter in edges:
             record = {'source': issue['key'], 'target': other['key'], 'kind': adapter.get('name', adapter['from'] + ':' + adapter['to']), 'status': 'planned'}
@@ -180,19 +197,13 @@ def migrate_full(engine):
                 record['status'] = 'verified'
         if original_write:
             for kind, _, issue in target_bundles:
-                if kind == 'test' and issue['key'] in test_step_plans:
-                    from migration.xray_run_collections import write_test_steps
-                    steps, files = test_step_plans[issue['key']]
-                    result = write_test_steps(engine.cb, engine.state, engine.settings, engine.jira.http,
-                                              issue, engine.state.get('item:' + str(issue['id']))[1]['id'], steps, files)
-                    report.setdefault('test_steps', []).append(result)
                 engine.children(issue, engine.state.get('item:' + str(issue['id']))[1]['id'])
             if not execution_target:
                 from migration.records import test_run
                 for kind, _, issue in bundles:
                     if kind == 'execution':
                         for run in issue['_runs']:
-                            result = test_run(engine.cb, engine.state, engine.settings, engine.jira.http, issue, None, run)
+                            result = early_runs[str(run['id'])]
                             row = next(r for r in report['runs'] if r['source_run_id'] == str(run['id']))
                             row.update(status='verified', target_id=result['id'],
                                        verified_step_ids=result.get('verified_step_ids', []),
