@@ -139,11 +139,20 @@ class CodebeamerClient:
         return list(dict.fromkeys(values))
 
     def operation(self, name):
+        # Verified read helpers deliberately work without Swagger. Initialize
+        # the contract only when an operation-backed action is requested.
+        if self.spec is None:
+            try:
+                self.discover()
+            except ApiError as exc:
+                self.spec = None
+                raise ApiError('API 계약 초기화 실패 (' + str(name) +
+                               '); 요청 미실행: ' + str(exc)) from exc
+            if self.spec is None:
+                raise ApiError('API 계약 초기화 결과 없음 (' + str(name) + '); 요청 미실행')
         op = self.config.get('operations', {}).get(name)
         if not op:
             raise ApiError('Unconfigured API capability: ' + name)
-        if self.spec is None:
-            raise ApiError('Discover Swagger before using API operations')
         if 'operationId' in op and 'path' not in op:
             matches = [(p, m) for p, methods in self.spec['paths'].items() for m, definition in methods.items()
                        if isinstance(definition, dict) and definition.get('operationId') == op['operationId']]

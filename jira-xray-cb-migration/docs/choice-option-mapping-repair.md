@@ -22,3 +22,9 @@ No launcher, customer configuration, migration-state data or server data was cha
 The latest original GET payload remains the POST baseline; comparison normalization never changes it. Post-creation preservation checks apply the same order-only rule. Member additions/removals, permissions and ordinary option order changes still block. Remaining pre-POST drift is saved to a sibling `.drift.json` containing property/shape diagnostics, without raw customer values.
 
 Five new tests cover the reported existing field IDs 1009/1011/1012, member/permission changes, ordinary option-order protection, creation/readback with alternating member order, and real drift blocking all POST requests. Focused regression suite: 65 passed. Real server and Windows GUI execution remain unverified.
+
+## Lazy operation contract initialization
+
+`CodebeamerClient.operation()` now invokes the existing discovery implementation when its contract is not loaded. Verified direct GET helpers remain independent of Swagger. Operation bindings are read after discovery, because discovery may populate them. Loaded documents still must contain the requested operation; discovery failures clear the partial spec and report the capability name with “request not executed”. No new Swagger URL candidates or guessed routes were added.
+
+Regression: 85 focused tests passed, including three initialization tests (one-time discovery/binding, failed discovery with no request, and missing-route rejection) plus verified read, field creation preservation and Choice tests. Actual server compatibility is unverified.
