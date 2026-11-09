@@ -414,95 +414,10 @@ def launch(wizard, projects):
                 wizard.configure_creation(scope, source, label_var.get(), semantic,
                                           multi_var.get(), mapping, reference_tracker=reference_tracker)
                 wizard.select_field(scope, source, True)
-                if semantic in ("option","status","user"):
-                    detail_message=("와 옵션 "+str(len(set(mapping.values())))+"개" if semantic in ("option","status")
-                                    else " (Choice-UserReference, 사용자 계정 생성 아님)")
-                    if not messagebox.askyesno("신규 필드 실제 생성",
-                        "CB Tracker "+str(entry["tracker"])+"에 신규 필드 '"+label_var.get()+
-                        "'"+detail_message+
-                        "를 실제 생성합니다. 계속할까요?",parent=window):
-                        append_log("신규 Choice 생성 취소",source+" · 서버 변경 없음 · 생성 완료 아님")
-                        status.set("신규 필드 실제 생성 취소 · 서버 변경 없음")
-                        refresh()
-                        window.destroy()
-                        return False
-                    append_log("신규 Choice 생성 시작",source+" · type="+semantic+
-                               " · multiple="+str(multi_var.get())+
-                               " · 옵션 "+str(len(set(mapping.values())))+"개")
-                    from migration.option_batch import norm
-                    spec=wizard.create_field(scope,source,entry["rows"][source],entry["tracker"])
-                    fid=spec.get("field_id")
-                    if type(fid) is not int:
-                        raise ValueError("신규 필드 실제 CB ID를 확인하지 못했습니다.")
-                    actual=wizard.cb.http.request("GET",
-                        "/v3/trackers/"+str(entry["tracker"])+"/fields/"+str(fid))
-                    # A returned ID or a locally saved creation plan is not proof
-                    # that the Tracker actually contains the field.
-                    configuration=wizard.cb.configuration(entry["tracker"])
-                    config_fields=configuration.get("fields") if isinstance(configuration,dict) else None
-                    configured=[f for f in (config_fields or []) if isinstance(f,dict)
-                                and field_identifier(f)==fid]
-                    if (not isinstance(actual,dict) or field_identifier(actual)!=fid or
-                        not isinstance(config_fields,list) or len(configured)!=1):
-                        append_log("신규 필드 서버 검증 실패",source+" · CB Field ID "+str(fid)+
-                                   " · 상세 GET/Tracker Configuration 일치 여부 확인 필요")
-                        raise ValueError("서버 응답에 Field ID "+str(fid)+"가 있지만 Tracker Configuration과 "+
-                                         "상세 GET 양쪽에서 동일 필드를 확인하지 못했습니다. "+
-                                         "생성 완료로 처리하지 않습니다. 재생성 전에 서버 상태를 확인하세요.")
-                    append_log("신규 필드 서버 확인",source+" · CB Field ID "+str(fid)+
-                               " · 상세 GET 및 Tracker Configuration 확인")
-                    if semantic=="user":
-                        if (not isinstance(actual,dict) or field_identifier(actual)!=fid or
-                            actual.get("referenceType")!="UserReference" or
-                            not str(actual.get("valueModel") or "").startswith("ChoiceFieldValue")):
-                            raise ValueError("생성된 필드가 Choice-UserReference가 아닙니다. 서버에서 확인하세요.")
-                        spec["target"]="cb_field_"+str(fid)
-                        spec["user_identity_lookup"]=True
-                        spec.pop("missing_definition",None)
-                        spec.pop("selection_unverified",None)
-                        entry["rows"][source].update(spec=spec,target=actual,
-                                                    mapping_mode="manual",status="mapped")
-                        entry["rows"][source].pop("creation",None)
-                        entry["rows"][source].pop("creation_saved",None)
-                        wizard.state.save("wizard","plan",wizard.plan)
-                        append_log("신규 User 필드 검증",source+" → CB "+str(fid)+
-                                   " · 사용자 자동 매핑 연결")
-                        refresh()
-                        window.destroy()
-                        return True
-                    if (actual.get("referenceType")!="ChoiceOptionReference" or
-                        not str(actual.get("valueModel") or "").startswith("ChoiceFieldValue")):
-                        raise ValueError("신규 필드 ID "+str(fid)+"는 Choice-Option 타입이 아닙니다. "+
-                                         "필드 생성 성공으로 처리하지 않습니다.")
-                    existing={norm(o.get("name")):o for o in actual.get("options",[])
-                              if isinstance(o,dict) and type(o.get("id")) is int}
-                    if any(norm(name) not in existing for name in mapping.values()):
-                        raise ValueError("신규 필드 생성 후 CB 옵션 ID 검증 실패. 재생성하지 말고 서버 확인 필요.")
-                    # The Issue import adapter uses Jira displayed option names,
-                    # while creation stores Jira option identities.
-                    from migration.option_batch import choice_names
-                    aliases={}
-                    for item in values:
-                        try:names=choice_names(item,source)
-                        except Exception:continue
-                        for name in names:
-                            aliases[name]=next((target for original,target in mapping.items()
-                                               if norm(original)==norm(name) or
-                                               norm(proposed_choices.get(original))==norm(name)),name)
-                    name_mapping=dict(mapping)
-                    name_mapping.update(aliases)
-                    spec["value_mapping"]={k:existing[norm(v)]["name"]
-                                           for k,v in name_mapping.items() if norm(v) in existing}
-                    spec["choice_options_verified"]=True
-                    spec.pop("missing_definition",None)
-                    spec.pop("selection_unverified",None)
-                    entry["rows"][source].update(spec=spec,target=actual,
-                                                mapping_mode="manual",status="mapped")
-                    entry["rows"][source].pop("creation",None)
-                    entry["rows"][source].pop("creation_saved",None)
-                    wizard.state.save("wizard","plan",wizard.plan)
-                    append_log("신규 Choice 검증",source+" → CB "+str(fid)+
-                               " · 실제 옵션 ID "+str(len(existing))+"개 조회")
+                # Save the creation plan only. No Tracker write from the mapping popup.
+                # Import explicitly approves and creates all selected pending fields.
+                append_log("신규 필드 생성 예정", source+" · "+semantic+
+                           " · 실제 생성은 Import 승인 후 실행")
                 refresh()
                 window.destroy()
                 return True
@@ -813,6 +728,84 @@ def launch(wizard, projects):
         verified_key, issue_values=_read_selected_issue(preview,scope,set(selected))
         if verified_key!=key:
             raise ValueError("Jira 조회 Issue Key 불일치. Import 중단")
+        # Validate the reserved Jira identity before *any* new field write.
+        # Otherwise a successful configuration POST could precede a blocked Item POST.
+        from migration.simple_item_import import _field
+        _field(wizard.cb, entry["tracker"])
+        pending=[source for source in selected
+                 if issue_values.get(source) is not None
+                 and entry["rows"][source].get("creation")
+                 and entry["rows"][source].get("status")=="create"]
+        if pending:
+            names=[str((entry["rows"][source].get("creation") or {}).get("label") or source)
+                   for source in pending]
+            if not messagebox.askyesno("신규 필드 생성 및 Import",
+                "다음 "+str(len(pending))+"개 CB 필드를 먼저 생성하고 Field ID를 확인합니다.\\n\\n"+
+                "\\n".join(names[:15])+
+                ("\\n외 "+str(len(names)-15)+"개" if len(names)>15 else "")+
+                "\\n\\n필드 생성은 서버에 실제로 반영됩니다. 실패하면 Item POST는 진행하지 않습니다. 계속할까요?"):
+                append_log("Import 중단","신규 필드 생성 승인 취소 · 서버 변경 없음")
+                return
+            for source in pending:
+                row=entry["rows"][source]
+                planned=row["creation"]
+                append_log("필드 생성 준비",source+" → "+str(planned.get("label")))
+                try:
+                    spec=wizard.create_field(scope,source,row,entry["tracker"])
+                    fid=spec.get("field_id")
+                    if type(fid) is not int or fid<=0:
+                        raise ValueError("신규 필드의 실제 Field ID가 없습니다.")
+                    config_fields=wizard.cb.configuration(entry["tracker"]).get("fields")
+                    if not isinstance(config_fields,list) or sum(
+                        1 for field in config_fields if isinstance(field,dict)
+                        and field_identifier(field)==fid)!=1:
+                        raise ValueError("생성된 Field ID가 Tracker Configuration에서 확인되지 않습니다.")
+                    from clients.jira_client import segment
+                    detail=wizard.cb.http.request("GET","/v3/trackers/"+
+                        segment(entry["tracker"])+"/fields/"+segment(fid))
+                    if not isinstance(detail,dict) or field_identifier(detail)!=fid:
+                        raise ValueError("생성된 Field ID의 상세 GET이 일치하지 않습니다.")
+                    # The single-Item writer maps Jira's displayed Choice names
+                    # to CB option *names*, while the Wizard creation receipt
+                    # stores verified option references by ID.
+                    if planned.get("semantic_type") in ("option","status"):
+                        from migration.option_batch import choice_names,norm
+                        options=detail.get("options")
+                        if not isinstance(options,list):
+                            raise ValueError("신규 Choice 옵션 상세 조회 실패")
+                        by_name={norm(o.get("name")):o for o in options if isinstance(o,dict)
+                                 and type(o.get("id")) is int}
+                        option_map={}
+                        proposed=planned.get("choices") or {}
+                        for raw in [issue_values[source]]:
+                            for name in choice_names(raw,source):
+                                wanted=next((v for k,v in proposed.items()
+                                    if norm(k)==norm(name)),None)
+                                if wanted is None:
+                                    raise ValueError("Jira Choice 값에 대한 신규 필드 옵션 매핑 누락: "+name)
+                                if norm(wanted) not in by_name:
+                                    raise ValueError("신규 Choice 옵션 ID/이름 검증 실패: "+str(wanted))
+                                option_map[name]=by_name[norm(wanted)]["name"]
+                        spec["value_mapping"]=option_map
+                    if planned.get("semantic_type")=="user":
+                        if (detail.get("referenceType")!="UserReference" or
+                            not str(detail.get("valueModel") or "").startswith("ChoiceFieldValue")):
+                            raise ValueError("신규 UserReference 필드 계약 미확인")
+                        spec["user_identity_lookup"]=True
+                    # Only after verified readback, mark the mapping as usable.
+                    spec.pop("missing_definition",None)
+                    spec.pop("selection_unverified",None)
+                    row.update(spec=spec,target=detail,status="mapped",mapping_mode="manual",
+                               creation_stage="CREATED")
+                    row.pop("creation",None)
+                    row.pop("creation_saved",None)
+                    wizard.state.save("wizard","plan",wizard.plan)
+                    append_log("신규 필드 생성 확인",source+" → CB Field ID "+str(fid))
+                except Exception as exc:
+                    append_log("신규 필드 생성 실패",source+" · "+str(exc)+
+                               " · Item POST 중단; 재시도 전 서버 상태 확인")
+                    raise
+            refresh()
         missing=[]
         skipped_null=[]
         for source in selected:
