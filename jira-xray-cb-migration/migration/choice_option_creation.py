@@ -40,6 +40,97 @@ def diff_options(detail, desired):
     return missing
 
 
+
+def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_root, log):
+    """Create missing Choice options using an exact server-advertised POST route.
+
+    Do not fall back to unrelated option/filter/library endpoints or guess a
+    payload. Any uncertain POST remains pending for explicit reconciliation.
+    """
+    import json
+    import hashlib
+    from mapping_helper import request_schema, option_payload
+    from single_import import validate
+
+    route="/trackers/{trackerId}/fields/{fieldId}/option"
+    api=cb.spec.get("paths",{}).get(route,{}).get("post")
+    if not isinstance(api,dict):
+        raise ApiError("별도 Choice 옵션 POST API 계약을 찾지 못했습니다: "+route+
+                       " · 요청 미실행")
+    try:
+        schema=request_schema(cb.spec,api)
+        requests=[option_payload(cb.spec,schema,name) for name in missing]
+        for body in requests:
+            validate(cb.spec,body,schema)
+    except (ApiError,KeyError,TypeError,ValueError) as exc:
+        raise ApiError("Choice 옵션 POST 요청 스키마 검증 실패 (쓰기 미실행): "+
+                       str(exc)) from None
+    # Local state contains no credential or request payload. Existing
+    # options are authoritative from field detail, not Tracker configuration.
+    path=Path(state_root)/("choice-add-"+hashlib.sha256(
+        (str(tracker)+":"+str(field_id)).encode()).hexdigest()[:20]+".json")
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if path.exists():
+        previous=json.loads(path.read_text(encoding="utf-8"))
+        if previous.get("status")=="pending":
+            raise ApiError("이전 옵션 POST 결과가 미확정입니다. CB에서 확인한 후 재시도하세요. 자동 재전송 금지.")
+    def record(status, created_names):
+        temp=path.with_suffix(".tmp")
+        temp.write_text(json.dumps({"status":status,"tracker":tracker,
+            "field_id":field_id,"created_names":created_names,
+            "requested_count":len(missing),"route_template":route},
+            ensure_ascii=False,indent=2),encoding="utf-8")
+        temp.replace(path)
+
+    previous_write=cb.write
+    previous_operation=cb.config.setdefault("operations",{}).get("choice_option_create")
+    cb.config["operations"]["choice_option_create"]={"method":"POST","path":route}
+    created_names=[]
+    try:
+        cb.write=True
+        for name,body in zip(missing,requests):
+            # Read immediately before every write to avoid duplicate options
+            # if another client added the same name while the wizard was open.
+            latest=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
+                                   "/fields/"+segment(field_id))
+            if not isinstance(latest,dict) or field_identifier(latest)!=field_id:
+                raise ApiError("옵션 POST 전 Field Detail 조회 실패; 요청 중단")
+            if not diff_options(latest,[name]):
+                log("Choice 옵션 중복방지","옵션이 이미 존재함 · 별도 POST 생략")
+                created_names.append(name)
+                continue
+            record("pending",created_names)
+            log("Choice 옵션 POST","필드 "+str(field_id)+" · 누락된 옵션 1개 생성 요청")
+            cb.call("choice_option_create",{"trackerId":tracker,"fieldId":field_id},body)
+            after=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
+                                  "/fields/"+segment(field_id))
+            if not isinstance(after,dict) or field_identifier(after)!=field_id:
+                raise ApiError("옵션 POST 이후 Field Detail 확인 실패. 동일 요청 재실행 금지.")
+            matching=[o for o in after.get("options",[]) if isinstance(o,dict)
+                      and norm(o.get("name"))==norm(name)
+                      and type(o.get("id")) is int]
+            if len(matching)!=1:
+                raise ApiError("옵션 POST 이후 실제 Option ID 확인 실패. 동일 요청 재실행 금지.")
+            created_names.append(name)
+            record("verified_partial",created_names)
+            log("Choice 옵션 ID 확인","Field "+str(field_id)+
+                " · Option ID "+str(matching[0]["id"]))
+        final=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
+                              "/fields/"+segment(field_id))
+        if not isinstance(final,dict) or field_identifier(final)!=field_id or diff_options(final,desired):
+            raise ApiError("요청 옵션 전체 검증 실패. 생성 상태 확인 전 재실행 금지.")
+        record("verified",created_names)
+        log("Choice 옵션 생성 완료","Tracker "+str(tracker)+" · Field "+str(field_id)+
+            " · 서버에서 옵션 "+str(len(missing))+"개 확인")
+        return final
+    finally:
+        cb.write=previous_write
+        if previous_operation is None:
+            cb.config["operations"].pop("choice_option_create",None)
+        else:
+            cb.config["operations"]["choice_option_create"]=previous_operation
+
+
 def append_missing(cb, tracker, field_id, desired, state_root, approved=False, progress=None):
     if approved is not True:
         raise ApiError("옵션 추가는 별도 승인이 필요합니다.")
@@ -84,6 +175,14 @@ def append_missing(cb, tracker, field_id, desired, state_root, approved=False, p
     field_schema=schema_object(cb.spec,field_array.get("items",{}))
     option_schema=schema_object(cb.spec,field_schema.get("properties",{}).get("options",{}))
     if option_schema.get("type")!="array":
+        # The server exposes a dedicated POST /trackers/{trackerId}/fields/{fieldId}/option.
+        # Use only its exact OpenAPI request contract, not the Configuration
+        # fallback which has no writable options property.
+        if isinstance(cb.spec.get("paths",{}).get(
+                "/trackers/{trackerId}/fields/{fieldId}/option",{}).get("post"),dict):
+            log("Choice 옵션 전용 API","Tracker Configuration options 미지원 · 별도 POST 계약 검증")
+            return _append_with_dedicated_api(
+                cb,tracker,field_id,desired,missing,state_root,log)
         # Distinguish a missing writable option definition from a broken
         # schema traversal. Enumerate documented candidate routes without
         # attempting to write an unsupported field into configuration.
