@@ -764,10 +764,38 @@ def _configuration_drift(expected, current):
                 properties=sorted(prop for prop in old_field.keys() | new_field.keys()
                                   if old_field.get(prop)!=new_field.get(prop) or
                                   (prop in old_field)!=(prop in new_field))
-                differences.append('fields:changed_properties:'+
-                                   str(field_identifier(old_field) if type(field_identifier(old_field)) is int
-                                       else 'index'+str(old_index))+
+                identifier=str(field_identifier(old_field) if type(field_identifier(old_field)) is int
+                               else 'index'+str(old_index))
+                differences.append('fields:changed_properties:'+identifier+
                                    ':'+','.join(properties[:16]))
+                if 'choiceOptionSetting' in properties:
+                    # Explain the shape of the drift without exposing option
+                    # names, choices, permission contents, or full field data.
+                    def shape(field):
+                        if 'choiceOptionSetting' not in field:
+                            return 'absent'
+                        value=field['choiceOptionSetting']
+                        if value is None:
+                            return 'null'
+                        if isinstance(value,dict):
+                            return 'object_keys='+','.join(sorted(str(k) for k in value.keys())[:20])
+                        if isinstance(value,list):
+                            return 'array_len='+str(len(value))
+                        return type(value).__name__
+                    previous_setting=old_field.get('choiceOptionSetting')
+                    latest_setting=new_field.get('choiceOptionSetting')
+                    if previous_setting == latest_setting and (
+                        ('choiceOptionSetting' in old_field) != ('choiceOptionSetting' in new_field)):
+                        classification='presence_only'
+                    elif ((previous_setting is None and latest_setting in ({},[])) or
+                          (latest_setting is None and previous_setting in ({},[]))):
+                        classification='null_vs_empty'
+                    else:
+                        classification='values_differ'
+                    differences.append('fields:choice_option_setting:'+identifier+
+                                       ':before='+shape(old_field)+
+                                       ':after='+shape(new_field)+
+                                       ':difference='+classification)
                 changes+=1
                 if changes>=10:
                     break
