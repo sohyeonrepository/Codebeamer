@@ -695,6 +695,51 @@ def creation_templates(configuration, metadata=None):
     return templates
 
 
+def _configuration_drift(expected, current):
+    """Compare Tracker configuration without treating field-list ordering as a write conflict.
+
+    Preserve every non-field setting and every field payload exactly. Only
+    permutations of the same uniquely identified fields are equivalent.
+    """
+    if not isinstance(expected, dict) or not isinstance(current, dict):
+        return ["response_shape"]
+    differences = []
+    for key in sorted(set(expected) | set(current)):
+        if key == 'fields':
+            continue
+        if expected.get(key) != current.get(key) or (key in expected) != (key in current):
+            differences.append("section:" + str(key))
+    before, after = expected.get('fields'), current.get('fields')
+    if not isinstance(before, list) or not isinstance(after, list):
+        differences.append('fields:missing_or_invalid')
+        return differences
+    def index(rows):
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            fid = field_identifier(row)
+            if type(fid) is not int or fid <= 0 or fid in result:
+                return None
+            result[fid] = row
+        return result
+    original, observed = index(before), index(after)
+    if original is None or observed is None:
+        differences.append('fields:unverifiable_id_or_duplicate')
+    else:
+        added = sorted(set(observed) - set(original))
+        removed = sorted(set(original) - set(observed))
+        if added:
+            differences.append('fields:added:' + ','.join(map(str, added[:10])))
+        if removed:
+            differences.append('fields:removed:' + ','.join(map(str, removed[:10])))
+        changed = sorted(fid for fid in original.keys() & observed.keys()
+                         if original[fid] != observed[fid])
+        if changed:
+            differences.append('fields:changed:' + ','.join(map(str, changed[:10])))
+    return differences
+
+
 def create_confirmed_field(cb, tracker, definition, expected, journal_path, approved=False, before_post=None, allow_reference=False):
     """Add one approved definition, preserving existing fields and uncertain writes."""
     if approved is not True:
@@ -733,8 +778,14 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         read_stage('Codebeamer 생성 API 정의 조회', cb.discover)
     cb.operation('tracker_configuration_update')
     current = read_stage('Codebeamer 생성 전 설정 재확인', lambda: cb.configuration(tracker))
-    if current != expected:
-        raise ApiError('트래커 설정이 변경됐습니다. 도우미를 재실행해 다시 조회하세요.')
+    drift = _configuration_drift(expected, current)
+    if drift:
+        raise ApiError('트래커 설정 재조회 비교 실패 (POST 미실행): '+
+                       '; '.join(drift[:12])+
+                       '. 필드 목록 순서 차이는 허용하지만 설정/권한 변경은 차단합니다.')
+    # The newest GET is the write baseline. Field order may have changed,
+    # but the content of each existing field is verified identical above.
+    expected = current
     body = deepcopy(expected)
     body['fields'].append(deepcopy(definition))
     body=prepare_configuration_permissions(cb,body)
