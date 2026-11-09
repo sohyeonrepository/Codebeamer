@@ -300,9 +300,10 @@ def launch(wizard, projects):
         scope = current_scope()
         entry = wizard.plan["scopes"][scope]
         info = entry["analysis"]["fields"][source]
-        profiles = wizard.creation_profiles(scope)
-        if not profiles:
-            raise ValueError("해당 Tracker에 검증된 신규 필드 생성 타입이 없습니다.")
+        # Choosing a field type is a local mapping decision. Read/validate
+        # the actual server creation contract only after Import approval.
+        profiles = ("text", "wikitext", "option", "user", "date",
+                    "datetime", "integer", "decimal", "boolean", "reference")
         window = tk.Toplevel(root)
         window.title("신규 Codebeamer 필드 생성 설정")
         window.geometry("680x570")
@@ -315,7 +316,7 @@ def launch(wizard, projects):
         ttk.Label(content, text="신규 필드 이름").pack(anchor="w")
         label_var = tk.StringVar(value=str(info.get("name", source)))
         ttk.Entry(content, textvariable=label_var, width=65).pack(anchor="w", pady=(3, 10))
-        ttk.Label(content, text="Codebeamer 필드 타입").pack(anchor="w")
+        ttk.Label(content, text="Codebeamer 필드 타입 (생성 가능 여부는 Import 시 서버 확인)").pack(anchor="w")
         type_var = tk.StringVar()
         type_box = ttk.Combobox(content, state="readonly", textvariable=type_var,
                                 values=list(profiles), width=44)
