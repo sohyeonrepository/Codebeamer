@@ -613,6 +613,15 @@ def launch(wizard, projects):
                 requested.append(mapping[identity])
             from migration.choice_option_creation import diff_options,append_missing
             missing=diff_options(detail,requested)
+            # Choice selection cardinality is a FIELD property, not a
+            # different option-creation contract.
+            multiple=detail.get("multipleValues")
+            append_log("Choice 옵션 확정 준비",
+                       str(source)+" → CB "+str(fid)+
+                       " · 다중 선택="+str(multiple)+
+                       " · 원본 매핑 "+str(len(mapping))+"개"+
+                       " · CB 기존 옵션 "+str(len(options))+"개"+
+                       " · 신규 옵션 필요 "+str(len(missing))+"개")
             if missing:
                 if not messagebox.askyesno("CB 신규 옵션 실제 생성",
                     "기존 CB 필드 "+str(fid)+"에 다음 옵션을 추가합니다.\\n\\n"+
