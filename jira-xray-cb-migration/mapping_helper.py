@@ -695,6 +695,22 @@ def creation_templates(configuration, metadata=None):
     return templates
 
 
+def _comparison_field(field):
+    """Comparison only: ChoiceMembers source types are an unordered enum set.
+
+    Never alter the outgoing server configuration or normalize other arrays.
+    Duplicate/unknown values remain strict, as do permissions and option order.
+    """
+    result = deepcopy(field)
+    setting = result.get('choiceOptionSetting')
+    if isinstance(setting, dict):
+        values = setting.get('membersTypeDataSourceTypes')
+        if (isinstance(values, list) and all(isinstance(v,str) and v in
+                ('USERS','GROUPS','ROLES') for v in values) and len(set(values))==len(values)):
+            setting['membersTypeDataSourceTypes'] = sorted(values)
+    return result
+
+
 def _configuration_drift(expected, current):
     """Detect actual Tracker settings drift, ignoring only field-list order.
 
@@ -716,6 +732,8 @@ def _configuration_drift(expected, current):
             not isinstance(f, dict) for f in (before or []) + (after or [])):
         differences.append('fields:missing_or_invalid')
         return differences
+    before = [_comparison_field(f) for f in before]
+    after = [_comparison_field(f) for f in after]
     if len(before) != len(after):
         differences.append('fields:count_changed:'+str(len(before))+'->'+str(len(after)))
     # Equality of sorted JSON signatures validates EVERY original property,
@@ -845,9 +863,15 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     current = read_stage('Codebeamer 생성 전 설정 재확인', lambda: cb.configuration(tracker))
     drift = _configuration_drift(expected, current)
     if drift:
+        diagnostic = journal_path.with_suffix('.drift.json')
+        diagnostic.parent.mkdir(parents=True, exist_ok=True)
+        diagnostic.write_text(json.dumps({'tracker_id':tracker, 'stage':'before_post',
+            'differences':drift, 'writes':0,
+            'note':'Known member-source enum order normalized for comparison only; real changes remain blocked.'},
+            ensure_ascii=False, indent=2), encoding='utf-8')
         raise ApiError('트래커 설정 재조회 비교 실패 (POST 미실행): '+
                        '; '.join(drift[:12])+
-                       '. 필드 목록 순서 차이는 허용하지만 설정/권한 변경은 차단합니다.')
+                       '. 실제 설정/권한 변경은 차단합니다. 진단: '+str(diagnostic))
     # The newest GET is the write baseline. Field order may have changed,
     # but the content of each existing field is verified identical above.
     expected = current
@@ -889,7 +913,8 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     for old in expected['fields']:
         field_id = field_identifier(old)
         existing = [field for field in actual.get('fields', []) if (field_identifier(field) == field_id if field_id is not None else (field.get('label')==old.get('label') and field.get('typeId')==old.get('typeId')))]
-        if len(existing) != 1 or any(existing[0].get(key) != value for key, value in old.items()):
+        if len(existing) != 1 or any(_comparison_field(existing[0]).get(key) != value
+                                     for key,value in _comparison_field(old).items()):
             raise ApiError('기존 필드의 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
     if any(actual.get(key) != value for key,value in expected.items() if key != 'fields'):
         raise ApiError('기존 Tracker의 필드 외 설정 보존을 확인할 수 없습니다. 서버 설정을 확인하세요.')
