@@ -852,6 +852,43 @@ def launch(wizard, projects):
                         missing.append(label+" → CB "+str(fid)+" · UserReference 계약 확인 필요")
                 else:
                     missing.append(label+" → CB "+str(fid)+" · 매핑 타입/계약 미확인")
+        # Existing Choice fields need both a saved source-option mapping
+        # and a verified server Option ID for every value on THIS Jira Issue.
+        # Field ID alone is not sufficient evidence of a usable Choice mapping.
+        from migration.option_batch import choice_names,norm
+        from clients.jira_client import segment
+        for source in selected:
+            if source in ("summary","description") or issue_values.get(source) is None:
+                continue
+            row=entry["rows"][source]
+            spec=row.get("spec") or {}
+            fid=spec.get("field_id")
+            if type(fid) is not int or fid<=0:
+                continue
+            info=entry["analysis"]["fields"].get(source,{})
+            if semantic_type(info,True)[0] not in ("option","status"):
+                continue
+            detail=wizard.cb.http.request("GET","/v3/trackers/"+
+                segment(entry["tracker"])+"/fields/"+segment(fid))
+            if not isinstance(detail,dict) or field_identifier(detail)!=fid:
+                raise ValueError("Choice 필드 "+source+"의 서버 상세 조회 실패 · Import POST 미실행")
+            if detail.get("referenceType")!="ChoiceOptionReference":
+                continue
+            options=detail.get("options")
+            if not isinstance(options,list):
+                missing.append(source+" → CB Choice 옵션 상세 목록 조회 불가")
+                continue
+            mapping=spec.get("value_mapping") or {}
+            for name in choice_names(issue_values[source],source):
+                target=mapping.get(name)
+                matches=[o for o in options if isinstance(o,dict) and
+                    isinstance(target,str) and norm(o.get("name"))==norm(target)
+                    and type(o.get("id")) is int]
+                if len(matches)!=1:
+                    missing.append(source+" → Jira 옵션 '"+name+
+                        "'의 확정된 CB 옵션 매핑/ID 없음 (CB Field "+str(fid)+
+                        "). 먼저 Choice 옵션 매핑을 완료하세요.")
+                    break
         if skipped_null:
             append_log("값 없음 · 쓰기 생략",str(len(skipped_null))+
                        "개 · 실제 Jira Issue에서 null인 필드 (매핑 요구하지 않음)")
@@ -862,6 +899,17 @@ def launch(wizard, projects):
         # or checkboxes; the limited execution plan will be copied below.
         excluded_sources=[]
         if missing:
+            # Never let an unresolved selected Choice reach Item POST only to
+            # fail after approval. Require mapping/option reconciliation first.
+            choice_unresolved=[problem for problem in missing
+                               if "확정된 CB 옵션 매핑/ID 없음" in problem or
+                               "CB Choice 옵션 상세 목록 조회 불가" in problem]
+            if choice_unresolved:
+                for problem in choice_unresolved:
+                    append_log("Choice 옵션 미완료",problem)
+                raise ValueError("선택한 Choice 필드의 옵션 매핑이 아직 완료되지 않았습니다. "+
+                                 "CB 옵션 생성/확인 후 매핑을 저장하세요. "+
+                                 "이번 실행에서 옵션을 임의로 제외하거나 Item POST를 진행하지 않습니다.")
             for problem in missing:
                 append_log("선택 필드 매핑 누락",problem)
             # Build a human-readable preview with an exact source list.
