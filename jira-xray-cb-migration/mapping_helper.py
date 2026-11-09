@@ -696,11 +696,13 @@ def creation_templates(configuration, metadata=None):
 
 
 def _configuration_drift(expected, current):
-    """Compare Tracker configuration without treating field-list ordering as a write conflict.
+    """Detect actual Tracker settings drift, ignoring only field-list order.
 
-    Preserve every non-field setting and every field payload exactly. Only
-    permutations of the same uniquely identified fields are equivalent.
+    Tracker Configuration can contain built-in fields with no numeric ID.
+    Compare the complete field definitions as a multiset rather than
+    requiring IDs or assuming that labels uniquely identify every field.
     """
+    from collections import Counter
     if not isinstance(expected, dict) or not isinstance(current, dict):
         return ["response_shape"]
     differences = []
@@ -710,33 +712,31 @@ def _configuration_drift(expected, current):
         if expected.get(key) != current.get(key) or (key in expected) != (key in current):
             differences.append("section:" + str(key))
     before, after = expected.get('fields'), current.get('fields')
-    if not isinstance(before, list) or not isinstance(after, list):
+    if not isinstance(before, list) or not isinstance(after, list) or any(
+            not isinstance(f, dict) for f in (before or []) + (after or [])):
         differences.append('fields:missing_or_invalid')
         return differences
-    def index(rows):
-        result = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                return None
-            fid = field_identifier(row)
-            if type(fid) is not int or fid <= 0 or fid in result:
-                return None
-            result[fid] = row
-        return result
-    original, observed = index(before), index(after)
-    if original is None or observed is None:
-        differences.append('fields:unverifiable_id_or_duplicate')
-    else:
-        added = sorted(set(observed) - set(original))
-        removed = sorted(set(original) - set(observed))
+    if len(before) != len(after):
+        differences.append('fields:count_changed:'+str(len(before))+'->'+str(len(after)))
+    # Equality of sorted JSON signatures validates EVERY original property,
+    # including permissions, options, nulls, and fields lacking identifiers.
+    # Counter preserves duplicates and never conflates similarly named fields.
+    def signature(row):
+        return json.dumps(row, ensure_ascii=False, sort_keys=True,
+                          separators=(',', ':'), default=str)
+    if Counter(map(signature, before)) != Counter(map(signature, after)):
+        original_ids={field_identifier(f) for f in before
+                      if type(field_identifier(f)) is int}
+        current_ids={field_identifier(f) for f in after
+                     if type(field_identifier(f)) is int}
+        added=sorted(current_ids-original_ids)
+        removed=sorted(original_ids-current_ids)
         if added:
-            differences.append('fields:added:' + ','.join(map(str, added[:10])))
+            differences.append('fields:added:'+','.join(map(str,added[:10])))
         if removed:
-            differences.append('fields:removed:' + ','.join(map(str, removed[:10])))
-        changed = sorted(fid for fid in original.keys() & observed.keys()
-                         if original[fid] != observed[fid])
-        if changed:
-            differences.append('fields:changed:' + ','.join(map(str, changed[:10])))
+            differences.append('fields:removed:'+','.join(map(str,removed[:10])))
+        if not added and not removed:
+            differences.append('fields:definition_changed_or_unmatched')
     return differences
 
 
