@@ -27,7 +27,7 @@ def launch(wizard, projects):
     def guarded(label, fn):
         try:
             result = fn()
-            if not status.get().startswith("생성 타입 정의 확인 필요"):
+            if result is not False and not status.get().startswith("생성 타입 정의 확인 필요"):
                 status.set(label + " 완료")
             return result
         except Exception as exc:
@@ -393,7 +393,7 @@ def launch(wizard, projects):
                             "\\n\\n새로 생성하지 않고 기존 필드에 연결할까요?",parent=window):
                             append_log("신규 Choice 중단",source+" · 같은 이름의 CB 필드 "+
                                        str(existing_id)+" 존재 · 변경 없음")
-                            return
+                            return False
                         # Reuse only after explicit approval. Existing options
                         # may be empty; let the Choice editor add missing ones
                         # under its separate approval/readback workflow.
@@ -407,7 +407,7 @@ def launch(wizard, projects):
                         window.destroy()
                         if semantic in ("option","status"):
                             option_mapping_popup(source)
-                        return
+                        return True
                 wizard.configure_creation(scope, source, label_var.get(), semantic,
                                           multi_var.get(), mapping, reference_tracker=reference_tracker)
                 wizard.select_field(scope, source, True)
@@ -418,10 +418,11 @@ def launch(wizard, projects):
                         "CB Tracker "+str(entry["tracker"])+"에 신규 필드 '"+label_var.get()+
                         "'"+detail_message+
                         "를 실제 생성합니다. 계속할까요?",parent=window):
-                        append_log("신규 Choice 계획 저장",source+" · 서버 변경 없음")
+                        append_log("신규 Choice 생성 취소",source+" · 서버 변경 없음 · 생성 완료 아님")
+                        status.set("신규 필드 실제 생성 취소 · 서버 변경 없음")
                         refresh()
                         window.destroy()
-                        return
+                        return False
                     append_log("신규 Choice 생성 시작",source+" · type="+semantic+
                                " · multiple="+str(multi_var.get())+
                                " · 옵션 "+str(len(set(mapping.values())))+"개")
@@ -432,6 +433,21 @@ def launch(wizard, projects):
                         raise ValueError("신규 필드 실제 CB ID를 확인하지 못했습니다.")
                     actual=wizard.cb.http.request("GET",
                         "/v3/trackers/"+str(entry["tracker"])+"/fields/"+str(fid))
+                    # A returned ID or a locally saved creation plan is not proof
+                    # that the Tracker actually contains the field.
+                    configuration=wizard.cb.configuration(entry["tracker"])
+                    config_fields=configuration.get("fields") if isinstance(configuration,dict) else None
+                    configured=[f for f in (config_fields or []) if isinstance(f,dict)
+                                and field_identifier(f)==fid]
+                    if (not isinstance(actual,dict) or field_identifier(actual)!=fid or
+                        not isinstance(config_fields,list) or len(configured)!=1):
+                        append_log("신규 필드 서버 검증 실패",source+" · CB Field ID "+str(fid)+
+                                   " · 상세 GET/Tracker Configuration 일치 여부 확인 필요")
+                        raise ValueError("서버 응답에 Field ID "+str(fid)+"가 있지만 Tracker Configuration과 "+
+                                         "상세 GET 양쪽에서 동일 필드를 확인하지 못했습니다. "+
+                                         "생성 완료로 처리하지 않습니다. 재생성 전에 서버 상태를 확인하세요.")
+                    append_log("신규 필드 서버 확인",source+" · CB Field ID "+str(fid)+
+                               " · 상세 GET 및 Tracker Configuration 확인")
                     if semantic=="user":
                         if (not isinstance(actual,dict) or field_identifier(actual)!=fid or
                             actual.get("referenceType")!="UserReference" or
@@ -450,7 +466,11 @@ def launch(wizard, projects):
                                    " · 사용자 자동 매핑 연결")
                         refresh()
                         window.destroy()
-                        return
+                        return True
+                    if (actual.get("referenceType")!="ChoiceOptionReference" or
+                        not str(actual.get("valueModel") or "").startswith("ChoiceFieldValue")):
+                        raise ValueError("신규 필드 ID "+str(fid)+"는 Choice-Option 타입이 아닙니다. "+
+                                         "필드 생성 성공으로 처리하지 않습니다.")
                     existing={norm(o.get("name")):o for o in actual.get("options",[])
                               if isinstance(o,dict) and type(o.get("id")) is int}
                     if any(norm(name) not in existing for name in mapping.values()):
@@ -482,6 +502,7 @@ def launch(wizard, projects):
                                " · 실제 옵션 ID "+str(len(existing))+"개 조회")
                 refresh()
                 window.destroy()
+                return True
             guarded("신규 필드 설정", perform)
 
         ttk.Button(content, text="설정 저장", command=save_new).pack(side="right", pady=8)
