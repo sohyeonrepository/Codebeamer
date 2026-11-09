@@ -1064,7 +1064,16 @@ class ImportWizard:
         matches = [f for f in fields if f.get('label', f.get('name')) == proposal['label']]
         if known:
             if len(matches) != 1:
-                raise ApiError('Uncertain field creation: reconcile server state')
+                if len(matches) == 0:
+                    raise ApiError(
+                        '이전 신규 필드 생성 시도의 결과가 확인되지 않았습니다: '
+                        +str(proposal['label'])+' (Tracker '+str(tracker)+'). '
+                        '서버 Field 목록에는 동일 이름 필드가 없습니다. '
+                        '이전 POST가 HTTP 400/권한 거부였다면 서버 권한 및 요청 계약부터 수정해야 합니다. '
+                        '저장된 pending 이력을 임의로 삭제하거나 POST를 자동 재실행하지 않습니다. '
+                        '관리자가 Tracker 필드 생성 여부와 쓰기 권한을 확인한 후 재조정하세요.')
+                raise ApiError('동일 이름 필드가 여러 개입니다: '+str(proposal['label'])+
+                               ' · 중복 자동 연결/재생성을 중단합니다.')
             created = matches[0]
             if known[0] != 'done':
                 journal_path=self.state.root/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
