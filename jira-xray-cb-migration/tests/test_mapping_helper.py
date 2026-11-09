@@ -10,6 +10,27 @@ FIELD = {'id': 5, 'label': 'Result', 'typeId': 7, 'mandatory': True,
 
 
 class MappingHelperTests(unittest.TestCase):
+    def test_dedicated_choice_option_name_contract(self):
+        from mapping_helper import option_payload
+        spec = {}
+        schema = {"type": "object", "properties": {
+            "optionName": {"type": "string"},
+            "optionId": {"type": "integer"},
+            "optionFlags": {"type": "integer"},
+            "optionStyle": {"type": "string"}
+        }, "required": []}
+        self.assertEqual(option_payload(spec, schema, "Passed"), {"optionName": "Passed"})
+
+    def test_dedicated_choice_does_not_guess_required_option_id(self):
+        from mapping_helper import option_payload
+        from clients.http import ApiError
+        schema = {"type": "object", "properties": {
+            "optionName": {"type": "string"},
+            "optionId": {"type": "integer"}
+        }, "required": ["optionName", "optionId"]}
+        with self.assertRaises(ApiError):
+            option_payload({}, schema, "Passed")
+
     def test_read_only_collection_and_no_mutation(self):
         config = {'execution_issue_types': ['Test Execution']}
         calls = []
