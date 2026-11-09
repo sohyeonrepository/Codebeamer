@@ -132,7 +132,9 @@ def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_ro
                 continue
             record("pending",created_names)
             log("Choice 옵션 POST","필드 "+str(field_id)+" · 누락된 옵션 1개 생성 요청")
-            cb.call("choice_option_create",{"trackerId":tracker,"fieldId":field_id},body)
+            post_result=cb.call("choice_option_create",{"trackerId":tracker,"fieldId":field_id},body)
+            # POST success is not proof of an Option ID: verify the server's
+            # authoritative Field Detail. Keep diagnostic metadata only.
             after=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
                                   "/fields/"+segment(field_id))
             if not isinstance(after,dict) or field_identifier(after)!=field_id:
@@ -141,7 +143,28 @@ def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_ro
                       and norm(o.get("name"))==norm(name)
                       and type(o.get("id")) is int]
             if len(matching)!=1:
-                raise ApiError("옵션 POST 이후 실제 Option ID 확인 실패. 동일 요청 재실행 금지.")
+                diagnostic={
+                    "tracker_id":tracker,"field_id":field_id,
+                    "stage":"option_post_readback",
+                    "post_response_type":type(post_result).__name__,
+                    "post_response_keys":sorted(post_result) if isinstance(post_result,dict) else [],
+                    "field_detail_id_matches":field_identifier(after)==field_id,
+                    "field_detail_options_type":type(after.get("options")).__name__,
+                    "field_detail_option_count":len(after.get("options")) if isinstance(after.get("options"),list) else None,
+                    "matching_name_count":sum(1 for o in after.get("options",[])
+                        if isinstance(o,dict) and norm(o.get("name"))==norm(name))
+                        if isinstance(after.get("options"),list) else None,
+                    "matching_with_integer_id_count":len(matching),
+                    "note":"Readback uncertain; original option POST must not be repeated automatically."
+                }
+                evidence=Path(state_root)/("choice-option-readback-"+str(tracker)+"-"+str(field_id)+".json")
+                evidence.write_text(json.dumps(diagnostic,ensure_ascii=False,indent=2),encoding="utf-8")
+                log("Choice 옵션 생성 결과 미확정","Field "+str(field_id)+
+                    " · 옵션 ID 상세 재조회 불일치 · 진단: "+str(evidence))
+                raise ApiError("옵션 POST는 실행됐으나 Field Detail의 옵션 이름/ID 검증에 실패했습니다. "+
+                               "GET /v3/trackers/"+str(tracker)+"/fields/"+str(field_id)+
+                               "의 options를 확인하세요. 중복 생성 방지를 위해 자동 재POST 금지. "+
+                               "진단 파일: "+str(evidence))
             created_names.append(name)
             record("verified_partial",created_names)
             log("Choice 옵션 ID 확인","Field "+str(field_id)+
