@@ -921,7 +921,12 @@ class ImportWizard:
         row = entry['rows'][source]
         receipt=self.state.get(field_identity(entry.get('tracker'),source,row))
         if receipt and receipt[0]!='done':
-            raise ApiError('이 필드의 이전 생성 요청이 불확실합니다. 서버 대조 후 생성 설정을 변경하세요.')
+            # Do not erase a pending creation receipt: even a failed POST can
+            # have an uncertain server-side outcome. Report exact identifiers.
+            raise ApiError('Jira 필드 '+source+'의 이전 생성 요청이 미확정입니다 (Tracker '+
+                           str(entry.get('tracker'))+'). Codebeamer에서 해당 필드의 존재/Field ID를 '+
+                           '조회한 뒤 기존 필드로 연결하거나 관리자 재조정이 필요합니다. '+
+                           '설정 변경으로 pending을 덮어쓰지 않습니다.')
         label = label.strip()
         if not label:
             raise ApiError('신규 필드 이름을 입력하세요.')
@@ -1047,7 +1052,19 @@ class ImportWizard:
         proposal = row['creation']
         profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal.get('profile_key', proposal['semantic_type']))
         if not profile:
-            raise ApiError('Configure a verified wizard.field_types template for ' + proposal['semantic_type'])
+            # Plans saved before a creation profile was discovered can still
+            # carry a valid proposal. Refresh server-derived templates read-only
+            # before deciding that this field type is unsupported.
+            refreshed=self.creation_profiles(scope)
+            profile=refreshed.get(proposal.get('profile_key',proposal['semantic_type']))
+            if profile:
+                row['creation_profile']=deepcopy(profile)
+                self.state.save('wizard','plan',self.plan)
+        if not profile:
+            raise ApiError('신규 필드 생성 타입 '+str(proposal['semantic_type'])+
+                           '의 검증된 CB 생성 템플릿이 없습니다. Tracker 필드 목록에서 동일 타입의 예시 필드와 '+
+                           '쓰기 API 계약을 확인해야 합니다. 자동으로 typeId/permission을 추측하지 않습니다. '+
+                           '기존 Text 필드에 수동 매핑하거나 생성 타입 정의를 확인하세요.')
         entry = self.plan['scopes'][scope]
         template_tracker = entry.get('template_tracker') if entry.get('tracker') is None and entry.get('new_tracker') else tracker
         if profile.get('source_tracker_id', tracker) not in (tracker, template_tracker):
