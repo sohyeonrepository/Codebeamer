@@ -793,23 +793,45 @@ def launch(wizard, projects):
         project=entry["project"]
         if not key.startswith(project+"-"):
             raise ValueError("선택한 Jira 프로젝트의 Issue Key를 입력하세요.")
-        # The checkmark selects data, but it does not assign a CB field.
-        # Report all unmapped chosen fields before approval, not just the
-        # first field encountered while POST payload is being prepared.
+        # A selected Jira field may be null on THIS issue. The import adapter
+        # already skips null values; don't require a target for values that
+        # will not be written. Do not silently deselect fields from the plan.
+        from migration.simple_item_import import _read_selected_issue
+        preview_settings=deepcopy(wizard.config)
+        preview_settings.setdefault("jira",{})["single_issue_key"]=key
+        preview=SimpleNamespace(plan={"scopes":{scope:entry}},
+                                config=preview_settings,jira=wizard.jira)
+        verified_key, issue_values=_read_selected_issue(preview,scope,set(selected))
+        if verified_key!=key:
+            raise ValueError("Jira 조회 Issue Key 불일치. Import 중단")
         missing=[]
+        skipped_null=[]
         for source in selected:
             if source in ("summary","description"):
                 continue
             row=entry["rows"][source]
+            info=entry["analysis"]["fields"].get(source,{})
+            display=str(info.get("name") or source)
+            kind=semantic_type(info,True)[0] or "미확인"
+            label=display+" ["+source+" / "+kind+"]"
+            value=issue_values.get(source)
+            # None is the only value skipped by the current importer. Empty
+            # string, dict, list and false remain subject to normal validation.
+            if value is None:
+                skipped_null.append(label)
+                continue
             spec=row.get("spec") or {}
             fid=spec.get("field_id")
             if type(fid) is not int or fid<=0:
-                missing.append(source+" (CB 대상 필드 미지정)")
+                target=row.get("target") or {}
+                planned=row.get("creation") or {}
+                name=target.get("label") or target.get("name") or planned.get("label")
+                description=("신규 생성 예정 '"+str(name)+"' (서버 Field ID 미확인)"
+                             if planned else
+                             "CB 대상 필드 미지정 · 필드 매핑 화면에서 대상 선택")
+                missing.append(label+" → "+description)
             elif spec.get("missing_definition") or spec.get("selection_unverified"):
-                # Previously saved User mappings can contain obsolete generic
-                # Choice field warnings. Check actual UserReference metadata.
-                jira_kind=semantic_type(entry["analysis"]["fields"][source],True)[0]
-                if jira_kind=="user":
+                if kind=="user":
                     from clients.jira_client import segment
                     detail=wizard.cb.http.request("GET",
                         "/v3/trackers/"+segment(entry["tracker"])+"/fields/"+segment(fid))
@@ -821,18 +843,24 @@ def launch(wizard, projects):
                         spec.pop("selection_unverified",None)
                         spec["user_identity_lookup"]=True
                         wizard.state.save("wizard","plan",wizard.plan)
-                        append_log("User 필드 검증",source+" → CB "+str(fid)+
+                        append_log("User 필드 검증",label+" → CB "+str(fid)+
                                    " · 옵션 매핑 없이 계정 자동 조회")
                     else:
-                        missing.append(source+" (CB UserReference 상세 계약 미확인)")
+                        missing.append(label+" → CB "+str(fid)+" · UserReference 계약 확인 필요")
                 else:
-                    missing.append(source+" (매핑 타입/계약 미확인)")
+                    missing.append(label+" → CB "+str(fid)+" · 매핑 타입/계약 미확인")
+        if skipped_null:
+            append_log("값 없음 · 쓰기 생략",str(len(skipped_null))+
+                       "개 · 실제 Jira Issue에서 null인 필드 (매핑 요구하지 않음)")
+            for item in skipped_null[:15]:
+                append_log("null 필드",item+" → 쓰기 생략")
         if missing:
             for problem in missing:
                 append_log("선택 필드 매핑 누락",problem)
-            raise ValueError("체크된 Jira 필드 중 CB 대상 매핑이 없습니다:\\n"+
-                             "\\n".join(missing)+
-                             "\\n데이터 가져오기 화면의 CB 필드 열에서 기존 대상을 연결하세요.")
+            raise ValueError("실제 값이 있는 Jira 필드의 CB 매핑이 필요합니다:\n"+
+                             "\n".join(missing[:15])+
+                             ("\n외 "+str(len(missing)-15)+"개 (결과/로그 패널 확인)" if len(missing)>15 else "")+
+                             "\n필드 매핑 화면에서 각각 CB 대상을 선택하세요. Choice 이외 타입도 해당됩니다.")
         # Verify the reserved, unique Jira Key field BEFORE user approval.
         from migration.simple_item_import import _field
         _field(wizard.cb,entry["tracker"])
