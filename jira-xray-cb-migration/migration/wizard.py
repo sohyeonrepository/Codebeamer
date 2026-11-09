@@ -1091,28 +1091,35 @@ class ImportWizard:
             self.state.save('wizard','plan',self.plan)
             raise
 
+    def _creation_profile_for_tracker(self, scope, row, tracker):
+        proposal = row['creation']
+        key = proposal.get('profile_key', proposal['semantic_type'])
+        entry = self.plan['scopes'][scope]
+        template = entry.get('template_tracker') if entry.get('tracker') is None and entry.get('new_tracker') else tracker
+        allowed = {str(value) for value in (tracker, template) if value is not None}
+        def belongs(profile):
+            return bool(profile) and str(profile.get('source_tracker_id',tracker)) in allowed
+        profile = row.get('creation_profile') or entry.get('creation_profiles',{}).get(key)
+        if not profile:
+            profile = self.config['migration'].get('wizard',{}).get('field_types',{}).get(key)
+        if not belongs(profile):
+            # A saved row may outlive a Tracker selection. Never use its old
+            # type IDs or permissions, and never erase the user's proposal.
+            row.pop('creation_profile',None)
+            refreshed = self.creation_profiles(scope)
+            profile = refreshed.get(key)
+            if not belongs(profile):
+                self.state.save('wizard','plan',self.plan)
+                raise ApiError('선택 Tracker '+str(tracker)+'에서 '+str(key)+
+                               ' 필드 생성 계약을 확인하지 못했습니다. 다른 Tracker의 템플릿은 사용하지 않습니다. POST 미실행')
+        row['creation_profile'] = deepcopy(profile)
+        self.state.save('wizard','plan',self.plan)
+        return profile
+
     def _create_field(self, scope, source, row, tracker):
         from mapping_helper import create_dedicated_field, dedicated_field_contract, create_confirmed_field
         proposal = row['creation']
-        profile = row.get('creation_profile') or self.config['migration'].get('wizard', {}).get('field_types', {}).get(proposal.get('profile_key', proposal['semantic_type']))
-        if not profile:
-            # Plans saved before a creation profile was discovered can still
-            # carry a valid proposal. Refresh server-derived templates read-only
-            # before deciding that this field type is unsupported.
-            refreshed=self.creation_profiles(scope)
-            profile=refreshed.get(proposal.get('profile_key',proposal['semantic_type']))
-            if profile:
-                row['creation_profile']=deepcopy(profile)
-                self.state.save('wizard','plan',self.plan)
-        if not profile:
-            raise ApiError('신규 필드 생성 타입 '+str(proposal['semantic_type'])+
-                           '의 검증된 CB 생성 템플릿이 없습니다. Tracker 필드 목록에서 동일 타입의 예시 필드와 '+
-                           '쓰기 API 계약을 확인해야 합니다. 자동으로 typeId/permission을 추측하지 않습니다. '+
-                           '기존 Text 필드에 수동 매핑하거나 생성 타입 정의를 확인하세요.')
-        entry = self.plan['scopes'][scope]
-        template_tracker = entry.get('template_tracker') if entry.get('tracker') is None and entry.get('new_tracker') else tracker
-        if profile.get('source_tracker_id', tracker) not in (tracker, template_tracker):
-            raise ApiError('Field creation template belongs to another Tracker; analyze the selected Tracker again')
+        profile = self._creation_profile_for_tracker(scope,row,tracker)
         definition = deepcopy(profile['definition'])
         definition.update(label=proposal['label'], multipleSelection=proposal['multipleSelection'])
         if proposal['semantic_type'] in ('option', 'status'):
