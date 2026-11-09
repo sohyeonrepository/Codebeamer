@@ -931,10 +931,10 @@ class ImportWizard:
         if not label:
             raise ApiError('신규 필드 이름을 입력하세요.')
         source_kind, source_multiple = semantic_type(entry['analysis']['fields'][source], True)
-        profiles = entry.get('creation_profiles', self.config['migration'].get('wizard', {}).get('field_types', {}))
-        if semantic not in profiles:
-            raise ApiError('선택한 타입의 검증된 Codebeamer 생성 정의가 없습니다: ' + semantic)
-        selected_profile=deepcopy(profiles[semantic])
+        # The mapping editor records user intent, not a server-write template.
+        # A live, validated CB creation definition is resolved only at Import.
+        profiles = entry.get('creation_profiles') or self.config['migration'].get('wizard', {}).get('field_types', {})
+        selected_profile=deepcopy(profiles.get(semantic)) if isinstance(profiles,dict) else None
         target_kind = {'wikitext':'text', 'integer':'number', 'decimal':'number',
                        'bool':'boolean', 'wikilink':'text'}.get(semantic, semantic)
         target_cardinality = bool(multiple)
@@ -957,17 +957,22 @@ class ImportWizard:
                            '. Jira Choice 메타데이터를 확인하거나 원본 값과 선택 옵션을 명시적으로 매핑하세요.')
         if source_multiple and not multiple and target_kind not in ('text',):
             raise ApiError('원본 다중 값을 단일 필드로 변환하면 데이터가 손실됩니다.')
-        actual_kind = semantic_type(dict(selected_profile['definition'], typeName=selected_profile['type_name']))[0]
-        if actual_kind != target_kind:
-            raise ApiError('선택한 필드 타입과 서버 생성 템플릿이 일치하지 않습니다: '+semantic)
+        if selected_profile:
+            actual_kind = semantic_type(dict(selected_profile['definition'], typeName=selected_profile['type_name']))[0]
+            if actual_kind != target_kind:
+                raise ApiError('선택한 필드 타입과 서버 생성 정의가 일치하지 않습니다: '+semantic)
         if semantic=='reference':
             allowed=[t['id'] for t in self.plan['projects'][entry['project']]['trackers']]
             if reference_tracker not in allowed:raise ApiError('선택한 프로젝트의 실제 참조 대상 Tracker를 선택하세요.')
-            template=selected_profile.get('reference_template')
-            if not isinstance(template,dict):raise ApiError('Reference 생성 요청의 reference_template 계약이 없습니다. 기존 Reference 필드 연결은 가능합니다.')
-            from clients.codebeamer_client import render
-            selected_profile['definition']['reference']=render(template,{'targetTrackerId':reference_tracker})
-            selected_profile['creation_method']='configuration'
+            if selected_profile:
+                template=selected_profile.get('reference_template')
+                if not isinstance(template,dict):
+                    raise ApiError('Reference 생성의 서버 검증 계약이 없습니다. 기존 Reference 필드 연결은 가능합니다.')
+                from clients.codebeamer_client import render
+                selected_profile['definition']['reference']=render(template,{'targetTrackerId':reference_tracker})
+                selected_profile['creation_method']='configuration'
+            else:
+                raise ApiError('Reference 필드 생성은 대상 Tracker에 대해 검증된 참조 계약이 필요합니다.')
         options = {}
         if semantic in ('option', 'status'):
             if not isinstance(choices, dict) or not choices or any(not str(v).strip() for v in choices.values()):
@@ -978,10 +983,14 @@ class ImportWizard:
         if receipt and receipt[0]=='done':
             row['creation_token']=hashlib.sha256(json.dumps([label,semantic,multiple,options],sort_keys=True).encode()).hexdigest()[:16]
         row.pop('target',None)
-        row.update(status='create',spec=None,mapping_mode='create', creation_saved=True, creation_profile=selected_profile, reason='Import 승인 후 생성', creation={
+        row.update(status='create',spec=None,mapping_mode='create', creation_saved=True, reason='Import 승인 후 서버 정의 조회/생성', creation={
             'label':label, 'semantic_type':target_kind, 'profile_key':semantic,
             'conversion':conversion, 'multipleSelection':bool(multiple),
             'choices':options, **({'reference_tracker_id':reference_tracker} if semantic=='reference' else {})})
+        if selected_profile:
+            row['creation_profile']=selected_profile
+        else:
+            row.pop('creation_profile',None)
         self.state.save('wizard', 'plan', self.plan)
         row['creation_stage']='PLANNED'
         self.state.field_phase(scope+':'+source,'PLANNED',field_id=None,plan=deepcopy(row['creation']))
