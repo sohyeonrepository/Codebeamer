@@ -736,7 +736,44 @@ def _configuration_drift(expected, current):
         if removed:
             differences.append('fields:removed:'+','.join(map(str,removed[:10])))
         if not added and not removed:
-            differences.append('fields:definition_changed_or_unmatched')
+            # Emit field positions and changed PROPERTY NAMES only, never
+            # option names, permission values, Jira data or full definitions.
+            from collections import defaultdict
+            old_rows=defaultdict(list)
+            new_rows=defaultdict(list)
+            def identity(row):
+                fid=field_identifier(row)
+                if type(fid) is int:
+                    return ('id',fid)
+                return ('label_type',str(row.get('label') or row.get('name') or ''),
+                        str(row.get('typeId') or ''))
+            for i,row in enumerate(before):
+                old_rows[identity(row)].append((i,row))
+            for i,row in enumerate(after):
+                new_rows[identity(row)].append((i,row))
+            changes=0
+            for key in old_rows.keys() | new_rows.keys():
+                old_pair=old_rows.get(key,[])
+                new_pair=new_rows.get(key,[])
+                if len(old_pair)!=1 or len(new_pair)!=1:
+                    continue
+                old_index,old_field=old_pair[0]
+                new_index,new_field=new_pair[0]
+                if old_field==new_field:
+                    continue
+                properties=sorted(prop for prop in old_field.keys() | new_field.keys()
+                                  if old_field.get(prop)!=new_field.get(prop) or
+                                  (prop in old_field)!=(prop in new_field))
+                differences.append('fields:changed_properties:'+
+                                   str(field_identifier(old_field) if type(field_identifier(old_field)) is int
+                                       else 'index'+str(old_index))+
+                                   ':'+','.join(properties[:16]))
+                changes+=1
+                if changes>=10:
+                    break
+            if not changes:
+                differences.append('fields:unmatched_or_duplicate_definitions:'+
+                                   str(len(before))+':'+str(len(after)))
     return differences
 
 
