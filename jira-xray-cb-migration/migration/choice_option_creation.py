@@ -104,11 +104,42 @@ def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_ro
     if path.exists():
         previous=json.loads(path.read_text(encoding="utf-8"))
         if previous.get("status")=="pending":
-            raise ApiError("이전 옵션 POST 결과가 미확정입니다. CB에서 확인한 후 재시도하세요. 자동 재전송 금지.")
-    def record(status, created_names):
+            # A pending write must be reconciled against the actual server.
+            # Old receipts do not record the in-flight option name; never
+            # assume absence proves failure or replay an unknown request.
+            pending_name=previous.get("pending_name")
+            current=cb.http.request("GET","/v3/trackers/"+segment(tracker)+
+                                    "/fields/"+segment(field_id))
+            if not isinstance(current,dict) or field_identifier(current)!=field_id:
+                raise ApiError("이전 옵션 POST 결과가 미확정이고 CB Field Detail 조회에 실패했습니다. 재POST 금지.")
+            options=current.get("options")
+            if not isinstance(options,list):
+                raise ApiError("이전 옵션 POST 결과 미확정 · CB 옵션 목록 확인 불가 · 재POST 금지.")
+            matched=[o for o in options if isinstance(o,dict) and pending_name is not None
+                     and norm(o.get("name"))==norm(pending_name) and type(o.get("id")) is int]
+            if pending_name is not None and len(matched)==1:
+                # The uncertain request is now verified as present. This does
+                # not authorize resending any other unfinished POST.
+                log("Choice 이전 POST 복구","Field "+str(field_id)+
+                    " · 이전 옵션 ID "+str(matched[0]["id"])+" 서버 확인")
+                previous["status"]="verified_partial"
+                previous["created_names"]=list(dict.fromkeys(
+                    (previous.get("created_names") or [])+[pending_name]))
+                previous.pop("pending_name",None)
+                path.write_text(json.dumps(previous,ensure_ascii=False,indent=2),encoding="utf-8")
+            else:
+                raise ApiError("이전 옵션 POST 결과 미확정 · Tracker "+str(tracker)+
+                               " / Field "+str(field_id)+
+                               (" / 요청 옵션 "+str(pending_name) if pending_name else
+                                " / 구버전 기록에 요청 옵션명이 없음")+
+                               ". 현재 CB Detail에서 유일한 Option ID를 확인하지 못했습니다. "+
+                               "옵션이 없더라도 이전 POST를 자동 재전송하지 않습니다. "+
+                               "서버의 옵션 생성 내역과 이전 POST 결과를 확인해 주세요.")
+    def record(status, created_names, pending_name=None):
         temp=path.with_suffix(".tmp")
         temp.write_text(json.dumps({"status":status,"tracker":tracker,
             "field_id":field_id,"created_names":created_names,
+            "pending_name":pending_name if status=="pending" else None,
             "requested_count":len(missing),"route_template":route},
             ensure_ascii=False,indent=2),encoding="utf-8")
         temp.replace(path)
@@ -130,7 +161,7 @@ def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_ro
                 log("Choice 옵션 중복방지","옵션이 이미 존재함 · 별도 POST 생략")
                 created_names.append(name)
                 continue
-            record("pending",created_names)
+            record("pending",created_names,pending_name=name)
             log("Choice 옵션 POST","필드 "+str(field_id)+" · 누락된 옵션 1개 생성 요청")
             post_result=cb.call("choice_option_create",{"trackerId":tracker,"fieldId":field_id},body)
             # POST success is not proof of an Option ID: verify the server's
