@@ -63,8 +63,39 @@ def _append_with_dedicated_api(cb, tracker, field_id, desired, missing, state_ro
         for body in requests:
             validate(cb.spec,body,schema)
     except (ApiError,KeyError,TypeError,ValueError) as exc:
+        # The official v3 docs describe multi-Choice ITEM values, not the
+        # request body of this separate option-creation endpoint. Preserve
+        # precise contract evidence without guessing a name/value property.
+        from mapping_helper import schema_object
+        try:
+            resolved=schema_object(cb.spec,schema) if "schema" in locals() else {}
+        except (ApiError,KeyError,TypeError,ValueError):
+            resolved={}
+        evidence={
+            "tracker_id":tracker,"field_id":field_id,
+            "endpoint":route,"method":"POST",
+            "request_schema_type":resolved.get("type"),
+            "request_schema_properties":sorted(resolved.get("properties",{})),
+            "request_schema_required":resolved.get("required",[]),
+            "request_schema_items_type":(resolved.get("items") or {}).get("type") if isinstance(resolved.get("items"),dict) else None,
+            "request_body_media_types":sorted((api.get("requestBody") or {}).get("content",{})),
+            "operation_parameter_shapes":[{"name":p.get("name"),"in":p.get("in"),
+                  "required":p.get("required"),"type":(p.get("schema") or {}).get("type")}
+                  for p in api.get("parameters",[]) if isinstance(p,dict)],
+            "error_type":type(exc).__name__,
+            "stage":"schema_validation_before_post",
+            "note":"No option POST executed. No user values or credentials included."
+        }
+        evidence_path=Path(state_root)/("choice-option-post-contract-"+
+                                      str(tracker)+"-"+str(field_id)+".json")
+        evidence_path.parent.mkdir(parents=True,exist_ok=True)
+        evidence_path.write_text(json.dumps(evidence,ensure_ascii=False,indent=2,default=str),
+                                 encoding="utf-8")
+        log("Choice 옵션 요청 형식 미확인",str(evidence_path)+
+            " · schema.type="+str(evidence["request_schema_type"])+
+            " · properties="+repr(evidence["request_schema_properties"]))
         raise ApiError("Choice 옵션 POST 요청 스키마 검증 실패 (쓰기 미실행): "+
-                       str(exc)) from None
+                       str(exc)+". 전용 API 스키마 진단: "+str(evidence_path)) from None
     # Local state contains no credential or request payload. Existing
     # options are authoritative from field detail, not Tracker configuration.
     path=Path(state_root)/("choice-add-"+hashlib.sha256(
