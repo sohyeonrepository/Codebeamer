@@ -155,6 +155,47 @@ class Target:
         raise AssertionError(name)
 
 
+class DeferredFieldCreationTests(unittest.TestCase):
+    def _wizard(self, receipt=None):
+        from types import SimpleNamespace
+        wizard=ImportWizard.__new__(ImportWizard)
+        row={"selected":True, "status":"manual"}
+        wizard.plan={"projects":{}, "scopes":{"P:1":{
+            "project":"P", "tracker":4872985,
+            "analysis":{"fields":{"customfield_19806":{
+                "name":"[TC] 판정 조건",
+                "schema":{"type":"string",
+                          "custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"}}},
+                "values":{"customfield_19806":["PASS"]}},
+            "rows":{"customfield_19806":row}
+        }}}
+        actions=[]
+        wizard.state=SimpleNamespace(
+            get=lambda key:receipt,
+            save=lambda *args:actions.append(("save",args[0])),
+            field_phase=lambda *args,**kw:actions.append(("phase",args[1])))
+        wizard.config={"migration":{"wizard":{"field_types":{}}}}
+        return wizard,row,actions
+
+    def test_save_text_creation_without_preconfigured_template(self):
+        wizard,row,actions=self._wizard()
+        proposal=wizard.configure_creation("P:1","customfield_19806",
+            "[TC] 판정 조건","text",False,{})
+        self.assertEqual(proposal["profile_key"],"text")
+        self.assertEqual(proposal["semantic_type"],"text")
+        self.assertTrue(row["creation_saved"])
+        self.assertNotIn("creation_profile",row)
+        self.assertEqual(row["creation_stage"],"PLANNED")
+        self.assertTrue(any(kind=="phase" for kind,_ in actions))
+
+    def test_pending_creation_cannot_be_overwritten(self):
+        wizard,row,_=self._wizard(("pending",None))
+        with self.assertRaises(ApiError):
+            wizard.configure_creation("P:1","customfield_19806",
+                "[TC] 판정 조건","text",False,{})
+        self.assertNotIn("creation",row)
+
+
 class WizardTests(unittest.TestCase):
     def setUp(self):
         self.tmp=TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
