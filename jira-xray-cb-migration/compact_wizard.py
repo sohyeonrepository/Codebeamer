@@ -32,8 +32,11 @@ def launch(wizard, projects):
             return result
         except Exception as exc:
             message = str(exc)
+            # Keep the failure visible in the result panel even after closing
+            # a popup. Never write full request/response payloads to the log.
+            append_log(label + " 실패", type(exc).__name__ + " · " + message[:1800])
             if len(message) > 600:
-                message = message[:600] + "… (상세 진단 확인)"
+                message = message[:600] + "… (결과/로그 패널 확인)"
             status.set(label + " 실패: " + message)
             messagebox.showerror(label + " 실패", message)
             return None
