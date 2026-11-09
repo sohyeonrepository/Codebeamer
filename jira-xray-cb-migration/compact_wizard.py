@@ -863,31 +863,62 @@ def launch(wizard, projects):
                        "개 · 실제 Jira Issue에서 null인 필드 (매핑 요구하지 않음)")
             for item in skipped_null[:15]:
                 append_log("null 필드",item+" → 쓰기 생략")
+        # Missing mappings must never silently disappear from an import.
+        # Allow a one-time explicit exclusion without changing saved mappings
+        # or checkboxes; the limited execution plan will be copied below.
+        excluded_sources=[]
         if missing:
             for problem in missing:
                 append_log("선택 필드 매핑 누락",problem)
-            raise ValueError("실제 값이 있는 Jira 필드의 CB 매핑이 필요합니다:\n"+
-                             "\n".join(missing[:15])+
-                             ("\n외 "+str(len(missing)-15)+"개 (결과/로그 패널 확인)" if len(missing)>15 else "")+
-                             "\n필드 매핑 화면에서 각각 CB 대상을 선택하세요. Choice 이외 타입도 해당됩니다.")
+            # Build a human-readable preview with an exact source list.
+            # A source may be unmapped or contract-unverified; neither is safe
+            # to write until it has been explicitly excluded or corrected.
+            for source in selected:
+                if source in ("summary","description") or issue_values.get(source) is None:
+                    continue
+                row=entry["rows"][source]
+                spec=row.get("spec") or {}
+                fid=spec.get("field_id")
+                if (type(fid) is not int or fid<=0 or
+                        spec.get("missing_definition") or spec.get("selection_unverified")):
+                    excluded_sources.append(source)
+            excluded_labels=[]
+            for source in excluded_sources:
+                info=entry["analysis"]["fields"].get(source,{})
+                excluded_labels.append(str(info.get("name") or source)+" ["+source+"]")
+            message=("다음 "+str(len(excluded_sources))+"개 Jira 필드는 아직 CB에 매핑되지 않았거나 "+
+                     "매핑 계약이 확인되지 않았습니다.\n\n"+
+                     "\n".join(excluded_labels[:12])+
+                     ("\n외 "+str(len(excluded_labels)-12)+"개 · 결과/로그 확인" if len(excluded_labels)>12 else "")+
+                     "\n\n위 필드를 이번 1건 Import에서만 제외하고 계속할까요?\n"+
+                     "저장된 필드 매핑/체크 상태는 변경하지 않습니다.")
+            if not messagebox.askyesno("미완료 필드 제외 여부 확인",message):
+                append_log("Import 중단","미매핑 필드 제외에 동의하지 않아 POST 미실행")
+                return
+            for source in excluded_sources:
+                append_log("이번 Import 제외",source+" · 미매핑/미검증 (실제 POST에 포함하지 않음)")
+        effective_selected=[source for source in selected if source not in set(excluded_sources)]
         # Verify the reserved, unique Jira Key field BEFORE user approval.
         from migration.simple_item_import import _field
         _field(wizard.cb,entry["tracker"])
         if not messagebox.askyesno("1차 데이터 실제 Import",
                 "Jira "+key+" → 기존 CB Tracker "+str(entry["tracker"])+"\\n"
-                "선택 필드 "+str(len(selected))+"개를 실제 POST할 수 있습니다.\\n"
+                "실제 이관 대상 필드 "+str(len(effective_selected))+"개 · 이번 실행 제외 "+str(len(excluded_sources))+"개.\\n"
                 "기존 Jira Key가 있으면 신규 생성하지 않습니다.\\n\\n"
                 "Text/WikiText/Choice(옵션 매핑 완료) 외 필드는 POST 전 차단합니다. 계속할까요?"):
             return
         tabs.select(result_tab)
-        append_log("1차 Import","Jira "+key+" · 필드 "+str(len(selected))+"개 · 실제 POST")
-        for source in selected:
+        append_log("1차 Import","Jira "+key+" · 이관 대상 "+str(len(effective_selected))+"개 · 제외 "+str(len(excluded_sources))+"개 · 실제 POST")
+        for source in effective_selected:
             spec=rows()[source].get("spec") or {}
             append_log("필드 선택",source+" → "+str(spec.get("target") or spec.get("field_id") or "CB 대상 미지정"))
         settings=deepcopy(wizard.config)
         settings.setdefault("jira",{})["single_issue_key"]=key
         # One selected type per write; other saved mappings remain untouched.
-        limited=SimpleNamespace(plan={"scopes":{scope:deepcopy(entry)}},
+        run_entry=deepcopy(entry)
+        for source in excluded_sources:
+            run_entry["rows"][source]["selected"]=False
+        limited=SimpleNamespace(plan={"scopes":{scope:run_entry}},
                   config=settings,jira=wizard.jira,cb=wizard.cb,state=wizard.state)
         try:
             report=import_one(limited,progress=append_log)
