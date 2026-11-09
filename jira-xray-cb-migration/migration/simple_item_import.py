@@ -221,6 +221,11 @@ def _read_selected_issue(wizard, scope, selected):
     # scope key. In particular, Jira Issue Type IDs must not be guessed from
     # labels or confused with CB Tracker IDs.
     if actual_project!=expected_project or str(actual_type.get("id"))!=str(expected_type.get("id")):
+        advice = ("현재 선택을 유지하려면 해당 프로젝트의 "+str(expected_type.get("name"))+
+                  " 유형 Issue Key를 입력하세요. 다른 유형의 매핑/필드를 자동 재사용하지 않습니다.")
+        if str(actual_type.get("name") or "").strip().casefold() == "test execution":
+            advice += (" 이 Issue는 Test Execution입니다. TEST/Test Case로 강제 이관하지 마세요. "
+                       "실행 결과 이관은 Xray 개별 Test Run 조회와 실행 맥락 보존 경로가 필요합니다.")
         raise ApiError(
             "Jira Issue 프로젝트/유형 불일치 · Jira "+key+
             " 실제 프로젝트="+str(actual_project)+
@@ -230,7 +235,7 @@ def _read_selected_issue(wizard, scope, selected):
             ", Issue Type="+str(expected_type.get("name"))+
             " (ID "+str(expected_type.get("id"))+")"+
             " · Scope="+str(scope)+
-            ". 다른 유형이라면 Tracker 매핑을 변경하세요. POST는 실행하지 않았습니다."
+            ". "+advice+" POST는 실행하지 않았습니다."
         )
     if not isinstance(fields.get("summary"),str) or not fields["summary"].strip():
         raise ApiError("Jira Summary 없음: Item 생성 불가")
