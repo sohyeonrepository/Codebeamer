@@ -111,3 +111,30 @@ def add_options(payload, source, mapping, options, overrides=None):
     if not custom:
         payload.pop("customFields", None)
     return payload
+
+
+def resolve_option(options, selection):
+    """Resolve saved ID mappings and legacy names against current server options."""
+    options = [o for o in options if isinstance(o, dict)]
+    if isinstance(selection, dict):
+        identifier = selection.get('id')
+        matches = [o for o in options if type(identifier) is int and o.get('id') == identifier]
+    elif isinstance(selection, str) and selection.strip():
+        matches = [o for o in options if norm(o.get('name')) == norm(selection)]
+    else:
+        matches = []
+    matches = [o for o in matches if type(o.get('id')) is int and isinstance(o.get('name'), str)]
+    if len(matches) != 1:
+        raise ApiError('CB 옵션 ID/이름을 유일하게 확인할 수 없습니다: ' + str(selection))
+    return matches[0]
+
+
+def option_default(options, saved, identity, label):
+    """Keep explicit saved mappings; unresolved IDs require user review."""
+    if identity in saved or label in saved:
+        try:
+            return resolve_option(options, saved.get(identity, saved.get(label)))['name']
+        except ApiError:
+            return ''
+    matches = [o for o in options if norm(o.get('name')) == norm(label)]
+    return matches[0]['name'] if len(matches) == 1 else (label if not matches else '')

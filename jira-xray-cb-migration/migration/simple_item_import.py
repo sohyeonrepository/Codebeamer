@@ -160,22 +160,16 @@ def _supported_custom_field_values(entry, fields, source_values, jira_key_field,
             refs=[]
             for name in source_names:
                 wanted=mapping.get(name)
-                if not isinstance(wanted,str) or not wanted:
-                    # An option ID in createmeta and a displayed name in the
-                    # actual Issue may differ. Expose mapping keys for debugging
-                    # without fabricating an Option ID or auto-changing values.
-                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+
-                                   "'의 CB 대상 옵션 매핑이 없습니다. "+
-                                   "현재 매핑된 Jira 키="+repr(list(mapping.keys())[:30])+
-                                   ", CB Field ID="+str(fid)+
-                                   ", CB 옵션 이름="+repr([o.get("name") for o in options[:30] if isinstance(o,dict)]))
-                matches=[o for o in options if isinstance(o,dict) and
-                         norm(o.get("name"))==norm(wanted) and
-                         type(o.get("id")) is int and
-                         o.get("type")=="ChoiceOptionReference"]
-                if len(matches)!=1:
-                    raise ApiError("필드 "+source+": 대상 CB 옵션 '"+wanted+
-                                   "' ID가 없거나 중복됩니다.")
+                if wanted is None:
+                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+"'의 CB 대상 옵션 매핑이 없습니다.")
+                from migration.option_batch import resolve_option
+                try:
+                    option=resolve_option(options,wanted)
+                except ApiError as exc:
+                    raise ApiError("필드 "+source+": Jira 옵션 '"+name+"' 매핑 확인 실패: "+str(exc)) from exc
+                if option.get("type")!="ChoiceOptionReference":
+                    raise ApiError("필드 "+source+": 대상 옵션 참조 타입 미확인")
+                matches=[option]
                 refs.append({"id":matches[0]["id"],"name":matches[0]["name"],
                              "type":"ChoiceOptionReference"})
             if actual.get("multipleValues") is False and len(refs)>1:

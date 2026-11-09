@@ -440,7 +440,7 @@ def launch(wizard, projects):
         tracker=entry["tracker"]
         detail=wizard.cb.http.request("GET",
             "/v3/trackers/"+str(tracker)+"/fields/"+str(fid))
-        if not isinstance(detail,dict) or detail.get("id")!=fid or (
+        if not isinstance(detail,dict) or field_identifier(detail)!=fid or (
                 detail.get("referenceType")!="ChoiceOptionReference" or
                 not str(detail.get("valueModel") or "").startswith("ChoiceFieldValue") or
                 not isinstance(detail.get("options"),list)):
@@ -501,12 +501,8 @@ def launch(wizard, projects):
             ttk.Label(inner,text=str(label)+"  ["+str(identity)+"]",width=40).grid(
                 row=i,column=0,sticky="w",pady=4)
             variable=tk.StringVar()
-            wanted=saved.get(identity,saved.get(label,label))
-            matching=[name for name in option_names if norm(name)==norm(wanted)]
-            if len(matching)==1:
-                variable.set(matching[0])
-            elif not matching:
-                variable.set(str(label))
+            from migration.option_batch import option_default
+            variable.set(option_default(options, saved, identity, label))
             selector=ttk.Combobox(inner,values=list(dict.fromkeys(option_names+[str(label)])),
                                   state="normal",
                                   textvariable=variable,width=34)
@@ -562,7 +558,9 @@ def launch(wizard, projects):
                 return
             mapping={k:actual_names[norm(v)] for k,v in mapping.items()}
             spec=entry["rows"][source]["spec"]
-            spec["value_mapping"]=mapping
+            from migration.option_batch import resolve_option
+            spec["value_mapping"]={key:{"id":resolve_option(actual["options"],name)["id"]}
+                                   for key,name in mapping.items()}
             spec["choice_options_verified"]=True
             spec.pop("selection_unverified",None)
             spec.pop("missing_definition",None)
@@ -572,7 +570,7 @@ def launch(wizard, projects):
             dlg.destroy()
             refresh()
         ttk.Button(dlg,text="옵션 매핑 확정 / 없는 옵션 생성",
-                   command=save_choices).pack(side="right",padx=16,pady=12)
+                   command=lambda: guarded("Choice 옵션 확정",save_choices)).pack(side="right",padx=16,pady=12)
 
     def field_diagnostics(source, candidates=None):
         import json
@@ -881,10 +879,11 @@ def launch(wizard, projects):
             mapping=spec.get("value_mapping") or {}
             for name in choice_names(issue_values[source],source):
                 target=mapping.get(name)
-                matches=[o for o in options if isinstance(o,dict) and
-                    isinstance(target,str) and norm(o.get("name"))==norm(target)
-                    and type(o.get("id")) is int]
-                if len(matches)!=1:
+                from migration.option_batch import resolve_option
+                from clients.http import ApiError
+                try:
+                    resolve_option(options,target)
+                except ApiError:
                     missing.append(source+" → Jira 옵션 '"+name+
                         "'의 확정된 CB 옵션 매핑/ID 없음 (CB Field "+str(fid)+
                         "). 먼저 Choice 옵션 매핑을 완료하세요.")
