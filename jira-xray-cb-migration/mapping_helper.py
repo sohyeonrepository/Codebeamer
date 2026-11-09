@@ -935,7 +935,9 @@ def request_schema(spec, operation):
 def option_payload(spec, schema, label):
     schema=schema_object(spec,schema)
     properties=schema.get('properties',{})
-    names=[name for name in ('name','label','value') if name in properties and schema_object(spec,properties[name]).get('type')=='string' and not properties[name].get('readOnly')]
+    # Dedicated /trackers/{trackerId}/fields/{fieldId}/option uses optionName.
+    # Do not synthesize optionId, optionFlags or optionStyle when optional.
+    names=[name for name in ('optionName','name','label','value') if name in properties and schema_object(spec,properties[name]).get('type')=='string' and not properties[name].get('readOnly')]
     if not names:
         raise ApiError('선택지 이름을 전달할 속성이 스키마에 없습니다.')
     selected=names[0]
