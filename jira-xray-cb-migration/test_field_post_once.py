@@ -57,7 +57,7 @@ class SinglePostHttp(Http):
         return super().request(method, path, *args, **kwargs)
 
 
-def prepare(cb, journal, tracker, label):
+def prepare(cb, journal, tracker, label, reference_id=None):
     if not label.strip():
         raise ApiError('New test field name required')
     records = [r for r in journal.values() if isinstance(r, dict) and r.get('tracker') == tracker]
@@ -83,7 +83,7 @@ def prepare(cb, journal, tracker, label):
     body['fields'].append(definition)
     cb.discover()
     from clients.configuration_fields import definition_body
-    body['fields'][-1] = definition_body(cb.spec, definition, current)
+    body['fields'][-1] = definition_body(cb.spec, definition, current, reference_id)
     operation = cb.spec.get('paths', {}).get(POST_PATH, {}).get('post')
     if not operation:
         raise ApiError('Server OpenAPI does not declare Configuration POST')
@@ -145,6 +145,7 @@ def main():
     parser.add_argument('--config', default='config.local.json')
     parser.add_argument('--journal')
     parser.add_argument('--swagger')
+    parser.add_argument('--reference-id', type=int, help='Administrator-confirmed unused field referenceId')
     args = parser.parse_args()
     journal, digest = read_journal(Path(args.journal or input('Failed journal JSON/ZIP full path: ').strip().strip('"')))
     tracker = int(input('Test Tracker ID (e.g. 4874140): ').strip())
@@ -153,6 +154,13 @@ def main():
     settings = deepcopy(json.loads(Path(args.config).read_text(encoding='utf-8-sig'))['codebeamer'])
     settings.pop('profile', None)
     if args.swagger: settings['swagger_url'] = args.swagger
+    from clients.configuration_fields import configured_reference_id
+    reference_id = args.reference_id
+    if reference_id is None:
+        reference_id = configured_reference_id(settings, tracker, label)
+    if reference_id is None:
+        entered = input('Administrator-confirmed unused referenceId (blank = no reservation): ').strip()
+        reference_id = int(entered) if entered else None
     url = settings.get('url') or input('Codebeamer API base URL (including /cb/api): ').strip()
     http = SinglePostHttp(url, settings.get('token_env'), auth=settings.get('auth', 'basic'),
         username_env=settings.get('username_env'), password_env=settings.get('password_env'),
@@ -166,7 +174,7 @@ def main():
     cb = CodebeamerClient(http, settings, write=False)
     http.read_deadline = time.monotonic() + 60
     try:
-        before, body = prepare(cb, journal, tracker, label)
+        before, body = prepare(cb, journal, tracker, label, reference_id)
     finally:
         http.read_deadline = None
     save(directory / 'configuration-before.json', before)
@@ -175,6 +183,7 @@ def main():
         'before_field_count': len(before['fields']), 'after_field_count': len(body['fields']),
         'existing_configuration_changes': [], 'new_field': body['fields'][-1]})
     print('Server:', url, '\nTracker:', tracker, '\nNew field:', label)
+    print('New referenceId:', body['fields'][-1].get('referenceId', '(server-managed)'))
     print('Preview / backup:', directory.resolve())
     print('Existing fields and permissions are preserved. One POST, then GET verification.')
     print('Response/configuration files may contain customer data. Review before sharing.')

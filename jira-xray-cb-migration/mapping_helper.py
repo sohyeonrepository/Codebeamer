@@ -830,7 +830,7 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     if not isinstance(definition, dict) or not isinstance(definition.get('label'), str) or not definition['label'].strip():
         raise ApiError('새 필드 이름이 필요합니다.')
     if any(key in definition for key in ('id', 'referenceId', 'fieldId')):
-        raise ApiError('새 필드 ID는 서버가 부여해야 합니다.')
+        raise ApiError('기존 필드 ID를 생성 템플릿에 복사하지 마세요. 신규 referenceId는 configuration_reference_ids에 명시적으로 지정하세요.')
     required = ('typeId', 'mandatory', 'multipleSelection', 'options', 'reference', 'permission')
     if any(key not in definition for key in required) or not isinstance(definition['permission'], dict):
         raise ApiError('실제 서버의 필드 타입/권한/선택지/참조 정의가 필요합니다.')
@@ -876,8 +876,9 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     # but the content of each existing field is verified identical above.
     expected = current
     body = deepcopy(expected)
-    from clients.configuration_fields import definition_body, read_options
-    wire_definition = definition_body(cb.spec, definition, expected)
+    from clients.configuration_fields import definition_body, read_options, configured_reference_id
+    reserved = configured_reference_id(getattr(cb, 'config', {}), tracker, definition['label'])
+    wire_definition = definition_body(cb.spec, definition, expected, reserved)
     body['fields'].append(wire_definition)
     body=prepare_configuration_permissions(cb,body)
     journal[identity] = {'tracker': tracker, 'status': 'pending',

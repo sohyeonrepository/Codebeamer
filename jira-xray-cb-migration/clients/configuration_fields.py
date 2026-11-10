@@ -3,20 +3,57 @@ from copy import deepcopy
 from clients.http import ApiError
 
 
-def definition_body(spec, definition, current):
+def configured_reference_id(config, tracker, label):
+    """Explicit per-Tracker/per-field reservation, never inferred from max(ID)."""
+    return config.get('configuration_reference_ids', {}).get(str(tracker), {}).get(label)
+
+
+def definition_body(spec, definition, current, reference_id=None, planning=False):
     from mapping_helper import request_schema, schema_object
     from single_import import validate
     result = deepcopy(definition)
     operation = (spec or {}).get('paths', {}).get('/v3/tracker/configuration', {}).get('post')
     if not operation:
+        if reference_id is not None:
+            raise ApiError('referenceId request schema unavailable')
         return result
     fields = request_schema(spec, operation).get('properties', {}).get('fields')
     if not fields:
+        if reference_id is not None:
+            raise ApiError('referenceId request schema unavailable')
         return result
     item = schema_object(spec, schema_object(spec, fields).get('items', {}))
     properties = item.get('properties', {})
     if not properties:
+        if reference_id is not None:
+            raise ApiError('referenceId request schema unavailable')
         return result
+    reference_schema = properties.get('referenceId')
+    if reference_schema is not None:
+        reference_schema = schema_object(spec, reference_schema)
+        if reference_schema.get('readOnly'):
+            if reference_id is not None or 'referenceId' in result:
+                raise ApiError('referenceId is read-only in this server schema')
+        elif not planning or reference_id is not None:
+            selected = reference_id if reference_id is not None else result.get('referenceId')
+            if selected is None:
+                raise ApiError('신규 referenceId 할당값이 필요합니다. 서버 자동 할당을 가정하지 않습니다. '
+                               'codebeamer.configuration_reference_ids[Tracker ID][필드명]에 관리자 확인값을 지정하세요. POST 미실행')
+            if type(selected) is not int or not -(2**31) <= selected < 2**31:
+                raise ApiError('referenceId must be an int32 integer')
+            validate(spec, selected, reference_schema, 'new_field.referenceId')
+            for bound, invalid in (('minimum', lambda n: selected < n), ('maximum', lambda n: selected > n)):
+                if bound in reference_schema and invalid(reference_schema[bound]):
+                    raise ApiError('referenceId outside server schema '+bound)
+            used = {f.get(key) for f in current.get('fields', []) for key in ('referenceId', 'id', 'fieldId')
+                    if isinstance(f, dict) and isinstance(f.get(key), (int, str))}
+            if selected in used or str(selected) in used:
+                raise ApiError('referenceId already in use in selected Tracker; no POST')
+            if 'referenceId' in result and result['referenceId'] != selected:
+                raise ApiError('Conflicting referenceId reservations')
+            result['referenceId'] = selected
+    elif reference_id is not None:
+        raise ApiError('referenceId is not declared in this server request schema')
     if 'options' in result and 'options' not in properties:
         options = result.pop('options')
         if options:

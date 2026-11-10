@@ -39,6 +39,63 @@ def proposal():
 
 
 class ConfigurationFieldWireTests(unittest.TestCase):
+    def reference_contract(self, **properties):
+        spec = contract()
+        item = spec['paths']['/v3/tracker/configuration']['post']['requestBody']['content']['application/json']['schema']['properties']['fields']['items']
+        item['properties']['referenceId'] = dict(type='integer', format='int32', **properties)
+        return spec
+
+    def test_optional_reference_schema_does_not_mean_automatic_server_allocation(self):
+        with self.assertRaisesRegex(ApiError, 'referenceId'):
+            definition_body(self.reference_contract(), proposal(), baseline())
+        planned = definition_body(self.reference_contract(), proposal(), baseline(), planning=True)
+        self.assertNotIn('referenceId', planned)
+
+    def test_explicit_reference_reservation_is_preserved_without_changing_baseline(self):
+        before = baseline()
+        old = deepcopy(before)
+        wire = definition_body(self.reference_contract(), proposal(), before, 55)
+        self.assertEqual(wire['referenceId'], 55)
+        self.assertEqual(before, old)
+        self.assertNotIn('options', wire)
+
+    def test_reference_collision_in_any_id_property_blocks(self):
+        for key in ('id', 'referenceId', 'fieldId'):
+            before = baseline()
+            before['fields'][0][key] = 55
+            with self.subTest(key=key), self.assertRaisesRegex(ApiError, 'already in use'):
+                definition_body(self.reference_contract(), proposal(), before, 55)
+
+    def test_reference_invalid_values_and_actual_schema_bounds_block(self):
+        for value in (True, '55', 2**31, -(2**31)-1):
+            with self.subTest(value=value), self.assertRaises(ApiError):
+                definition_body(self.reference_contract(), proposal(), baseline(), value)
+        for props, value in (({'minimum': 50}, 49), ({'maximum': 60}, 61), ({'enum': [55]}, 56)):
+            with self.subTest(props=props), self.assertRaises(ApiError):
+                definition_body(self.reference_contract(**props), proposal(), baseline(), value)
+
+    def test_reference_unknown_or_readonly_contract_blocks_explicit_id(self):
+        for spec in ({}, contract(), self.reference_contract(readOnly=True)):
+            with self.assertRaises(ApiError): definition_body(spec, proposal(), baseline(), 55)
+
+    def test_reference_configuration_is_scoped_to_tracker_and_label(self):
+        from clients.configuration_fields import configured_reference_id
+        config = {'configuration_reference_ids': {'100': {'Labels': 55}}}
+        self.assertEqual(configured_reference_id(config, 100, 'Labels'), 55)
+        self.assertIsNone(configured_reference_id(config, 101, 'Labels'))
+        self.assertIsNone(configured_reference_id(config, 100, 'Other'))
+
+    def test_missing_reference_blocks_before_journal_and_post(self):
+        cb = Mock()
+        cb.spec, cb.config, cb.write = self.reference_contract(), {}, False
+        cb.configuration.return_value = baseline()
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)/'journal.json'
+            with self.assertRaisesRegex(ApiError, 'referenceId'):
+                create_confirmed_field(cb, 100, proposal(), baseline(), path, approved=True)
+            self.assertFalse(path.exists())
+        cb.call.assert_not_called()
+
     def test_choice_serialization_preserves_values_and_does_not_copy_option_ids(self):
         before, definition = baseline(), proposal()
         originals = deepcopy((before, definition))
@@ -76,7 +133,7 @@ class ConfigurationFieldWireTests(unittest.TestCase):
     def test_configuration_post_and_readback_use_native_options(self):
         before = baseline()
         cb = Mock()
-        cb.spec, cb.write, cb.config = contract(), False, {}
+        cb.spec, cb.write, cb.config = self.reference_contract(), False, {'configuration_reference_ids': {'100': {'Labels': 55}}}
         cb.operation.return_value = {'method': 'POST', 'path': '/v3/tracker/configuration'}
         after = deepcopy(before)
         cb.configuration.side_effect = [before, after]
@@ -85,6 +142,7 @@ class ConfigurationFieldWireTests(unittest.TestCase):
             new = deepcopy(body['fields'][-1])
             self.assertNotIn('options', new)
             self.assertNotIn('reference', new)
+            self.assertEqual(new['referenceId'], 55)
             new['id'] = 2
             for i, option in enumerate(new['choiceOptionSetting']['choiceOptions']): option['id'] = 101+i
             after['fields'].append(new)
