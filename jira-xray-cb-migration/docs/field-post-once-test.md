@@ -72,3 +72,18 @@ Mock 테스트: 승인 전 쓰기 차단, 생성 전 설정 변경 차단, HTTP 
 
 자동 테스트 결과(참고 소스 자동 할당 반영 후): 전체 537개 실행, 531개 통과,
 기존 GUI 6개 제외, 실패/오류 0개.
+
+## RUN_WINDOWS.bat에 반영된 경로
+
+`TEST_FIELD_POST_WINDOWS.bat`에서 검증한 POST 방식을 일반 Import 실행 경로에도 연결했습니다.
+
+- `RUN_WINDOWS.bat` → `import_wizard.py` → `compact_wizard.py`의 **실제 Import 실행** 버튼
+- 신규 필드 매핑은 저장만 하고 Import 승인 후 해당 Tracker의 설정을 다시 조회
+- `configuration_field_contract()`에서 실제 `definition_body()` 결과와 OpenAPI를 검증
+- `create_confirmed_field()`는 **POST /v3/tracker/configuration**을 `raw=True`로 1회 실행. 성공 응답이 비어 있어도 JSON 파싱 오류를 만들지 않음
+- POST 뒤 Configuration GET으로 생성 Field ID/원래 필드와 권한 보존/정의 일치를 확인한 다음 Item Import
+- POST가 실패하거나 결과가 불확실하면 pending을 보존하고 자동 재전송하지 않음
+
+이 경로는 검증용 `test_field_post_once.py`의 실패 journal을 요구하지 않습니다. 다만 현재 Tracker에서 타입/권한/Reference ID 할당 계약을 확인할 수 있어야 하며, 이미 pending인 요청은 서버 대조가 먼저입니다. 별도 테스트 Tracker에서 POST가 성공한 사실만으로 운영 Tracker에 대한 쓰기 권한이나 생성 계약이 검증되지는 않습니다.
+
+실행 절차: 최신 테스트 브랜치 코드를 받은 뒤 `RUN_WINDOWS.bat`를 실행하고, 기존 필드 매핑을 유지한 상태에서 신규 생성 예정 필드를 선택한 후 **실제 Import 실행**을 승인합니다. 실제 고객 서버에서의 전체 Import 성공 여부는 별도 검증이 필요합니다.
