@@ -118,40 +118,57 @@ def target_multiple_for(kind, multiple):
     return False if kind == 'text' and multiple else multiple
 
 
-def pending_field_message(label, tracker, receipt_path):
-    """Explain the recorded failure without exposing request bodies or credentials."""
+def pending_field_message(label, tracker, receipt_path, state_status=None):
+    """Identify *which past attempt* blocked this run; do not claim a new POST."""
     import re
+    from datetime import datetime
     from pathlib import Path
-    receipt_path = Path(receipt_path)
+    receipt_path = Path(receipt_path).resolve()
     errors = []
-    if receipt_path.exists():
+    history = []
+    if receipt_path.is_file():
         try:
             journal = json.loads(receipt_path.read_text(encoding='utf-8'))
-            errors = [v.get('error','') for v in journal.values()
-                      if isinstance(v,dict) and v.get('tracker') == tracker]
-        except (OSError,ValueError,AttributeError):
+            history = [v for v in journal.values()
+                       if isinstance(v, dict) and v.get('tracker') == tracker]
+            errors = [v.get('error', '') for v in history]
+        except (OSError, ValueError, AttributeError):
             pass
-    statuses = [m.group(1) for error in errors if isinstance(error,str)
-                for m in [re.search(r'HTTP\s+(\d{3})',error)] if m]
+    statuses = [m.group(1) for error in errors if isinstance(error, str)
+                for m in [re.search(r'HTTP\s+(\d{3})', error)] if m]
     status = statuses[-1] if statuses else None
     reason = {
-        '400':'요청 형식/값 거부입니다. 권한 부족으로 단정하지 않습니다.',
-        '401':'인증이 거부되었습니다. 인증정보를 확인하세요.',
-        '403':'접근이 거부되었습니다. Tracker 설정 변경 권한 및 서버 접근 정책을 확인하세요.'
+        '400': '요청 형식/값 거부입니다. 권한 부족으로 단정하지 않습니다.',
+        '401': '인증이 거부되었습니다. 인증정보를 확인하세요.',
+        '403': '접근이 거부되었습니다. Tracker 설정 변경 권한 및 서버 접근 정책을 확인하세요.'
     }.get(status, '서버 처리 결과를 확정할 수 없습니다. 생성 내역 확인이 필요합니다.')
-    last_error = next((e for e in reversed(errors) if isinstance(e,str) and 'HTTP' in e), '')
+    last_error = next((e for e in reversed(errors) if isinstance(e, str) and 'HTTP' in e), '')
     if 'JSON 오류 응답에 권한/접근 거부 메시지 포함' in last_error:
         reason = ('서버 응답에 권한 관련 내용이 기록되었습니다. 구버전 분류는 permission 속성 오류도 '
                   '포함할 수 있으므로 권한 부족으로 확정하지 않습니다. Tracker 권한과 permission 요청 계약을 확인하세요.')
     elif 'permission 관련 내용 포함' in last_error:
         reason = ('서버 응답에 permission이 언급됐지만 접근 권한 부족인지 속성 검증 오류인지 '
                   '확정되지 않았습니다. 이 요약만으로 기존 권한을 변경하지 마세요.')
-    return ('신규 필드 '+str(label)+' (Tracker '+str(tracker)+')가 현재 목록에 없습니다. '
-            +('이전 요청 응답: HTTP '+status+'. ' if status else
-              '이전 HTTP 상태가 기록에 없어 권한 부족 여부를 판단할 수 없습니다. ')
-            +reason+' 동일 POST는 자동 재실행하지 않습니다. '
-            '기존 호환 필드에 연결하거나 관리자가 필드 생성 결과를 확인한 뒤 다시 분석하세요. '
-            '이전 요청 기록: '+str(receipt_path))
+    if receipt_path.is_file():
+        try:
+            modified = datetime.fromtimestamp(receipt_path.stat().st_mtime).astimezone()
+            timestamp = modified.isoformat(timespec='seconds')
+        except OSError:
+            timestamp = '확인 불가'
+        recorded = ('이전 생성 요청 JSON 파일 존재 (파일 수정 시각: '+timestamp+
+                    ', 이전 요청 기록 수: '+str(len(history))+'). ')
+    else:
+        recorded = ('이전 생성 요청 JSON 파일이 현재 경로에 없습니다. '
+                    '차단 근거는 별도 state.sqlite3의 상태 기록이며, '
+                    'JSON/HTTP 응답을 확인하지 못했습니다. ')
+    return ('신규 필드 '+str(label)+' (Tracker '+str(tracker)+')가 현재 서버 목록에 없습니다. '
+            '이번 Import에서는 신규 필드 POST를 보내지 않았습니다. '
+            'SQLite 생성 상태: '+str(state_status or '기록 존재')+'. '+recorded+
+            ('이전 요청 응답: HTTP '+status+'. ' if status else
+             '이전 HTTP 상태를 확인할 수 없습니다. ')+reason+
+            ' 이전 요청을 자동 재실행하지 않습니다. '
+            '서버의 실제 생성 필드와 기록을 대조한 뒤 기존 필드에 연결하거나 별도 재조정하세요. '
+            '요청 기록 경로: '+str(receipt_path))
 
 
 def field_analysis(jira, project, issue_type):
@@ -1135,7 +1152,7 @@ class ImportWizard:
             if len(matches) != 1:
                 if len(matches) == 0:
                     receipt_path=self.state.root/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
-                    raise ApiError(pending_field_message(proposal['label'],tracker,receipt_path))
+                    raise ApiError(pending_field_message(proposal['label'],tracker,receipt_path,known[0]))
                 raise ApiError('동일 이름 필드가 여러 개입니다: '+str(proposal['label'])+
                                ' · 중복 자동 연결/재생성을 중단합니다.')
             created = matches[0]
