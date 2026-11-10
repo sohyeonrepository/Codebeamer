@@ -4,6 +4,7 @@ import base64
 import getpass
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -12,7 +13,9 @@ from pathlib import Path
 
 
 class ApiError(RuntimeError):
-    pass
+    def __init__(self, message, *, evidence=None):
+        super().__init__(message)
+        self.evidence = evidence
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -89,7 +92,7 @@ class Http:
             except urllib.error.HTTPError as exc:
                 failure_kind = 'HTTPError'
                 status = exc.code
-                failure_body=exc.read(8192)
+                failure_body=exc.read(8193)
                 content_type=exc.headers.get('Content-Type','') if exc.headers else ''
                 login_reason=exc.headers.get('X-Seraph-LoginReason','') if exc.headers else ''
                 detail=http_failure_detail(failure_body,content_type,login_reason)
@@ -97,7 +100,12 @@ class Http:
                 if method == 'GET' and status in (429, 502, 503, 504) and attempt < 2:
                     time.sleep(min(2 ** attempt, 4))
                     continue
-                raise ApiError(f'{method} {urllib.parse.urlsplit(url).path} failed: HTTP {status}; {detail}') from None
+                evidence = http_error_evidence(failure_body, content_type, status)
+                if evidence['properties'] or evidence['constraints']:
+                    detail += ('; response signals: properties=' + ','.join(evidence['properties'])
+                               + '; constraints=' + ','.join(evidence['constraints']))
+                raise ApiError(f'{method} {urllib.parse.urlsplit(url).path} failed: HTTP {status}; {detail}',
+                               evidence=evidence) from None
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 failure_kind = type(exc).__name__
                 # GET is read-only; distinguish it from an uncertain POST/PUT.
@@ -160,3 +168,57 @@ def http_failure_detail(body, content_type, login_reason):
             return 'JSON 오류 응답에 인증/토큰 관련 메시지 포함'
         return 'JSON 오류 응답; 원인 자동 분류 불가 (민감정보 보호를 위해 원문 생략)'
     return '원인 미확인: 응답에 분류 가능한 오류 정보 없음'
+
+
+def http_error_evidence(body, content_type, status):
+    """Bounded diagnostic signals, not arbitrary server messages or rejected values.
+
+    Messages can echo passwords, tokens, field values, or customer names. Keep
+    only known property names and constraint phrases. A signal is evidence in
+    a response, not proof that permission or a particular field caused failure.
+    """
+    result = {'http_status': status, 'body_sha256': hashlib.sha256(body).hexdigest(),
+              'body_truncated': len(body) > 8192, 'body_bytes_read': len(body),
+              'format': 'other', 'properties': [], 'constraints': []}
+    try:
+        value = json.loads(body)
+    except (ValueError, UnicodeError):
+        result['format'] = 'html' if 'text/html' in content_type else 'unparsed'
+        return result
+    result['format'] = 'json'
+    properties = {'permission', 'accessPermissionsPerStatusMap', 'accessPermissions',
+                  'referenceId', 'typeId', 'multipleSelection', 'mandatory',
+                  'choiceOptionSetting', 'reference', 'options', 'label', 'fields'}
+    phrases = {'must not be null': 'not_null', 'may not be null': 'not_null',
+               'must not be empty': 'not_empty', 'must not be blank': 'not_blank',
+               'cannot deserialize': 'deserialization', 'unrecognized field': 'unknown_property',
+               'invalid type id': 'invalid_type_id', 'permission denied': 'access_denied',
+               'access denied': 'access_denied', 'insufficient permission': 'access_denied',
+               'not authorized': 'access_denied', 'must be greater': 'minimum',
+               'must be less': 'maximum', 'already exists': 'already_exists'}
+    found_properties, found_constraints = set(), set()
+    def inspect(node, depth=0):
+        if depth > 20: return
+        if isinstance(node, dict):
+            for key, child in node.items():
+                # Do not inspect echoed requests, credentials or rejected values.
+                if key in ('message', 'errorMessages', 'errors', 'error', 'details',
+                           'violations', 'fieldErrors', 'field', 'propertyPath', 'path', 'defaultMessage'):
+                    inspect(child, depth+1)
+                elif key in properties:
+                    found_properties.add(key)
+                    inspect(child, depth+1)
+                elif isinstance(key, str) and re.fullmatch(r'fields\[\d+\]\.[A-Za-z.]+', key):
+                    found_properties.update(part for part in key.split('.') if part in properties)
+                    inspect(child, depth+1)
+        elif isinstance(node, list):
+            for child in node[:100]: inspect(child, depth+1)
+        elif isinstance(node, str):
+            for name in properties:
+                if re.search(r'\b'+re.escape(name)+r'\b', node): found_properties.add(name)
+            for phrase, code in phrases.items():
+                if phrase in node.lower(): found_constraints.add(code)
+    inspect(value)
+    result['properties'] = sorted(found_properties)
+    result['constraints'] = sorted(found_constraints)
+    return result

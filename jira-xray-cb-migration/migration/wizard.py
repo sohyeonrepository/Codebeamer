@@ -144,7 +144,8 @@ def pending_field_message(label, tracker, receipt_path):
         reason = ('서버 응답에 권한 관련 내용이 기록되었습니다. 구버전 분류는 permission 속성 오류도 '
                   '포함할 수 있으므로 권한 부족으로 확정하지 않습니다. Tracker 권한과 permission 요청 계약을 확인하세요.')
     elif 'permission 관련 내용 포함' in last_error:
-        reason = '서버의 permission 관련 검증 오류입니다. 권한 설정과 요청 permission 구조를 확인해야 합니다.'
+        reason = ('서버 응답에 permission이 언급됐지만 접근 권한 부족인지 속성 검증 오류인지 '
+                  '확정되지 않았습니다. 이 요약만으로 기존 권한을 변경하지 마세요.')
     return ('신규 필드 '+str(label)+' (Tracker '+str(tracker)+')가 현재 목록에 없습니다. '
             +('이전 요청 응답: HTTP '+status+'. ' if status else
               '이전 HTTP 상태가 기록에 없어 권한 부족 여부를 판단할 수 없습니다. ')

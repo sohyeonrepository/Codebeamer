@@ -73,6 +73,15 @@ def collect(cb, tracker, journal, fingerprint):
         row={'journal_status':record.get('status'),'new_label':new.get('label'), 'type_id':new.get('typeId'),
              'permission':permission_shape(new.get('permission')),'existing_field_ids':[field_identifier(f) for f in matches],
              'post_response_recorded':'post_response' in record,'permission_changes':[], 'schema_errors':[]}
+        row['field_presence'] = ('unknown' if current is None else 'present' if matches else 'absent')
+        row['server_write_verified'] = False
+        # Only export the bounded allowlisted evidence produced by Http; do not
+        # export arbitrary response bodies or legacy error messages.
+        evidence=record.get('http_error_evidence')
+        if isinstance(evidence,dict):
+            from clients.http import http_error_evidence
+            allowed=http_error_evidence(b'{}','application/json',None)
+            row['http_error_evidence']={key:evidence[key] for key in allowed if key in evidence}
         by_id={str(field_identifier(f)):f for f in fields if isinstance(f,dict)}
         for f in old[:-1]:
             fid=str(field_identifier(f));actual=by_id.get(fid)

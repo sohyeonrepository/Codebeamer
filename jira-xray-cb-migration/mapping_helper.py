@@ -100,7 +100,7 @@ def read_stage(label, action, diagnostics=None):
         if diagnostics:
             diagnostics.record(label, 'error', error=exc)
         if isinstance(exc, ApiError):
-            raise ApiError(label + ': ' + str(exc)) from None
+            raise ApiError(label + ': ' + str(exc), evidence=exc.evidence) from None
         raise
 
 
@@ -894,6 +894,8 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         persist()
     except ApiError as exc:
         journal[identity]['error'] = str(exc)
+        if exc.evidence is not None:
+            journal[identity]['http_error_evidence'] = exc.evidence
         persist()
         raise
     finally:
@@ -1187,6 +1189,12 @@ def create_dedicated_field(cb, tracker, definition, journal_path, before_post=No
         cb.write=True;cb.config['operations']['helper_field_create']=operation
         if before_post:before_post()
         read_stage('Codebeamer 전용 API 필드 생성',lambda:cb.call('helper_field_create',{'trackerId':tracker,'id':tracker},body))
+    except ApiError as exc:
+        journal[identity]['error'] = str(exc)
+        if exc.evidence is not None:
+            journal[identity]['http_error_evidence'] = exc.evidence
+        persist()
+        raise
     finally:
         cb.write=previous
         if previous_op is None:cb.config['operations'].pop('helper_field_create',None)
