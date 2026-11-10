@@ -1093,6 +1093,84 @@ class ImportWizard:
                                   ' ← Jira '+', '.join(sorted(set(sources))))
         return errors
 
+    def rearm_rejected_field(self, scope, source, tracker, approved=False):
+        """Reconcile a confirmed HTTP 400 and preserve the old receipt.
+
+        This method NEVER sends a POST. An explicit approval creates a NEW
+        attempt identity, leaving the rejected attempt and JSON untouched.
+        Unknown outcomes and successful or ambiguous POSTs remain blocked.
+        """
+        import re
+        import uuid
+        from pathlib import Path
+        entry=self.plan['scopes'][scope]
+        row=entry['rows'][source]
+        proposal=row.get('creation')
+        if not isinstance(proposal,dict) or entry.get('tracker')!=tracker:
+            raise ApiError('선택된 신규 필드 계획/Tracker가 일치하지 않습니다.')
+        identity=field_identity(tracker,source,row)
+        known=self.state.get(identity)
+        if not known or known[0]!='pending':
+            raise ApiError('HTTP 400 재조정 대상인 pending 생성 기록이 없습니다.')
+        path=Path(self.state.root)/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
+        if not path.is_file():
+            raise ApiError('이전 생성 JSON 기록이 없어 HTTP 400을 확인할 수 없습니다. 재시도 차단: '+str(path))
+        try:
+            journal=json.loads(path.read_text(encoding='utf-8'))
+        except (OSError,ValueError) as exc:
+            raise ApiError('이전 생성 기록이 손상되어 재조정할 수 없습니다.') from exc
+        matching=[]
+        for record in journal.values():
+            if not isinstance(record,dict) or record.get('tracker')!=tracker:
+                continue
+            request=record.get('request') or {}
+            body=request.get('body') or {}
+            field_rows=body.get('fields') or []
+            if (request.get('method')=='POST' and
+                    request.get('path')=='/v3/tracker/configuration' and
+                    field_rows and isinstance(field_rows[-1],dict) and
+                    field_rows[-1].get('label')==proposal.get('label')):
+                matching.append(record)
+        if len(matching)!=1:
+            raise ApiError('이전 HTTP 요청의 Tracker/신규 필드 이름이 유일하게 확인되지 않았습니다. 재시도 차단')
+        previous=matching[0]
+        error=previous.get('error') or ''
+        evidence=previous.get('http_error_evidence') or {}
+        recorded_status=evidence.get('http_status')
+        if ((type(recorded_status) is int and recorded_status!=400) or
+                not re.search(r'HTTP\s+400(?:\D|$)',error)):
+            raise ApiError('이전 요청이 확정된 HTTP 400 거부가 아닙니다. 동일 필드 자동 재시도 불가')
+        current=self.cb.configuration(tracker)
+        fields=current.get('fields') if isinstance(current,dict) else None
+        if (not isinstance(fields,list) or
+                (current.get('basicInformation') or {}).get('trackerId')!=tracker):
+            raise ApiError('최신 Tracker Configuration 확인 실패. 재POST 금지')
+        from mapping_helper import normalized_label
+        label=normalized_label(proposal.get('label'))
+        present=[field for field in fields if isinstance(field,dict) and
+                 normalized_label(field.get('label') or field.get('name'))==label]
+        if present:
+            raise ApiError('동일 이름의 CB 필드가 이미 존재합니다. 재생성하지 말고 기존 필드로 매핑하세요.')
+        if approved is not True:
+            return {'tracker':tracker,'source':source,'label':proposal['label'],
+                    'prior_http_status':400,'prior_record':str(path.resolve()),
+                    'new_post_attempted':False}
+        # A new identity is needed because the earlier one must stay pending.
+        # UUID is generated only after the explicit user action.
+        previous_token=row.get('creation_token')
+        new_token='retry-'+uuid.uuid4().hex
+        row['creation_token']=new_token
+        self.state.save('wizard','plan',self.plan)
+        new_identity=field_identity(tracker,source,row)
+        self.state.save('field-creation-rearm',new_identity,{
+            'tracker_id':tracker,'jira_field':source,'label':proposal['label'],
+            'previous_identity':identity,'previous_token':previous_token,
+            'previous_http_status':400,'previous_record':str(path.resolve()),
+            'post_attempted':False})
+        return {'tracker':tracker,'source':source,'label':proposal['label'],
+                'prior_http_status':400,'prior_record':str(path.resolve()),
+                'new_post_attempted':False,'rearmed':True}
+
     def create_field(self, scope, source, row, tracker):
         phase_key=scope+':'+source
         try:
