@@ -166,6 +166,33 @@ class Target:
         raise AssertionError(name)
 
 
+class PendingCreationDiagnosticTests(unittest.TestCase):
+    def test_old_json_record_reports_its_timestamp_not_current_import_time(self):
+        from pathlib import Path
+        from migration.wizard import pending_field_message
+        with TemporaryDirectory() as directory:
+            receipt=Path(directory)/'field-old.json'
+            receipt.write_text(json.dumps({
+                'old': {'tracker': 4874140, 'status': 'pending',
+                        'error': 'POST failed: HTTP 400; permission related'}
+            }), encoding='utf-8')
+            result=pending_field_message('Labels', 4874140, receipt, 'pending')
+            self.assertIn('이번 Import에서는 신규 필드 POST를 보내지 않았습니다',result)
+            self.assertIn('파일 수정 시각:', result)
+            self.assertIn('HTTP 400',result)
+            self.assertIn(str(receipt.resolve()),result)
+
+    def test_missing_json_does_not_claim_receipt_exists(self):
+        from pathlib import Path
+        from migration.wizard import pending_field_message
+        with TemporaryDirectory() as directory:
+            receipt=Path(directory)/'field-absent.json'
+            result=pending_field_message('Labels',4874140,receipt,'pending')
+            self.assertIn('JSON 파일이 현재 경로에 없습니다',result)
+            self.assertIn('state.sqlite3',result)
+            self.assertIn('이전 HTTP 상태를 확인할 수 없습니다',result)
+
+
 class DeferredFieldCreationTests(unittest.TestCase):
     def _wizard(self, receipt=None):
         from types import SimpleNamespace
