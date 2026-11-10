@@ -166,6 +166,57 @@ class Target:
         raise AssertionError(name)
 
 
+class RejectedFieldRetryTests(unittest.TestCase):
+    def _setup(self, root, *, status=400, existing=False):
+        from types import SimpleNamespace
+        from pathlib import Path
+        from migration.wizard import field_identity
+        import hashlib
+        wizard=ImportWizard.__new__(ImportWizard)
+        row={'selected':True,'status':'create',
+             'creation':{'label':'Labels','semantic_type':'option','profile_key':'option',
+                         'multipleSelection':True,'choices':{'SILS':'SILS'}}}
+        entry={'tracker':4874140,'rows':{'labels':row}}
+        wizard.plan={'scopes':{'P:1':entry}}
+        identity=field_identity(4874140,'labels',row)
+        receipt_path=Path(root)/('field-'+hashlib.sha256(identity.encode()).hexdigest()+'.json')
+        receipt_path.write_text(json.dumps({'old':{'tracker':4874140,'status':'pending',
+            'request':{'method':'POST','path':'/v3/tracker/configuration',
+                       'body':{'fields':[{'label':'existing'},{'label':'Labels'}]}},
+            'error':'POST /v3/tracker/configuration failed: HTTP '+str(status),
+            'http_error_evidence':{'http_status':status}}}),encoding='utf-8')
+        events=[]
+        wizard.state=SimpleNamespace(root=Path(root),
+            get=lambda key:('pending',None) if key==identity else None,
+            save=lambda *args:events.append(args))
+        fields=[{'label':'Labels','id':19}] if existing else []
+        wizard.cb=SimpleNamespace(configuration=lambda tracker:{
+            'basicInformation':{'trackerId':tracker},'fields':fields})
+        return wizard,row,events,receipt_path
+
+    def test_confirmed_400_requires_approval_without_deleting_old_journal(self):
+        with TemporaryDirectory() as d:
+            wizard,row,events,path=self._setup(d)
+            first=wizard.rearm_rejected_field('P:1','labels',4874140,approved=False)
+            self.assertFalse(first['new_post_attempted'])
+            self.assertNotIn('creation_token',row)
+            self.assertFalse(events)
+            result=wizard.rearm_rejected_field('P:1','labels',4874140,approved=True)
+            self.assertTrue(result['rearmed'])
+            self.assertTrue(row['creation_token'].startswith('retry-'))
+            self.assertTrue(path.exists())
+            self.assertTrue(any(a[0]=='field-creation-rearm' for a in events))
+
+    def test_non_400_and_existing_field_cannot_be_rearmed(self):
+        for status,existing in ((500,False),(400,True)):
+            with self.subTest(status=status,existing=existing), TemporaryDirectory() as d:
+                wizard,row,events,path=self._setup(d,status=status,existing=existing)
+                with self.assertRaises(ApiError):
+                    wizard.rearm_rejected_field('P:1','labels',4874140,approved=True)
+                self.assertNotIn('creation_token',row)
+                self.assertFalse(events)
+
+
 class PendingCreationDiagnosticTests(unittest.TestCase):
     def test_old_json_record_reports_its_timestamp_not_current_import_time(self):
         from pathlib import Path
