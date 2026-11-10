@@ -32,4 +32,13 @@ Current executable preservation remains Legacy History, separate from Native His
 
 38 focused Mock tests passed: full-Xray dependency/creation ordering, source-only Execution, read-only Release/reference preflight, relation scope and unfinished-field Item POST guards. Existing full-Xray fixtures verify Case→Set→Run→Plan sequencing with mocked native Run creation. These are not Windows GUI or actual server tests.
 
-The pre-existing Wizard→Engine integration fixture still has identity-handoff/default-selection failures on this branch. Full end-to-end customer operation is NOT declared complete. No live server data was changed, no PR merged, and no customer attachments/configuration were committed.
+The focused Wizard→Engine Xray integration now passes after its Mock adopted current Jira Key GET/readback contracts and explicit checkbox selection. Customer-server operation is NOT declared complete. No live server data was changed, no PR merged, and no customer attachments/configuration were committed.
+
+
+## Integration follow-up (2026-11-10)
+
+The current focused suite runs 56 tests successfully. The Wizard/Engine integration checks Case→Set→Run→Plan order, Case steps, Run steps, binary evidence, full multiline Comment body, Legacy History preservation, exact Jira Key readback and restart without duplicate Items/records/attachments. Test source metadata is synthetic. The security-field test explicitly selects the unsupported field and verifies that it blocks writes rather than being converted into CB permission.
+
+Two test modules had syntax errors and are now loadable; identity lookup mocks now implement the actual GET Item path. The common Mock source no longer returns an empty result merely because type 2 occurs in a multi-type JQL. This exposed a real reporting defect: a zero-source import could be marked complete. Engine now reports that case as incomplete, with a regression test.
+
+Full repository suite: 487 run, 11 failures, 6 errors, 6 skipped. Remaining failures include legacy connected-case mapping imports, old automatic/default-selection expectations, Date auto-profile expectations, native Resolution contract and old single-Item mocks. These were not hidden or marked passing. Windows GUI and server API compatibility still require validation; do not run a customer-wide Import on the basis of the focused tests alone.

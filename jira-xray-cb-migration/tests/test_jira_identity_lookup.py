@@ -16,7 +16,7 @@ def item(id_, key=None):
 class IdentityLookupTest(unittest.TestCase):
     def fake_cb(self, pages, details):
         cb = Mock()
-        cb.http.request.side_effect = lambda method,path: pages[path.split("?")[1].split("&")[0]]
+        cb.http.request.side_effect = lambda method,path: (details[int(path.rsplit("/",1)[1])] if path.startswith("/v3/items/") else pages[path.split("?")[1].split("&")[0]])
         cb.call.side_effect = lambda name,params: details[params["itemId"]]
         cb.last_api_call = None
         return cb

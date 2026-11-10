@@ -29,6 +29,9 @@ class Source(MockJiraDCXray):
     def request(self,method,path,*args,**kwargs):
         self.calls.append((method,path))
         assert method=='GET'
+        if '/issue/P-2/comment' in path:
+            return {'startAt':0,'total':1,'comments':[{'id':'case-comment','body':'Original comment\nFull body',
+                'author':{'name':'legacy-author'},'created':'2019-01-01T00:00:00Z'}]}
         if path.endswith('/comment') or path.endswith('/worklog') or '/comment?' in path or '/worklog?' in path:
             return {'startAt':0,'total':0,'comments':[],'worklogs':[]}
         pages={
@@ -45,7 +48,15 @@ class Source(MockJiraDCXray):
 class Target(base.Target):
     def __init__(self):
         super().__init__();self.native={};self.calls=[]
+        self.http.request=self.request
         self.definitions.extend([base.field(55,'TC Procedure'),dict(base.field(56,'Submitter'),typeName='User')])
+    def request(self,method,path,*args,**kwargs):
+        if method!='GET':raise AssertionError('Unexpected raw write')
+        if path.startswith('/v3/trackers/100/items?'):
+            return {'itemRefs':[{'id':i} for i in self.items], 'total':len(self.items)}
+        if path.startswith('/v3/items/'):
+            return self.call('item_get',{'itemId':int(path.rsplit('/',1)[1])})
+        raise AssertionError(path)
     def call(self,name,params=None,data=None,**kwargs):
         params=params or {};self.calls.append((name,deepcopy(params)))
         for category in ('run','run_step','test_step','relation'):
@@ -62,7 +73,10 @@ class Target(base.Target):
             if name==category+'_update':
                 if not self.write:raise ApiError('Mock write refused')
                 self.native[params['recordId']]['data']=deepcopy(data);return {'id':params['recordId']}
-        return super().call(name,params,data,**kwargs)
+        result=super().call(name,params,data,**kwargs)
+        if name=='item_get':
+            result['customFields']=[{'fieldId':900,'type':'TextFieldValue','value':result.get('cb_field_900')}]
+        return result
     def current_source(self,category,params):
         # The prior exact external-ID lookup is part of this mock operation contract.
         return next(p['sourceId'] for name,p in reversed(self.calls) if name==category+'_lookup')
@@ -79,6 +93,10 @@ class XrayWizardPipelineTests(unittest.TestCase):
                 {'from':'plan','to':'test','path':'_xray_dc.test_plan_tests.items','identity_path':'key'},
                 {'from':'set','to':'test','path':'_xray_dc.test_set_tests.items','identity_path':'key'},
                 {'from':'plan','to':'execution','path':'_xray_dc.test_plan_executions.items','identity_path':'key'}]}
+        self.config['migration']['wizard']['identity_bindings']={
+            'P:'+i:{'field_id':900,'payload_key':'cb_field_900',
+                    'binding':{'fieldId':900,'type':'TextFieldValue','value_property':'value'}}
+            for i in ('1','2','3')}
         self.config['migration']['relation_adapter']={'fields':relation_fields}
         self.config['migration']['plan_run_adapter']={'name':'planned-run','fields':relation_fields}
         self.config['migration']['run_adapter']={
@@ -100,7 +118,9 @@ class XrayWizardPipelineTests(unittest.TestCase):
             else:self.wizard.map_tracker('P',typ['id'],100)
             self.wizard.analyze('P:'+typ['id'])
             if typ['id']!='4':
-                self.wizard.select_field('P:'+typ['id'],'empty',False)
+                for source,row in self.wizard.plan['scopes']['P:'+typ['id']]['rows'].items():
+                    if source!='empty' and row.get('spec'):
+                        self.wizard.select_field('P:'+typ['id'],source,True)
         self.assertEqual(self.cb.mutations,[])
         self.assertFalse(self.cb.native)
 
@@ -111,6 +131,12 @@ class XrayWizardPipelineTests(unittest.TestCase):
         report=self.wizard.execute(True,visibility_review=self.wizard.visibility_review())
         self.assertTrue(report['complete'],report)
         self.assertEqual(len(self.cb.items),3) # no target Execution Item
+        creations=[name for name,_ in self.cb.calls if name in ('item_create','run_create')]
+        self.assertEqual(creations,['item_create','item_create','run_create','item_create'])
+        comments=[r for r in self.cb.records.values() if r.get('kind')=='comment']
+        self.assertEqual(len(comments),1)
+        self.assertEqual(comments[0]['data']['body'],'Original comment\nFull body')
+        self.assertTrue(report.get('legacy_history'))
         case=self.cb.items[self.state.get('item:P-2')[1]['id']]
         test_set=self.cb.items[self.state.get('item:P-3')[1]['id']]
         self.assertEqual(case['cb_field_55'],'Procedure\nExpected result')
@@ -153,6 +179,7 @@ class XrayWizardPipelineTests(unittest.TestCase):
         for issue in self.source.rows:
             issue['fields']['security']={'id':'700','name':'Synthetic restricted'} if issue['key']=='P-3' else None
         for typ in self.source.types:self.wizard.analyze('P:'+typ['id'])
+        self.wizard.select_field('P:3','security',True)
         with self.assertRaises(ApiError):
             self.wizard.execute(True,visibility_review=self.wizard.visibility_review())
         self.assertFalse(self.cb.items)

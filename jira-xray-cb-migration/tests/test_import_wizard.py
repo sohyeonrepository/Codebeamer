@@ -63,7 +63,7 @@ class Source:
         if path.startswith('/rest/api/2/search'):
             from urllib.parse import parse_qs, urlsplit
             jql = parse_qs(urlsplit(path).query)['jql'][0]
-            rows = [] if '"2"' in jql else self.rows
+            rows = [] if '"2"' in jql and '"1"' not in jql else self.rows
             return {'startAt':0,'total':len(rows),'issues':deepcopy(rows)}
         for row in self.rows:
             base = '/rest/api/2/issue/' + row['key']
@@ -79,6 +79,7 @@ class Target:
     def __init__(self):
         self.write = False
         self.http = type('HTTP', (), {'base':'https://cb.test'})()
+        self.http.request=self.request
         self.config = {'operations':{},'field_bindings':{'empty':{'fieldId':3,'type':'TextFieldValue','value_property':'value'}}}
         self.tracker_rows = [{'id':100,'name':'Existing'}]
         self.definitions = [field(1,'Name'),field(2,'Description'),field(3,'Empty'),field(4,'Hidden CB',hidden=True)]
@@ -87,6 +88,13 @@ class Target:
         self.fail_comment = False
         self.lost_comment_response = False
         self.discover()
+    def request(self,method,path,*args,**kwargs):
+        if method!='GET':raise AssertionError('Unexpected raw write')
+        if '/items?' in path:
+            return {'itemRefs':[{'id':i} for i in self.items], 'total':len(self.items)}
+        if path.startswith('/v3/items/'):
+            return self.call('item_get',{'itemId':int(path.rsplit('/',1)[1])})
+        raise AssertionError(path)
     def discover(self):
         schema = {'type':'object','properties':{'label':{'type':'string'},'typeId':{'type':'integer'},
             'multipleSelection':{'type':'boolean'},'options':{'type':'array'},'reference':{},'mandatory':{}},
@@ -126,7 +134,10 @@ class Target:
         if name=='item_create':
             iid=len(self.items)+200;self.items[iid]=deepcopy(dict(data,sourceId=p['sourceId']));return {'id':iid}
         if name=='item_update': self.items[p['itemId']].update(data);return {'id':p['itemId']}
-        if name=='item_get': return deepcopy(dict(self.items[p['itemId']],id=p['itemId'],tracker={'id':100}))
+        if name=='item_get':
+            result=deepcopy(dict(self.items[p['itemId']],id=p['itemId'],tracker={'id':100}))
+            result['customFields']=[{'fieldId':900,'type':'TextFieldValue','value':result.get('cb_field_900')}]
+            return result
         if name=='attachment_lookup':
             return [{'id':k} for k,v in self.files.items() if v['item']==p['itemId'] and v['sourceId']==p['sourceId']]
         if name=='attachment_upload':
@@ -211,6 +222,9 @@ class WizardTests(unittest.TestCase):
                 'wizard':{'association_types':{'blocks':7},'tracker_template_id':100,'field_types':{'text':{'type_name':'Text','definition':{'typeId':10,'mandatory':False,
                     'multipleSelection':False,'reference':None,'options':None},
                     'binding':{'type':'TextFieldValue','value_property':'value'}}}}}}
+        self.config['migration']['wizard']['identity_bindings']={
+            'P:'+str(kind['id']):{'field_id':900,'payload_key':'cb_field_900',
+                'binding':{'fieldId':900,'type':'TextFieldValue','value_property':'value'}} for kind in self.source.types}
         self.wizard=ImportWizard(JiraClient(self.source,self.jira_config,self.state.save),self.cb,self.state,self.config)
     def plan(self, new=False):
         self.wizard.discover();self.wizard.select_project('P',10)
@@ -227,6 +241,7 @@ class WizardTests(unittest.TestCase):
                 elif row['status']=='create':
                     creation=row['creation']
                     self.wizard.configure_creation(scope,source,creation['label'],creation['semantic_type'],creation['multipleSelection'],creation['choices'] if creation['semantic_type'] in ('option','status') else {})
+                self.wizard.select_field(scope,source,True)
     def test_unselected_stays_blank_and_user_can_switch_creation_and_existing(self):
         self.wizard.discover();self.wizard.select_project('P',10)
         self.wizard.map_tracker('P','1',100)

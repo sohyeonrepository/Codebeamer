@@ -103,7 +103,7 @@ class Engine:
             self.error('preflight', exc)
         self.report['counts'] = {'source_issues': len(bundles) if 'bundles' in locals() else 0,
                                  'verified_issues': sum(r['status'] == 'verified' for r in self.report['issues'])}
-        self.report['complete'] = (self.write and not self.report['errors'] and not self.report['limitations']
+        self.report['complete'] = (self.write and self.report['counts']['source_issues'] > 0 and not self.report['errors'] and not self.report['limitations']
                                    and self.report['counts']['source_issues'] == self.report['counts']['verified_issues'])
         self.state.save('reports', 'latest', self.report)
         (self.state.root / 'report.json').write_text(json.dumps(self.report, ensure_ascii=False, indent=2), encoding='utf-8')

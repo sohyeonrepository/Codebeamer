@@ -37,7 +37,7 @@ class FieldSelectionRegression(unittest.TestCase):
                 'summary':{'selected':True,'status':'mapped',
                            'spec':{'field_id':3,'target':'name'}},
                 'other':{'selected':False,'status':'mapped',
-                         'spec':{'field_id':3,'target':'name'}}}}}}}
+                         'spec':{'field_id':3,'target':'name'}}}}}}
         self.assertEqual(wizard.errors(),[])
         wizard.plan['scopes']['STGVSTAR:14012']['rows']['other']['selected']=True
         errors=wizard.errors()

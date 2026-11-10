@@ -26,7 +26,7 @@ class DiagnosticTests(unittest.TestCase):
                                       'target':{'id':15,'label':'Resolution','typeName':'Choice',
                                                 'typeId':8,'valueModel':'ChoiceFieldValue<ChoiceOptionReference>'}},
                         'secret_jira_field':{'selected':False,'target':{'id':88,'label':'secret'},
-                                             'spec':{'field_id':88}}}}}}})
+                                             'spec':{'field_id':88}}}}}})
             path = write_diagnostic(wizard, 'Import', ValueError('SECRET TOKEN'),field_id=15)
             record = json.loads(path.read_text(encoding='utf-8'))
             self.assertEqual(record['blocking_field_id'],15)
