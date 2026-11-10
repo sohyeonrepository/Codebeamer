@@ -32,7 +32,7 @@ class FieldMappingRepairTests(unittest.TestCase):
         entry=self.wizard.analyze('P:1')
         self.assertIn('empty',entry['rows'])
         self.assertFalse(entry['rows']['empty']['selected'])
-        self.assertTrue(entry['rows']['summary']['selected'])
+        self.assertFalse(entry['rows']['summary']['selected']) # UI requires explicit selection.
         self.assertFalse(entry['analysis']['fields']['empty']['configured'])
         self.wizard.select_field('P:1','empty',True)
         self.assertTrue(self.wizard.analyze('P:1')['rows']['empty']['selected'])
@@ -40,7 +40,8 @@ class FieldMappingRepairTests(unittest.TestCase):
     def test_configured_null_field_is_kept(self):
         self.wizard.discover();self.wizard.select_project('P',10);self.wizard.map_tracker('P','1',100)
         entry=self.wizard.analyze('P:1')
-        self.assertTrue(entry['rows']['empty']['selected'])
+        self.assertIn('empty',entry['rows'])
+        self.assertFalse(entry['rows']['empty']['selected'])
         self.assertTrue(entry['analysis']['fields']['empty']['configured'])
 
     def test_text_existing_field_needs_no_choice_or_reference_definition(self):
@@ -95,7 +96,15 @@ class FieldMappingRepairTests(unittest.TestCase):
         for typ in self.source.types:
             self.wizard.map_tracker('P',typ['id'],100)
             entry=self.wizard.analyze('P:'+typ['id'])
-            profile=entry['rows']['customfield_date']['creation_profile']
+            suggested=proposals(entry['analysis'],entry['target_fields'],self.wizard.config)
+            for source,row in suggested.items():
+                if row.get('spec'):
+                    spec=row['spec']
+                    self.wizard.manual_mapping('P:'+typ['id'],source,spec['field_id'],spec['target'],spec.get('value_mapping',{}))
+                    self.wizard.select_field('P:'+typ['id'],source,True)
+            self.wizard.configure_creation('P:'+typ['id'],'customfield_date','Release Date','date',False,{})
+            self.wizard.select_field('P:'+typ['id'],'customfield_date',True)
+            profile=self.wizard._creation_profile_for_tracker('P:'+typ['id'],entry['rows']['customfield_date'],100)
             self.assertEqual(profile['source_tracker_id'],100)
             self.assertEqual(profile['type_name'],'Date')
         self.assertFalse(self.cb.mutations)

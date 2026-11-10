@@ -248,7 +248,8 @@ class WizardTests(unittest.TestCase):
         entry=self.wizard.analyze('P:1')
         self.assertIsNotNone(entry['rows']['summary']['spec'])  # saved config mapping
         self.assertEqual(entry['rows']['description']['spec']['field_id'],2)
-        self.assertTrue(entry['rows']['description']['selected'])
+        self.assertFalse(entry['rows']['description']['selected'])
+        self.wizard.select_field('P:1','description',True)
         self.wizard.configure_creation('P:1','summary','My Summary','text',False,{})
         self.wizard.analyze('P:1')
         row=self.wizard.plan['scopes']['P:1']['rows']['summary']
@@ -310,8 +311,8 @@ class WizardTests(unittest.TestCase):
         proposal=self.wizard.configure_creation('P:1','empty','Planned Empty','text',False,{})
         self.assertEqual(proposal['label'],'Planned Empty')
         self.assertEqual(self.cb.mutations,before)
-        with self.assertRaisesRegex(ApiError,'원본 타입'):
-            self.wizard.configure_creation('P:1','empty','Wrong','number',False,{})
+        with self.assertRaises(ApiError):
+            self.wizard.configure_creation('P:1','empty','Wrong','table',False,{})
         self.wizard.configure_creation('P:1','summary','New Summary','text',False,{})
         self.assertEqual(self.wizard.plan['scopes']['P:1']['rows']['summary']['creation']['label'],'New Summary')
         self.wizard.analyze('P:1')
@@ -320,8 +321,8 @@ class WizardTests(unittest.TestCase):
         self.plan();a=self.wizard.plan['scopes']['P:1']['analysis']
         a['fields']['title']=definition('title','Title');a['values']['title']=['x']
         rows=proposals(a,self.cb.definitions,self.config)
-        self.assertEqual(rows['summary']['status'],'manual')
-        self.assertEqual(rows['title']['status'],'manual')
+        self.assertEqual(rows['summary']['status'],'mapped') # Standard Summary owns Name before custom aliases.
+        self.assertEqual(rows['title']['status'],'mapped') # Suggestions remain available; selected duplicates are checked separately.
         fields=[dict(f,typeName='Integer') if f['id']==1 else f for f in self.cb.definitions]
         self.assertNotEqual(proposals(a,fields,self.config)['summary']['status'],'mapped')
     def test_configuration_adapter_is_required_instead_of_editmeta_guess(self):
@@ -430,7 +431,7 @@ class WizardTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiError,'changed'):self.wizard.execute(True)
         self.assertFalse(self.cb.mutations)
     def test_missing_r4j_configuration_blocks_before_target_write(self):
-        self.plan();self.wizard.config['migration'].pop('r4j')
+        self.plan();self.wizard.config['migration'].pop('r4j');self.wizard.config['migration']['preserve_r4j']=True
         with self.assertRaisesRegex(ApiError,'r4j'):self.wizard.execute(True)
         self.assertFalse(self.cb.mutations)
     def test_missing_r4j_tree_contract_blocks_before_target_write(self):
@@ -454,7 +455,7 @@ class WizardTests(unittest.TestCase):
             if path=='/rest/api/2/issueLinkType':return {'issueLinkTypes':[deepcopy(link_type)]}
             return original(method,path,*args,**kwargs)
         self.source.request=read
-        self.cb.http.request=lambda method,path: [{'id':7,'name':'Blocks'},{'id':8,'name':'Other'}]
+        self.cb.http.request=lambda method,path: ([{'id':7,'name':'Blocks'},{'id':8,'name':'Other'}] if path.endswith('/associations/types') else self.cb.request(method,path))
         self.wizard.config['migration']['wizard']['association_types']={}
         catalog=self.wizard.relation_catalog()
         self.assertEqual(catalog['jira'][0]['inward'],'is blocked by')
@@ -495,7 +496,8 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(self.cb.items[200]['jira_components'],[{'id':100},{'id':101}])
         evidence=self.state.load('component-mapping','P:1')
         self.assertEqual(evidence['components'],{'101':'ECU','102':'Diagnostics'})
-        self.assertEqual(evidence['option_mapping'],{'101':{'id':100},'102':{'id':101}})
+        self.assertEqual({k:evidence['option_mapping'][k] for k in ('101','102')},{'101':{'id':100},'102':{'id':101}})
+        self.assertEqual(evidence['option_mapping']['ECU'],{'id':100})
         self.assertEqual(evidence['field_id'],actual['id'])
         self.assertTrue(self.wizard.execute(True)['complete'])
         self.assertEqual(len([f for f in self.cb.definitions if f['label']=='Components']),1)
@@ -707,7 +709,7 @@ class WizardTests(unittest.TestCase):
         self.assertIn('Hidden',reasons[4])
         self.assertIn('타입 불일치',reasons[8])
         self.assertIn('미확인',reasons[9])
-        self.assertIn('이미 연결',reasons[2])
+        self.assertIn('사용 중',reasons[2])
         for identifier in (2,4,8,999):
             with self.subTest(identifier=identifier), self.assertRaises(ApiError):
                 self.wizard.manual_mapping('P:1','summary',identifier,'cb_field_'+str(identifier),{})

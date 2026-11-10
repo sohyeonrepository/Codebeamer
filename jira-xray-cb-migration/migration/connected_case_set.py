@@ -39,15 +39,21 @@ def required_source_columns(mapping):
     return fields
 
 
+def load_mapping(kind):
+    if kind not in MAPPINGS:raise ApiError('Unknown Case/Set mapping kind')
+    path=Path(__file__).resolve().parent.parent/"mappings"/MAPPINGS[kind][0]
+    mapping=json.loads(path.read_text(encoding="utf-8-sig"))
+    if mapping.get("issue_type") != MAPPINGS[kind][1]:
+        raise ApiError("매핑 파일의 Jira Issue Type이 현재 선택과 일치하지 않습니다.")
+    return mapping
+
+
 def preview(wizard, scope, key):
     kind,project,tracker=selected_scope(wizard,scope)
     if (not isinstance(key,str) or not key.startswith(project+"-") or
         not all(ch.isalnum() or ch in "-_" for ch in key)):
         raise ApiError("선택한 Jira 프로젝트의 Issue Key를 입력하세요.")
-    path=Path(__file__).resolve().parent.parent/"mappings"/MAPPINGS[kind][0]
-    mapping=json.loads(path.read_text(encoding="utf-8-sig"))
-    if mapping.get("issue_type") != MAPPINGS[kind][1]:
-        raise ApiError("매핑 파일의 Jira Issue Type이 현재 선택과 일치하지 않습니다.")
+    mapping=load_mapping(kind)
     requested=required_source_columns(mapping)
     issue=wizard.jira.http.request("GET", "/rest/api/2/issue/"+quote(key,safe="-_")+
                                     "?fields="+",".join(requested))

@@ -37,7 +37,7 @@ def reference_field_rows(fields):
 
 
 def relation_display(saved, catalog, references):
-    if not saved:return '이관하지 않음', '무시', '—'
+    if not saved:return '', '', ''
     from migration.relation_mapping import normalize
     value=normalize(saved)
     mode=value['mode']

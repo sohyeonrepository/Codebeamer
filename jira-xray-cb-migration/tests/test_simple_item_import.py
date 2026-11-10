@@ -18,6 +18,7 @@ class SingleItemImportTest(unittest.TestCase):
             "id": 10006, "name": "jira key", "typeName": "Text",
             "multipleSelection": False
         }]}
+        cb.fields.return_value=cb.configuration.return_value["fields"]
         def cb_request(method, path, body=None):
             if method == "POST":
                 return {"id": 5011}
@@ -35,7 +36,7 @@ class SingleItemImportTest(unittest.TestCase):
                        "issuetype":{"id":"1"},
                        "summary":"Sample","description":"Details"}}
         state = SimpleNamespace(root=Path(directory))
-        plan = {"scopes":{"STGVSTAR:1":{"tracker":500,"rows":{
+        plan = {"scopes":{"STGVSTAR:1":{"tracker":500,"project":"STGVSTAR","type":{"id":"1"},"rows":{
             "summary":{"selected":True},"description":{"selected":True}}}}}
         wizard = SimpleNamespace(cb=cb,jira=jira,state=state,plan=plan,
                                  config={"jira":{"single_issue_key":"STGVSTAR-1"}})

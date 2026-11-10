@@ -42,3 +42,7 @@ The current focused suite runs 56 tests successfully. The Wizard/Engine integrat
 Two test modules had syntax errors and are now loadable; identity lookup mocks now implement the actual GET Item path. The common Mock source no longer returns an empty result merely because type 2 occurs in a multi-type JQL. This exposed a real reporting defect: a zero-source import could be marked complete. Engine now reports that case as incomplete, with a regression test.
 
 Full repository suite: 487 run, 11 failures, 6 errors, 6 skipped. Remaining failures include legacy connected-case mapping imports, old automatic/default-selection expectations, Date auto-profile expectations, native Resolution contract and old single-Item mocks. These were not hidden or marked passing. Windows GUI and server API compatibility still require validation; do not run a customer-wide Import on the basis of the focused tests alone.
+
+### Final offline regression result
+
+The earlier 11 failures / 6 errors above have been resolved in the subsequent integration pass. Final result: 493 run, 487 passed, 6 existing GUI skips, no failures/errors. See `integration-completion-20261110.md` for the runtime fixes, test-maintenance rationale and remaining deployment limits. This supersedes the earlier incomplete offline-test status, not the live-server limitations.

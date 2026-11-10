@@ -18,7 +18,7 @@ def native_field_property(spec, create_operation, source, target, update_operati
     from mapping_helper import normalized_label, request_schema, schema_object
     candidate = {'resolution': 'resolutions', 'status': 'status',
                  'priority': 'priority'}.get(source)
-    if not candidate or normalized_label(target.get('label') or target.get('name') or '') != candidate:
+    if not candidate or normalized_label(target.get('label') or target.get('name') or '') not in ({'resolution', 'resolutions'} if source == 'resolution' else {candidate}):
         return None
     if not update_operation:
         return None

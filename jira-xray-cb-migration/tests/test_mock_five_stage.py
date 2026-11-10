@@ -39,6 +39,17 @@ class FiveStageE2E(unittest.TestCase):
         for typ in self.source.types:
             self.wizard.map_tracker('P',typ['id'],100)
             self.wizard.analyze('P:'+typ['id'])
+            from migration.wizard import proposals
+            scope='P:'+typ['id']
+            entry=self.wizard.plan['scopes'][scope]
+            for source,row in proposals(entry['analysis'],entry['target_fields'],self.wizard.config).items():
+                if row.get('spec'):
+                    spec=row['spec']
+                    self.wizard.manual_mapping(scope,source,spec['field_id'],spec['target'],spec.get('value_mapping',{}))
+                    self.wizard.select_field(scope,source,True)
+            self.wizard.config['migration']['wizard']['identity_bindings'][scope]={
+                'field_id':900,'payload_key':'cb_field_900',
+                'binding':{'fieldId':900,'type':'TextFieldValue','value_property':'value'}}
             self.wizard.select_field('P:'+typ['id'],'empty',False)
         self.assertEqual(self.cb.mutations,[])
         with self.assertRaises(ApiError):self.wizard.execute(False)
@@ -48,7 +59,7 @@ class FiveStageE2E(unittest.TestCase):
         self.assertEqual({x['name'] for x in self.cb.items.values()},{'Test Plan','Test','Test Set','Test Execution'})
         count=len(self.cb.files)
         from migration.wizard import ImportWizard
-        self.wizard=ImportWizard(JiraClient(self.source,self.jira_config,self.state.save),self.cb,self.state,self.config)
+        self.wizard=ImportWizard(JiraClient(self.source,self.jira_config,self.state.save),self.cb,self.state,self.wizard.config)
         self.assertTrue(self.wizard.execute(True)['complete'])
         self.assertEqual(len(self.cb.items),4);self.assertEqual(len(self.cb.files),count)
     def test_xray_run_actual_client_validates_identity(self):

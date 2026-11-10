@@ -27,6 +27,22 @@ class SystemPipelineTests(unittest.TestCase):
         for kind in self.source.types:
             self.wizard.map_tracker('P',kind['id'],100)
             self.wizard.analyze('P:'+kind['id'])
+            from migration.wizard import proposals
+            scope='P:'+kind['id']
+            entry=self.wizard.plan['scopes'][scope]
+            for source,row in proposals(entry['analysis'],entry['target_fields'],self.wizard.config).items():
+                if row.get('spec'):
+                    spec=row['spec']
+                    if source=='components':
+                        # Explicit catalog_reference_mapping was validated by proposals;
+                        # this is not a generic Choice-to-Reference manual conversion.
+                        entry['rows'][source].update(row)
+                    else:
+                        self.wizard.manual_mapping(scope,source,spec['field_id'],spec['target'],spec.get('value_mapping',{}))
+                    self.wizard.select_field(scope,source,True)
+            self.wizard.config['migration']['wizard']['identity_bindings'][scope]={
+                'field_id':900,'payload_key':'cb_field_900',
+                'binding':{'fieldId':900,'type':'TextFieldValue','value_property':'value'}}
         self.assertFalse(self.cb.mutations)
         report=self.wizard.execute(True)
         self.assertTrue(report['complete'],report)
