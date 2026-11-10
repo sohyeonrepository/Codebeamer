@@ -14,9 +14,8 @@
    실행하지 마세요. 다른 Tracker의 기록은 템플릿으로 허용하지 않습니다.
 5. 새 필드명은 기본 `Migration_API_Test_Labels`를 사용하거나 직접 입력합니다.
    이미 있는 이름은 POST 전에 차단합니다.
-   `Administrator-confirmed unused referenceId`에는 서버 정책을 확인한 관리자가
-   정한 신규 ID를 입력합니다. 임의의 숫자를 넣지 마세요. 자세한 설정은
-   [referenceId 안내](configuration-reference-id.md)를 참고하세요.
+   확인된 Choice 경로에서는 신규 referenceId를 자동 선택합니다. 숫자 입력은
+   필요 없습니다. 근거와 적용 조건은 [referenceId 안내](configuration-reference-id.md)를 참고하세요.
 6. 환경변수에 인증이 없으면 ID/Password를 입력합니다. Password는 표시하지 않습니다.
 7. 표시된 서버 주소, Tracker, 필드명을 확인하고 출력된 폴더의 `request.json`과
    `preview.json`을 검토합니다. 승인하려면 콘솔에 표시된 문구를 그대로 입력합니다.
@@ -71,4 +70,5 @@ Mock 테스트: 승인 전 쓰기 차단, 생성 전 설정 변경 차단, HTTP 
 실패 후 GET, 타임아웃 이후 재전송 금지, 재실행 차단, Field ID 확인, 기존 권한
 보존 실패 검출. 실제 Codebeamer POST 및 Windows GUI 실행은 별도 검증 대상입니다.
 
-자동 테스트 결과: 전체 510개 실행, 504개 통과, 기존 GUI 6개 제외, 실패/오류 0개.
+자동 테스트 결과(참고 소스 자동 할당 반영 후): 전체 537개 실행, 531개 통과,
+기존 GUI 6개 제외, 실패/오류 0개.

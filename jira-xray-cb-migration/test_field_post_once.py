@@ -83,7 +83,9 @@ def prepare(cb, journal, tracker, label, reference_id=None):
     body['fields'].append(definition)
     cb.discover()
     from clients.configuration_fields import definition_body
-    body['fields'][-1] = definition_body(cb.spec, definition, current, reference_id)
+    from clients.reference_allocation import policy_for
+    policy = policy_for(cb.config, tracker, definition.get('typeId'), current, definition)
+    body['fields'][-1] = definition_body(cb.spec, definition, current, reference_id, allocation_policy=policy)
     operation = cb.spec.get('paths', {}).get(POST_PATH, {}).get('post')
     if not operation:
         raise ApiError('Server OpenAPI does not declare Configuration POST')
@@ -158,9 +160,6 @@ def main():
     reference_id = args.reference_id
     if reference_id is None:
         reference_id = configured_reference_id(settings, tracker, label)
-    if reference_id is None:
-        entered = input('Administrator-confirmed unused referenceId (blank = no reservation): ').strip()
-        reference_id = int(entered) if entered else None
     url = settings.get('url') or input('Codebeamer API base URL (including /cb/api): ').strip()
     http = SinglePostHttp(url, settings.get('token_env'), auth=settings.get('auth', 'basic'),
         username_env=settings.get('username_env'), password_env=settings.get('password_env'),

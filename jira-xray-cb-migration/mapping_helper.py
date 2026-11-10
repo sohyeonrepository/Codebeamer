@@ -878,11 +878,15 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     body = deepcopy(expected)
     from clients.configuration_fields import definition_body, read_options, configured_reference_id
     reserved = configured_reference_id(getattr(cb, 'config', {}), tracker, definition['label'])
-    wire_definition = definition_body(cb.spec, definition, expected, reserved)
+    from clients.reference_allocation import policy_for
+    policy = policy_for(getattr(cb, 'config', {}), tracker, definition.get('typeId'), expected, definition)
+    wire_definition = definition_body(cb.spec, definition, expected, reserved, allocation_policy=policy)
     body['fields'].append(wire_definition)
     body=prepare_configuration_permissions(cb,body)
     journal[identity] = {'tracker': tracker, 'status': 'pending',
                          'request':{'method':'POST','path':'/v3/tracker/configuration','body':deepcopy(body)}}
+    if policy is not None:
+        journal[identity]['reference_allocation_policy'] = deepcopy(policy)
     def persist():
         temporary = journal_path.with_suffix(journal_path.suffix + '.tmp')
         temporary.write_text(json.dumps(journal, indent=2), encoding='utf-8')

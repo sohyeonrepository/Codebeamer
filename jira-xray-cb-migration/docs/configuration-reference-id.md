@@ -1,10 +1,32 @@
 # 신규 Configuration referenceId 처리
 
+## 최신 변경: 참고 소스 기반 Choice 자동 할당
+
+추가 제공된 `jira_codebeamer_migration_mapping.zip`의
+`jira_to_codebeamer/mapper.py: IdAllocator.take()` 및 `codebeamer.py: custom_field(),
+choice_options()`를 분석했습니다. 이 소스는 Codebeamer 3.0.0.7 대상으로 명시되어
+있으며 Choice 계열 신규 후보를 1010부터 선택합니다(선언된 범위 1000~9999).
+
+현재 Tracker의 **동일 typeId**에서 native `CHOICE_OPTIONS`와 1000번대 커스텀 필드를
+확인한 경우, 이제 1010~9999 중 첫 미사용 referenceId를 자동 선택합니다.
+모든 타입의 기존 ID를 충돌 검사에 포함하고, 소스에 빠져 있던 상한 초과 차단을 추가했습니다.
+기존 설정의 ID 최댓값에 1을 더하지 않습니다. Tracker의 구조가 근거와 다르면 자동 적용하지 않습니다.
+
+따라서 확인된 Labels Choice 경로에서는 숫자를 직접 입력할 필요가 없습니다.
+기존 명시적 예약 설정은 우선 적용하며, 다른 타입의 확인된 정책을 설정할 수 있는 기능도 유지합니다.
+서버가 명시한 referenceId enum도 자동 후보의 근거로 사용할 수 있습니다.
+
+첨부 요청의 기존 필드 136개를 대상으로 오프라인 계산한 후보는 1010입니다.
+실행 시 최신 GET으로 다시 계산하고, 승인 직전 GET에서 변경되면 POST를 차단합니다.
+이는 실제 고객 서버에서 생성 성공을 확인했다는 뜻은 아닙니다.
+
+## 이전 변경 및 명시적 설정
+
 실제 고객 서버 응답은 HTTP 500이며 `TrackerFieldModel.referenceId()`가 null이라고
 명시했습니다. 해당 요청의 기존 136개 필드에는 값이 있고 신규 필드에만 빠져 있었습니다.
 결과 GET에서 신규 필드 0개, 기존 Configuration 변경 0개로 보고되었습니다.
 
-이번 수정은 서버 자동 할당 가정을 제거하고, 명시적 예약값을 Configuration POST에
+앞선 수정은 서버 자동 할당 가정을 제거하고, 명시적 예약값을 Configuration POST에
 넣도록 합니다. ID 할당 범위는 OpenAPI에 명시되지 않았으므로 임의의 번호대, max+1,
 Java 버전이 다른 구현의 범위를 적용하지 않습니다. 서버의 실제 신규 필드 ID 정책은
 아직 확인이 필요합니다. 미사용 검사만으로 서버가 허용하는 번호라고 보장할 수 없습니다.
@@ -34,9 +56,10 @@ Java 버전이 다른 구현의 범위를 적용하지 않습니다. 서버의 �
 
 ## 단일 POST 테스트
 
-`TEST_FIELD_POST_WINDOWS.bat`에 관리자 확인 referenceId 입력란을 추가했습니다.
-같은 필드에 설정된 예약값이 있으면 그것을 사용합니다. CLI의 `--reference-id`로도
-지정할 수 있습니다. 빈칸이면 해당 서버에서는 POST 전에 중단됩니다.
+`TEST_FIELD_POST_WINDOWS.bat`의 필수 referenceId 입력란은 제거했습니다.
+같은 필드에 설정된 예약값이 있으면 우선 사용하고, 위 조건이 맞으면 자동 할당합니다.
+CLI의 `--reference-id`로도 명시적으로 지정할 수 있습니다. 자동 정책도 예약값도
+확인할 수 없는 타입은 POST 전에 중단됩니다.
 실행 전 미리보기와 `request.json`에서 referenceId를 확인합니다.
 실패한 이전 시도의 `attempt.json`은 지우지 마세요. 자동 재전송하지 않습니다.
 

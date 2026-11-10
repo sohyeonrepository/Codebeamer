@@ -158,7 +158,9 @@ def configuration_field_contract(cb, definition, tracker):
     body = deepcopy(current)
     from clients.configuration_fields import definition_body, configured_reference_id
     reserved = configured_reference_id(cb.config, tracker, definition.get('label'))
-    body['fields'].append(definition_body(cb.spec, definition, current, reserved, planning=True))
+    from clients.reference_allocation import policy_for
+    policy = policy_for(cb.config, tracker, definition.get('typeId'), current, definition)
+    body['fields'].append(definition_body(cb.spec, definition, current, reserved, planning=True, allocation_policy=policy))
     body = prepare_configuration_permissions(cb,body)
     schema = request_schema(cb.spec,cb.spec['paths'][op['path']]['post'])
     validate(cb.spec,body,schema)

@@ -8,7 +8,7 @@ def configured_reference_id(config, tracker, label):
     return config.get('configuration_reference_ids', {}).get(str(tracker), {}).get(label)
 
 
-def definition_body(spec, definition, current, reference_id=None, planning=False):
+def definition_body(spec, definition, current, reference_id=None, planning=False, allocation_policy=None):
     from mapping_helper import request_schema, schema_object
     from single_import import validate
     result = deepcopy(definition)
@@ -34,11 +34,15 @@ def definition_body(spec, definition, current, reference_id=None, planning=False
         if reference_schema.get('readOnly'):
             if reference_id is not None or 'referenceId' in result:
                 raise ApiError('referenceId is read-only in this server schema')
-        elif not planning or reference_id is not None:
+        elif not planning or reference_id is not None or allocation_policy is not None or 'enum' in reference_schema:
             selected = reference_id if reference_id is not None else result.get('referenceId')
             if selected is None:
-                raise ApiError('신규 referenceId 할당값이 필요합니다. 서버 자동 할당을 가정하지 않습니다. '
-                               'codebeamer.configuration_reference_ids[Tracker ID][필드명]에 관리자 확인값을 지정하세요. POST 미실행')
+                from clients.reference_allocation import allocate
+                selected = allocate(current, reference_schema, allocation_policy)
+            if selected is None:
+                raise ApiError('이 타입의 referenceId 자동 할당 범위가 미확인입니다. '
+                               'Text 전용 Java 범위를 Choice에 적용하지 않습니다. '
+                               '서버 enum 또는 검증된 configuration_reference_ranges 정책이 필요합니다. POST 미실행')
             if type(selected) is not int or not -(2**31) <= selected < 2**31:
                 raise ApiError('referenceId must be an int32 integer')
             validate(spec, selected, reference_schema, 'new_field.referenceId')
@@ -72,6 +76,22 @@ def definition_body(spec, definition, current, reference_id=None, planning=False
             if 'choiceOptions' not in subtype.get('properties', {}):
                 raise ApiError('CHOICE_OPTIONS schema does not declare choiceOptions')
             setting = {'type': 'CHOICE_OPTIONS', 'choiceOptions': deepcopy(options)}
+            # The supplied 3.0.0.7 builder numbers options locally within the
+            # NEW field, starting at 1; never copy another field's option IDs.
+            if allocation_policy and allocation_policy.get('family') == 'choice':
+                array_schema = schema_object(spec, subtype['properties']['choiceOptions'])
+                option_schema = schema_object(spec, array_schema.get('items', {}))
+                id_schema = option_schema.get('properties', {}).get('id')
+                if id_schema is not None:
+                    id_schema = schema_object(spec, id_schema)
+                    if id_schema.get('type') == 'integer' and not id_schema.get('readOnly'):
+                        if any('id' in o for o in setting['choiceOptions']):
+                            raise ApiError('New automatic Choice plan must not copy existing option IDs')
+                        for index, option in enumerate(setting['choiceOptions'], 1):
+                            validate(spec, index, id_schema, 'new_choice_option.id')
+                            if index < id_schema.get('minimum', index) or index > id_schema.get('maximum', index):
+                                raise ApiError('New Choice option ID exceeds server schema bounds')
+                            option['id'] = index
             if 'choiceOptionSetting' in result and result['choiceOptionSetting'] != setting:
                 raise ApiError('Conflicting internal options and native choiceOptionSetting')
             validate(spec, setting, subtype, 'new_field.choiceOptionSetting')
@@ -80,6 +100,18 @@ def definition_body(spec, definition, current, reference_id=None, planning=False
         if result['reference'] is not None:
             raise ApiError('Nonempty Reference needs a verified Configuration conversion; no POST')
         result.pop('reference')
+    # Native new-field presentation defaults observed in both supplied sources.
+    # Do not touch old fields or insert properties absent from this server model.
+    for key, value in (('hidden', False), ('listable', True), ('title', result.get('label'))):
+        if key in properties and key not in result and not schema_object(spec, properties[key]).get('readOnly'):
+            result[key] = value
+    if 'position' in properties and 'position' not in result and not schema_object(spec, properties['position']).get('readOnly'):
+        positions = [f['position'] for f in current.get('fields', [])
+                     if type(f.get('position')) is int and f['position'] < 9000]
+        position = max(positions, default=0) + 10
+        if position >= 9000:
+            raise ApiError('No normal field position remains below 9000; no POST')
+        result['position'] = position
     unknown = set(result) - set(properties)
     if unknown:
         raise ApiError('New Configuration field has undeclared properties: '+', '.join(sorted(unknown)))
