@@ -1159,7 +1159,8 @@ class ImportWizard:
                     if key in definition and created.get(key)!=definition[key]:
                         raise ApiError('Pending field definition mismatch: '+key)
                 if definition.get('options') is not None:
-                    options=created.get('options')
+                    from clients.configuration_fields import read_options
+                    options=read_options(created)
                     if not isinstance(options,list) or len(options)!=len(definition['options']) or any(
                         any(actual_option.get(k)!=v for k,v in planned.items())
                         for planned,actual_option in zip(definition['options'],options)):

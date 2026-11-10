@@ -160,6 +160,11 @@ def http_failure_detail(body, content_type, login_reason):
             value=json.loads(body)
             messages=json.dumps(value.get('errorMessages',value.get('message',''))).lower() if isinstance(value,dict) else ''
         except (ValueError,UnicodeError):return 'JSON Content-Type이지만 본문 JSON 해석 실패'
+        if 'unrecognized field' in messages:
+            for property_name in ('options', 'reference', 'choiceOptionSetting'):
+                if re.search(r'unrecognized field\s+\\?["\x27]'+property_name.lower()+r'\\?["\x27]', messages):
+                    return 'JSON 요청에 서버가 허용하지 않는 속성: '+property_name
+            return 'JSON 요청에 서버가 허용하지 않는 속성 포함 (Unrecognized field)'
         if any(word in messages for word in ('permission denied','access denied','forbidden','not authorized','not permitted','insufficient permission','do not have permission','does not have permission','no permission')):
             return 'JSON 오류 응답에 권한/접근 거부 메시지 포함'
         if 'permission' in messages:

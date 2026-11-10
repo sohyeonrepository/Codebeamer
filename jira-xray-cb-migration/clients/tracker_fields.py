@@ -13,6 +13,9 @@ TYPES = {'TextField':'Text', 'WikiTextField':'Wikitext', 'WikitextField':'Wikite
 
 def normalize(field):
     result = deepcopy(field)
+    from clients.configuration_fields import read_options
+    if result.get('options') is None and read_options(field) is not None:
+        result['options'] = deepcopy(read_options(field))
     if field.get('name'): result['label'] = field['name']
     raw_type = field.get('type')
     if isinstance(raw_type, dict): raw_type = raw_type.get('name')

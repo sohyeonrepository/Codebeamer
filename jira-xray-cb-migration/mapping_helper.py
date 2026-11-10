@@ -876,7 +876,9 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     # but the content of each existing field is verified identical above.
     expected = current
     body = deepcopy(expected)
-    body['fields'].append(deepcopy(definition))
+    from clients.configuration_fields import definition_body, read_options
+    wire_definition = definition_body(cb.spec, definition, expected)
+    body['fields'].append(wire_definition)
     body=prepare_configuration_permissions(cb,body)
     journal[identity] = {'tracker': tracker, 'status': 'pending',
                          'request':{'method':'POST','path':'/v3/tracker/configuration','body':deepcopy(body)}}
@@ -905,12 +907,14 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     if len(matches) != 1 or field_identifier(matches[0]) is None:
         raise ApiError('생성 결과의 실제 필드 ID를 확인할 수 없습니다. 재생성하지 말고 서버에서 확인하세요.')
     created = dict(definition, **matches[0])
+    created['options'] = deepcopy(read_options(matches[0]))
     def matches_options(expected_options, actual_options):
         if expected_options is None:return actual_options is None
         if not isinstance(actual_options,list) or len(expected_options)!=len(actual_options):return False
         return all(isinstance(actual,dict) and all(actual.get(k)==v for k,v in expected.items())
                    for expected,actual in zip(expected_options,actual_options))
-    if any(created.get(key) != definition[key] for key in required if key != 'options') or not matches_options(definition['options'],created.get('options')):
+    if any(created.get(key) != value for key, value in wire_definition.items()
+           if key not in ('options', 'choiceOptionSetting')) or not matches_options(definition['options'],read_options(matches[0])):
         raise ApiError('생성된 필드 정의가 제안과 다릅니다. 재생성하지 말고 서버에서 확인하세요.')
     for old in expected['fields']:
         field_id = field_identifier(old)

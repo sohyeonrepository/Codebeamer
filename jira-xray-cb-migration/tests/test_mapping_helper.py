@@ -428,6 +428,8 @@ class MappingHelperTests(unittest.TestCase):
         http=Http()
         cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
         cb.spec={'paths':{'/v3/tracker/configuration':{'post':{'operationId':'postTrackerConfiguration'}}}}
+        cb.spec['paths']['/v3/tracker/configuration']['post']['requestBody'] = {
+            'content': {'application/json': {'schema': {'type': 'object'}}}}
         proposal=creation_templates(baseline)[0]['definition'];proposal['label']='Build'
         with tempfile.TemporaryDirectory() as directory:
             created,_=create_confirmed_field(cb,100,proposal,baseline,Path(directory)/'journal.json',approved=True)

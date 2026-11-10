@@ -82,6 +82,8 @@ def prepare(cb, journal, tracker, label):
     body = deepcopy(current)
     body['fields'].append(definition)
     cb.discover()
+    from clients.configuration_fields import definition_body
+    body['fields'][-1] = definition_body(cb.spec, definition, current)
     operation = cb.spec.get('paths', {}).get(POST_PATH, {}).get('post')
     if not operation:
         raise ApiError('Server OpenAPI does not declare Configuration POST')
@@ -126,7 +128,8 @@ def execute(cb, tracker, before, body, directory, approved=False):
             preserved['fields'].remove(field)
             result['existing_configuration_changes'] = _configuration_drift(before, preserved)
             result['field_id'] = field_identifier(field)
-            result['new_definition_changes'] = [k for k, v in definition.items() if field.get(k) != v]
+            from clients.configuration_fields import definition_changes
+            result['new_definition_changes'] = definition_changes(definition, field)
             result['write_verified'] = (result['field_id'] is not None
                 and not result['existing_configuration_changes'] and not result['new_definition_changes'])
         else:
