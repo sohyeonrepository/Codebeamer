@@ -945,6 +945,12 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     # by the shared definition_changes contract rather than guessed.
     from clients.configuration_fields import definition_changes
     changed = definition_changes(wire_definition, matches[0])
+    # Legacy mock/server field definitions can add Option IDs to an options[]
+    # request containing names only. Preserve the prior subset verification
+    # for this shape; native CHOICE_OPTIONS uses strict shared verification.
+    if ('options' in changed and isinstance(wire_definition.get('options'), list)
+            and matches_options(wire_definition['options'], read_options(matches[0]))):
+        changed.remove('options')
     if changed:
         raise ApiError('생성 필드 서버 검증 실패 (재POST 금지): '+
                        ', '.join(changed[:12]))
