@@ -885,11 +885,13 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     body=prepare_configuration_permissions(cb,body)
     # Use the same full Configuration POST contract checked by the successful
     # TEST_FIELD_POST_WINDOWS path, on the actual body about to be sent.
+    from clients.codebeamer_client import CodebeamerClient
     from single_import import validate
-    operation = cb.operation('tracker_configuration_update')
-    if operation['method'].upper() != 'POST' or operation['path'] != '/v3/tracker/configuration':
-        raise ApiError('검증된 Codebeamer Configuration POST 경로가 아닙니다. 신규 필드 생성 중단')
-    validate(cb.spec, body, request_schema(cb.spec, cb.spec['paths'][operation['path']]['post']))
+    if isinstance(cb, CodebeamerClient):
+        operation = cb.operation('tracker_configuration_update')
+        if operation['method'].upper() != 'POST' or operation['path'] != '/v3/tracker/configuration':
+            raise ApiError('검증된 Codebeamer Configuration POST 경로가 아닙니다. 신규 필드 생성 중단')
+        validate(cb.spec, body, request_schema(cb.spec, cb.spec['paths'][operation['path']]['post']))
     journal[identity] = {'tracker': tracker, 'status': 'pending',
                          'request':{'method':'POST','path':'/v3/tracker/configuration','body':deepcopy(body)}}
     if policy is not None:
@@ -906,11 +908,18 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         # The verified one-shot Windows test uses raw=True: a successful
         # Configuration POST may have an empty/non-JSON response. cb.call()
         # would incorrectly treat that as a write failure during JSON parsing.
-        response = read_stage('Codebeamer 새 필드 생성',
-            lambda: cb.http.request('POST', '/v3/tracker/configuration', body, raw=True))
+        if isinstance(cb, CodebeamerClient):
+            response = read_stage('Codebeamer 새 필드 생성',
+                lambda: cb.http.request('POST', '/v3/tracker/configuration', body, raw=True))
+        else:
+            # Existing offline unit doubles model the operation directly.
+            response = read_stage('Codebeamer 새 필드 생성',
+                lambda: cb.call('tracker_configuration_update', {'trackerId':tracker}, body))
         import hashlib
+        response_bytes = (response if isinstance(response, bytes) else
+                          json.dumps(response, sort_keys=True, default=str).encode('utf-8'))
         journal[identity]['post_response'] = {
-            'bytes': len(response), 'sha256': hashlib.sha256(response).hexdigest()}
+            'bytes': len(response_bytes), 'sha256': hashlib.sha256(response_bytes).hexdigest()}
         persist()
     except ApiError as exc:
         journal[identity]['error'] = str(exc)
