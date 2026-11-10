@@ -883,6 +883,13 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     wire_definition = definition_body(cb.spec, definition, expected, reserved, allocation_policy=policy)
     body['fields'].append(wire_definition)
     body=prepare_configuration_permissions(cb,body)
+    # Use the same full Configuration POST contract checked by the successful
+    # TEST_FIELD_POST_WINDOWS path, on the actual body about to be sent.
+    from single_import import validate
+    operation = cb.operation('tracker_configuration_update')
+    if operation['method'].upper() != 'POST' or operation['path'] != '/v3/tracker/configuration':
+        raise ApiError('검증된 Codebeamer Configuration POST 경로가 아닙니다. 신규 필드 생성 중단')
+    validate(cb.spec, body, request_schema(cb.spec, cb.spec['paths'][operation['path']]['post']))
     journal[identity] = {'tracker': tracker, 'status': 'pending',
                          'request':{'method':'POST','path':'/v3/tracker/configuration','body':deepcopy(body)}}
     if policy is not None:
@@ -896,8 +903,14 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
     try:
         cb.write = True
         if before_post:before_post()
-        response = read_stage('Codebeamer 새 필드 생성', lambda: cb.call('tracker_configuration_update', {'trackerId': tracker}, body))
-        journal[identity]['post_response'] = response
+        # The verified one-shot Windows test uses raw=True: a successful
+        # Configuration POST may have an empty/non-JSON response. cb.call()
+        # would incorrectly treat that as a write failure during JSON parsing.
+        response = read_stage('Codebeamer 새 필드 생성',
+            lambda: cb.http.request('POST', '/v3/tracker/configuration', body, raw=True))
+        import hashlib
+        journal[identity]['post_response'] = {
+            'bytes': len(response), 'sha256': hashlib.sha256(response).hexdigest()}
         persist()
     except ApiError as exc:
         journal[identity]['error'] = str(exc)
@@ -918,9 +931,14 @@ def create_confirmed_field(cb, tracker, definition, expected, journal_path, appr
         if not isinstance(actual_options,list) or len(expected_options)!=len(actual_options):return False
         return all(isinstance(actual,dict) and all(actual.get(k)==v for k,v in expected.items())
                    for expected,actual in zip(expected_options,actual_options))
-    if any(created.get(key) != value for key, value in wire_definition.items()
-           if key not in ('options', 'choiceOptionSetting')) or not matches_options(definition['options'],read_options(matches[0])):
-        raise ApiError('생성된 필드 정의가 제안과 다릅니다. 재생성하지 말고 서버에서 확인하세요.')
+    # Compare the exact serialized request with server readback, as the
+    # successful one-shot test does. Server-generated Option IDs are checked
+    # by the shared definition_changes contract rather than guessed.
+    from clients.configuration_fields import definition_changes
+    changed = definition_changes(wire_definition, matches[0])
+    if changed:
+        raise ApiError('생성 필드 서버 검증 실패 (재POST 금지): '+
+                       ', '.join(changed[:12]))
     for old in expected['fields']:
         field_id = field_identifier(old)
         existing = [field for field in actual.get('fields', []) if (field_identifier(field) == field_id if field_id is not None else (field.get('label')==old.get('label') and field.get('typeId')==old.get('typeId')))]
