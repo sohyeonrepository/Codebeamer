@@ -777,6 +777,27 @@ def launch(wizard, projects):
                 planned=row["creation"]
                 append_log("필드 생성 준비",source+" → "+str(planned.get("label")))
                 try:
+                    from migration.wizard import field_identity
+                    receipt=wizard.state.get(field_identity(entry["tracker"],source,row))
+                    if receipt and receipt[0]=="pending":
+                        # Preview only: verified HTTP 400 + matching old request
+                        # + current CB Configuration without the target field.
+                        # No state reset and no POST before user approval.
+                        verified=wizard.rearm_rejected_field(
+                            scope,source,entry["tracker"],approved=False)
+                        append_log("이전 필드 생성 거부 확인",
+                            source+" · HTTP 400 · 과거 기록 "+verified["prior_record"])
+                        if not messagebox.askyesno("실패한 필드 생성 재시도",
+                            "이전 필드 생성 요청은 HTTP 400으로 거부됐고, 현재 CB Tracker에는 "+
+                            str(planned.get("label"))+" 필드가 없습니다.\\n\\n"+
+                            "이전 기록은 보존하고, Test Field POST에서 검증한 새로운 요청 구성으로 "+
+                            "다시 생성할까요?\\n\\n"+
+                            "새로운 Configuration POST는 승인 후 한 번만 실행됩니다."):
+                            append_log("필드 재시도 취소",source+" · 기존 기록 보존 · Item POST 미실행")
+                            return
+                        wizard.rearm_rejected_field(
+                            scope,source,entry["tracker"],approved=True)
+                        append_log("생성 요청 재조정",source+" · 이전 기록 보존 · 새 시도 준비")
                     spec=wizard.create_field(scope,source,row,entry["tracker"])
                     fid=spec.get("field_id")
                     if type(fid) is not int or fid<=0:
