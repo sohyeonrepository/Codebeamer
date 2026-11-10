@@ -419,11 +419,15 @@ class MappingHelperTests(unittest.TestCase):
         baseline={'basicInformation':{'trackerId':100},'fields':[dict(FIELD,permission={'type':'UNRESTRICTED'})]}
         class Http:
             body=None
+            raw_post=False
             def request(self,method,path,data=None,**kwargs):
                 if method=='POST':
+                    self.raw_post=kwargs.get('raw') is True
                     self.body=deepcopy(data)
                     self.actual=deepcopy(data);self.actual['fields'][-1]['id']=101
-                    return {}
+                    # Matches the confirmed Windows test: successful POST can
+                    # return an empty response body, not a JSON object.
+                    return b'' if self.raw_post else {}
                 return deepcopy(self.actual if self.body else baseline)
         http=Http()
         cb=CodebeamerClient(http,{'operations':{'tracker_configuration_update':{'operationId':'postTrackerConfiguration'}}})
@@ -436,6 +440,7 @@ class MappingHelperTests(unittest.TestCase):
         self.assertEqual(created['id'],101)
         self.assertEqual(http.body['basicInformation'],baseline['basicInformation'])
         self.assertEqual(http.body['fields'][:-1],baseline['fields'])
+        self.assertTrue(http.raw_post, 'RUN must POST raw=True like TEST_FIELD_POST_WINDOWS')
         self.assertFalse(cb.write)
 
     def test_allowed_values_are_proposed_even_if_not_in_sample(self):
